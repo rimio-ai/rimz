@@ -14,6 +14,13 @@ fn outcome(fire: &FireId, result: LoopRunResult, signal: Signal) -> Outcome<'_> 
     }
 }
 
+fn booker() -> crate::agents::LaunchedBy {
+    crate::agents::LaunchedBy {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        agent_id: "booker".into(),
+    }
+}
+
 fn opened(task: &TaskId) -> (TaskRecord, FireId) {
     let fire = FireId::new(task);
     let mut record = TaskRecord::new(Binding {
@@ -25,7 +32,9 @@ fn opened(task: &TaskId) -> (TaskRecord, FireId) {
         FireMark {
             fire: fire.clone(),
             at: Timestamp::UNIX_EPOCH,
-            booked_by: Vec::new(),
+            booked_by: vec![booker()],
+            on: Some(crate::config::CheckOn::Fail),
+            report: None,
             once: true,
             run: None,
             scope: crate::store::workflow::ScopeKind::Worktree,
@@ -53,7 +62,15 @@ fn a_report_closes_the_mark_and_moves_strikes_once_per_fire() {
         Settled {
             count: 1,
             counted: true,
-            disabled: false
+            disabled: false,
+            booker: super::super::run_log::Booker::of(
+                &[booker()],
+                Some(crate::config::CheckOn::Fail),
+                record.marks[Path::new("/checkout")]
+                    .report
+                    .clone()
+                    .unwrap_or_default(),
+            ),
         }
     );
     assert_eq!(
@@ -66,6 +83,10 @@ fn a_report_closes_the_mark_and_moves_strikes_once_per_fire() {
         outcome(&fire, LoopRunResult::Failed, Signal::Strike),
     );
     assert!(!again.counted);
+    assert_eq!(
+        again.booker, settled.booker,
+        "a second report names the booker under the same message, which the queue takes once"
+    );
     assert_eq!(record, after, "a second report changes nothing");
 
     let second = FireId::new(&task);

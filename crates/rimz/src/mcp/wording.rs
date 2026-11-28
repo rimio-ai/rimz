@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use super::catalog::{Capability, Purpose, TOOLS, Tool};
 
 /// Every built-in wording file, by its path relative to `tools/`.
-const BUILT_IN: [(&str, &str); 45] = [
+const BUILT_IN: [(&str, &str); 43] = [
     ("instructions.md", include_str!("tools/instructions.md")),
     ("guide.md", include_str!("tools/guide.md")),
     ("tasks.md", include_str!("tools/tasks.md")),
@@ -42,8 +42,8 @@ const BUILT_IN: [(&str, &str); 45] = [
         include_str!("tools/rimz-watch/watch.md"),
     ),
     (
-        "rimz-watch/guides/conditions.md",
-        include_str!("tools/rimz-watch/guides/conditions.md"),
+        "guides/conditions.md",
+        include_str!("tools/guides/conditions.md"),
     ),
     (
         "rimz-subagents/instructions.md",
@@ -104,14 +104,6 @@ const BUILT_IN: [(&str, &str); 45] = [
     (
         "rimz-loop/schedule.md",
         include_str!("tools/rimz-loop/schedule.md"),
-    ),
-    (
-        "rimz-loop/guides/targets.md",
-        include_str!("tools/rimz-loop/guides/targets.md"),
-    ),
-    (
-        "rimz-loop/guides/signals.md",
-        include_str!("tools/rimz-loop/guides/signals.md"),
     ),
     (
         "rimz-loop/guides/managing.md",
@@ -176,9 +168,9 @@ const BUILT_IN: [(&str, &str); 45] = [
     ),
 ];
 
-/// The conditions guide, which `rimz-loop` serves beside its owner, so one file teaches the
-/// grammar to a launch serving either.
-const CONDITIONS_GUIDE: &str = "rimz-watch/guides/conditions.md";
+/// The conditions guide, which no group owns: `guide` serves it as `conditions` to a launch
+/// serving `rimz-watch` or `rimz-loop`, the groups whose tools take a `when`.
+const CONDITIONS_GUIDE: &str = "guides/conditions.md";
 
 /// The shared part of the instructions, after the group sentences.
 const SHARED: &str = "instructions.md";
@@ -323,15 +315,15 @@ impl Wording {
     }
 
     /// The warnings that concern a launch serving `groups`: those of the
-    /// groups' own files, of another group's guide the launch is served, of the
-    /// shared files, and of every misplaced file.
+    /// groups' own files, of the conditions guide when the launch is served it,
+    /// of the shared files, and of every misplaced file.
     pub fn warnings_for<'a>(
         &'a self,
         groups: &'a [Capability],
     ) -> impl Iterator<Item = &'a WordingWarning> {
-        self.warnings.iter().filter(|warning| {
-            warning.group.is_none_or(|group| groups.contains(&group))
-                || warning.file.is_some_and(|file| lent_guide(file, groups))
+        self.warnings.iter().filter(|warning| match warning.file {
+            Some(CONDITIONS_GUIDE) => serves_conditions(groups),
+            _ => warning.group.is_none_or(|group| groups.contains(&group)),
         })
     }
 
@@ -377,17 +369,18 @@ impl Wording {
             .filter_map(|path| self.file(&path).path())
     }
 
-    /// The text of the guide `name` (`<group>/<guide>`) when one of
-    /// `groups` has it; else every guide name `groups` have.
+    /// The text of the guide `name` (`<group>/<guide>`, or `conditions`)
+    /// when `groups` are served it; else every guide name `groups` have.
     pub fn guide(&self, groups: &[Capability], name: &str) -> Result<&str, Vec<String>> {
         let served = guide_names(groups);
-        let Some((group, guide)) = name
-            .split_once('/')
-            .filter(|_| served.iter().any(|known| known == name))
-        else {
+        if !served.iter().any(|known| known == name) {
             return Err(served);
+        }
+        let path = match name.split_once('/') {
+            Some((group, guide)) => format!("{group}/guides/{guide}.md"),
+            None => format!("guides/{name}.md"),
         };
-        Ok(self.file(&format!("{group}/guides/{guide}.md")).text())
+        Ok(self.file(&path).text())
     }
 
     /// Each limit a provider keeps that the wording breaks, as
@@ -588,20 +581,22 @@ pub fn has_guides(group: Capability) -> bool {
     !guide_names(&[group]).is_empty()
 }
 
-/// Whether the built-in file at `path` is a guide of another group that `groups` are served:
-/// the conditions guide, which `rimz-loop` shares with `rimz-watch`.
-fn lent_guide(path: &str, groups: &[Capability]) -> bool {
-    path == CONDITIONS_GUIDE && groups.contains(&Capability::Loop)
+/// Whether a launch serving `groups` is served the conditions guide.
+fn serves_conditions(groups: &[Capability]) -> bool {
+    groups.contains(&Capability::Watch) || groups.contains(&Capability::Loop)
 }
 
-/// The names `guide` takes for `groups`' guides, `<group>/<guide>`.
+/// The names `guide` takes for `groups`' guides: `<group>/<guide>` for a
+/// group's own, and `conditions` for the conditions guide.
 fn guide_names(groups: &[Capability]) -> Vec<String> {
     BUILT_IN
         .iter()
         .filter_map(|(path, _)| {
+            if *path == CONDITIONS_GUIDE {
+                return serves_conditions(groups).then(|| "conditions".to_owned());
+            }
             let (group, file) = path.split_once("/guides/")?;
-            let group = Capability::from_name(group)
-                .filter(|group| groups.contains(group) || lent_guide(path, groups))?;
+            let group = Capability::from_name(group).filter(|group| groups.contains(group))?;
             Some(format!("{}/{}", group.name(), file.strip_suffix(".md")?))
         })
         .collect()

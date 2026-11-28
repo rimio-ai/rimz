@@ -258,6 +258,8 @@ fn holding(task: &LoadedTask, checkout: &Path, scope: ScopeKind) -> TaskRecords 
             fire: FireId::new(&id),
             at: Timestamp::now(),
             booked_by: Vec::new(),
+            on: None,
+            report: None,
             once: true,
             run: None,
             scope,
@@ -282,7 +284,7 @@ fn an_open_fire_holds_a_checkout_only_for_a_remembering_task() {
     let stay = scoped_tasks(&one(loaded(entry.clone())), &records, &owned).len();
     entry.once_per_checkout = None;
     entry.when = None;
-    entry.every = Some("1h".into());
+    entry.cron = Some("0 * * * *".into());
     let scheduled = scoped_tasks(&one(loaded(entry)), &records, &owned).len();
     assert_eq!((stay, scheduled), (1, 2));
 }
@@ -301,7 +303,7 @@ fn condition_workflow_scopes_use_only_fire_marks_and_project_marks_cover_all() {
         let entry = TaskEntry {
             once_per_checkout: remember.then_some(true),
             when: condition.then(|| vec!["team.stage=Done".into()]),
-            every: (!condition).then(|| "1h".into()),
+            cron: (!condition).then(|| "0 * * * *".into()),
             each_worktree,
             ..tasks[NAME].entry().clone()
         };
@@ -1967,7 +1969,7 @@ fn all_loop_run_hosts_suppress_subprocesses_in_unit_tests() {
         assert_eq!(
             spawn_loop_run(
                 &runtime,
-                &task("/missing-loop-test-root", "1m"),
+                &task("/missing-loop-test-root", "* * * * *"),
                 Some(root),
                 NAME,
                 None,
@@ -2067,12 +2069,12 @@ fn loaded_from(entry: TaskEntry, source: TaskSource) -> LoadedTask {
     LoadedTask::new(NAME, entry, source)
 }
 
-fn task(root: &str, every: &str) -> LoadedTask {
+fn task(root: &str, cron: &str) -> LoadedTask {
     loaded(TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
         root: PathBuf::from(root),
-        every: Some(every.to_owned()),
+        cron: Some(cron.to_owned()),
         ..TaskEntry::default()
     })
 }
@@ -2168,7 +2170,8 @@ fn plan_arms_fires_and_carries_each_task_state() {
     let now = zdt(2026, 6, 24, 8, 5, 0);
     let stamp = now.timestamp();
     let due = seconds_before(stamp, 300);
-    let early = seconds_before(stamp, 240);
+    // Armed on the occurrence itself, so the next one is still ahead.
+    let early = stamp;
     let prior = seconds_before(stamp, 600);
     let manual = Arming {
         enabled: false,
@@ -2176,12 +2179,12 @@ fn plan_arms_fires_and_carries_each_task_state() {
         pause_until: None,
         strikes: Some(3),
     };
-    let every_5m = &task("/repo", "5m");
-    // `every` and `cron` together are a time conflict, so this row never parses.
+    let every_5m = &task("/repo", "*/5 * * * *");
+    // `fire-at` and `cron` together are a time conflict, so this row never parses.
     let malformed = &loaded(TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("5m".to_owned()),
+        fire_at: Some(Timestamp::UNIX_EPOCH),
         cron: Some("0 7 * * *".to_owned()),
         ..TaskEntry::default()
     });
@@ -2348,28 +2351,10 @@ fn invalid_renamed_watcher_signal_does_not_stop_elder_fire() {
     );
 }
 
-/// An ended pause becomes the effective last-fire edge, so a lifted task
-/// waits out a full interval and never replays an occurrence it slept through.
+/// An ended pause becomes the effective last-fire edge, so a lifted task never replays an
+/// occurrence it slept through.
 #[test]
 fn ended_pause_sets_the_effective_fire_edge() {
-    let now = zdt(2026, 6, 24, 8, 0, 0);
-    let interval_task = &task("/repo", "5m");
-    let pause_end = seconds_before(now.timestamp(), 240);
-    let stale_stamp = seconds_before(pause_end, 600);
-    let resumed = || Tick::armed(stale_stamp).held(until(pause_end));
-
-    assert_eq!(
-        resumed().run(interval_task, &now),
-        carry(stale_stamp),
-        "the interval restarts from the pause end, not the stale stamp"
-    );
-    let interval_due = zdt(2026, 6, 24, 8, 1, 0);
-    assert_eq!(
-        resumed().run(interval_task, &interval_due),
-        fire(interval_due.timestamp()),
-        "a full interval past the pause end fires"
-    );
-
     let daily = &loaded(TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
@@ -2454,7 +2439,7 @@ fn fire_at_fires_once_at_or_after_its_instant_through_a_pause() {
         carry(early.timestamp()),
         "a stamp before the instant is armed, not a lost runner"
     );
-    let hourly = &task("/repo", "1h");
+    let hourly = &task("/repo", "0 * * * *");
     let half_hour_ago = seconds_before(grace.timestamp(), 1_800);
     assert_eq!(
         Tick::armed(half_hour_ago).lost().run(hourly, &grace),
@@ -2818,7 +2803,7 @@ fn project_task_stays_held_until_enable_and_does_not_replay() {
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: PathBuf::from("/repo"),
-            every: Some("5m".to_owned()),
+            cron: Some("*/5 * * * *".to_owned()),
             ..TaskEntry::default()
         },
         TaskSource::Project {
@@ -2861,8 +2846,8 @@ fn workspace_filter_keeps_only_this_rooms_roots() {
     let owned = WorkspaceId::from_project_root(Path::new("/repo/owned"));
     let filtered = workspace_tasks(
         BTreeMap::from([
-            ("owned".to_owned(), task("/repo/owned", "5m")),
-            ("foreign".to_owned(), task("/repo/foreign", "5m")),
+            ("owned".to_owned(), task("/repo/owned", "*/5 * * * *")),
+            ("foreign".to_owned(), task("/repo/foreign", "*/5 * * * *")),
         ]),
         &owned,
     );
@@ -2873,7 +2858,7 @@ fn workspace_filter_keeps_only_this_rooms_roots() {
         .unwrap_or_else(|| PathBuf::from("/"));
     let home = home.canonicalize().unwrap_or(home);
     let filtered = workspace_tasks(
-        BTreeMap::from([("home".to_owned(), task("~", "5m"))]),
+        BTreeMap::from([("home".to_owned(), task("~", "*/5 * * * *"))]),
         &WorkspaceId::from_project_root(&home),
     );
     assert_eq!(filtered.keys().cloned().collect::<Vec<_>>(), vec!["home"]);

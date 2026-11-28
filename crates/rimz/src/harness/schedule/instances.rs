@@ -522,7 +522,7 @@ mod tests {
         let subscriber = |task: &str, session: &str| TaskEntry {
             root: dir.path().to_owned(),
             loop_task: Some(task.into()),
-            signal: Some("ci.failed".into()),
+            when: Some(vec!["ci=failed".into()]),
             wait: Some(crate::config::TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked("claude"),
                 session: session.into(),
@@ -596,7 +596,7 @@ mod tests {
 
         let subscriber = |kind: &str, session: &str| TaskEntry {
             root: dir.path().to_owned(),
-            signal: Some("ci.failed".into()),
+            when: Some(vec!["ci=failed".into()]),
             wait: Some(crate::config::TaskTarget {
                 kind: crate::ids::AgentKind::new_unchecked(kind),
                 session: session.into(),

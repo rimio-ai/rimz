@@ -4662,6 +4662,8 @@ fn run_exiting_resume_wrapper(
             }),
             root: env.project_root.clone(),
             signal: Some("deploy.done".to_owned()),
+            // A row on a signal is a team binding's, the one writer of such a row.
+            team: Some("binding#main".parse().unwrap()),
             ..TaskEntry::default()
         },
     )]));

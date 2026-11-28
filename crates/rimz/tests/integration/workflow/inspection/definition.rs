@@ -50,7 +50,7 @@ fn definition_draws_walk_hanging_limits_cases_defaults_and_runs() {
     let text = success(command(&env, &["workflow", "show", "review"]));
     for fragment in [
         "review · carry the change to green",
-        "one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow review --each-worktree --every '<duration>' · by hand: rimz workflow run review -w '<worktree>'",
+        "one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow review --each-worktree --cron '<expression>' · by hand: rimz workflow run review -w '<worktree>'",
         "◇ begin",
         "○ sweep",
         "◇ watch",
@@ -240,8 +240,8 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.carry]\nargs=['true']\ntimeout='1m'\nroot={root:?}\nevery='1h'\n\
-             [tasks.ride]\nkind='workflow'\ntarget='review'\nroot={root:?}\nevery='2h'\n",
+            "[tasks.carry]\nargs=['true']\ntimeout='1m'\nroot={root:?}\ncron='0 * * * *'\n\
+             [tasks.ride]\nkind='workflow'\ntarget='review'\nroot={root:?}\ncron='0 */2 * * *'\n",
             root = env.project_root
         ),
     )
@@ -253,12 +253,12 @@ fn definition_names_loop_triggers_and_sealed_or_granted_deadlines() {
     .unwrap();
     let text = success(command(&env, &["workflow", "show", "carry"]));
     assert!(
-        text.contains("started by loop task carry: every 1h"),
+        text.contains("started by loop task carry: cron `0 * * * *`"),
         "{text}"
     );
     let text = success(command(&env, &["workflow", "show", "review"]));
     assert!(
-        text.contains("one run per worktree · started by loop task ride: every 2h\n"),
+        text.contains("one run per worktree · started by loop task ride: cron `0 */2 * * *`\n"),
         "{text}"
     );
     assert!(text.contains("\non.failed → unused\n"), "{text}");

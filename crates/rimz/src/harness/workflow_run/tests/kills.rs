@@ -135,7 +135,7 @@ fn a_command_step_survives_a_crash_at_every_point() {
 fn the_immediate_blocks_survive_a_crash_at_every_point() {
     every_crash(
         "const at = await now()\n\
-         const booked = await schedule({ name: 'n', trigger: 'in', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } })\n\
+         const booked = await schedule({ name: 'n', trigger: 'at', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } })\n\
          const seen = await watch({ when: 'pr=merged' })\n\
          const called = await workflow({ source: 'script', value: 'return 7' })\n\
          return [typeof at, booked.id, seen.readings.pr, called]",

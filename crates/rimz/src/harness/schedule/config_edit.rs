@@ -486,12 +486,12 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     fn task_entry_serialization_uses_canonical_schema_and_store_policy() {
         let entry = TaskEntry {
             label: Some("nightly".to_owned()),
-            kind: Some(crate::config::LaunchKind::Shell),
+            kind: None,
             target: None,
-            args: vec!["cargo".to_owned(), "test".to_owned()],
+            args: Vec::new(),
             each_worktree: false,
             worktree: None,
-            team: None,
+            team: Some(crate::ids::TeamInstanceId::new("forge", None).expect("team instance")),
             loop_task: None,
             wait: None,
             wait_meta: None,
@@ -502,7 +502,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
             root: PathBuf::from("/repo"),
             dir: Some(PathBuf::from("/linked")),
             timeout: Some("20m".to_owned()),
-            every: Some("1h".to_owned()),
             cron: Some("0 * * * *".to_owned()),
             signal: Some("ci.failed".to_owned()),
             when: Some(vec!["team.stage=Done".to_owned(), "ci=passed".to_owned()]),
@@ -533,7 +532,6 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
         assert!(machine.contains_key("root"));
         assert!(machine.contains_key("dir"));
         assert!(machine.contains_key("max-strikes"));
-        assert!(machine_text.contains("args = [\"cargo\", \"test\"]"));
         assert!(machine_text.contains("repeat = true"));
         assert!(machine.contains_key("fire-at"));
         assert!(machine_text.contains("[tasks.full.match]"));
@@ -583,15 +581,16 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
     #[test]
     fn stored_rows_compile_alike_through_all_four_readers() {
         let shared = [
-            "args = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\noverlap = 'queue'",
+            "args = ['cargo', 'test']\ntimeout = '1h'\ncron = '0 * * * *'\noverlap = 'queue'",
             "args = ['true']\ntimeout = '5m'\nsignal = 'ci.failed'\nrepeat = true",
-            "agent = 'claude'\nprompt = 'fix'\nevery = '1h'",
+            "args = ['true']\ntimeout = '5m'\nevery = '1h'",
+            "agent = 'claude'\nprompt = 'fix'\ncron = '0 * * * *'",
         ];
         let machine_only = [
-            "args = ['true']\ntimeout = '5m'\neach-worktree = true\nevery = '1h'",
-            "args = ['true']\ntimeout = '5m'\nevery = '10m'\ndeadline = '2030-01-01T00:00:00Z'",
+            "args = ['true']\ntimeout = '5m'\neach-worktree = true\ncron = '0 * * * *'",
+            "args = ['true']\ntimeout = '5m'\ncron = '*/10 * * * *'\ndeadline = '2030-01-01T00:00:00Z'",
             "args = ['true']\ntimeout = '5m'\nwhen = ['ci=passed']\nfor = '5m'",
-            "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\nevery = '1h'",
+            "once = true\nwait = { kind = 'claude', session = 's', handle = '@c' }\ncron = '0 * * * *'",
         ];
         let dir = tempfile::tempdir().unwrap();
         let compiled = |entry: &TaskEntry| {
@@ -620,7 +619,9 @@ subscribe = [{ signal = "ci.failed", match = { branch = "feature" }, prompt = "r
                     .remove("task")
                     .unwrap();
             let expected = compiled(&machine);
-            let refused = row.contains("agent") || row.contains("once");
+            let refused = ["agent", "once", "signal", "every"]
+                .iter()
+                .any(|key| row.contains(key));
             assert_eq!(expected.0.is_err(), refused, "{row}: {expected:?}");
 
             if project {

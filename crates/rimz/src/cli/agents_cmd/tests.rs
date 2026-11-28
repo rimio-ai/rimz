@@ -1541,6 +1541,7 @@ mod parse {
             task: "nightly".to_owned(),
             trigger: trigger.map(str::to_owned),
             booked_by: Vec::new(),
+            on: None,
         }
     }
 

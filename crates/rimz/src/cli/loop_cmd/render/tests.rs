@@ -150,6 +150,8 @@ fn with_runs(view: &mut ShowView, runs: &[(&str, &str, i64)]) {
                 fire,
                 at,
                 booked_by: Vec::new(),
+                on: None,
+                report: None,
                 once: false,
                 run: Some(id.clone()),
                 scope: rimz::store::workflow::ScopeKind::Worktree,
@@ -305,6 +307,8 @@ fn marks_with_a_result_show_it_as_their_run_state() {
                 fire: rimz::ids::FireId::new(task),
                 at,
                 booked_by: Vec::new(),
+                on: None,
+                report: None,
                 once: false,
                 run: Some(run.clone()),
                 scope: rimz::store::workflow::ScopeKind::Worktree,
@@ -601,7 +605,7 @@ fn empty_history_hints_only_for_clock_triggers() {
             ..Default::default()
         },
         TaskEntry {
-            every: Some("1h".into()),
+            cron: Some("0 * * * *".into()),
             ..Default::default()
         },
     ] {
@@ -610,7 +614,7 @@ fn empty_history_hints_only_for_clock_triggers() {
         let text = String::from_utf8(out).unwrap();
         assert_eq!(
             text.contains("try `rimz loop fire sweep`"),
-            entry.every.is_some(),
+            entry.cron.is_some(),
             "{text}"
         );
         assert!(text.starts_with("no runs recorded"), "{text}");
@@ -2735,7 +2739,7 @@ fn interval_timing(
     let entry = TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("15m".to_owned()),
+        cron: Some("*/15 * * * *".to_owned()),
         ..TaskEntry::default()
     };
     schedule::TaskTiming::evaluate(

@@ -44,7 +44,11 @@ pub(super) fn run(args: ExplainArgs) -> Result<()> {
     let reading = condition::reading(&entry, &expr);
     let mut out = ui::out();
     writeln!(out, "when: {expr}")?;
-    writeln!(out, "scope: {}", entry.run_dir().display())?;
+    writeln!(
+        out,
+        "scope: {}",
+        schedule::attention::when_scope(&entry).display()
+    )?;
     condition::write_terms(
         &mut out,
         &expr,

@@ -836,7 +836,7 @@ fn booked_task(store: &Store, root: &std::path::Path, name: &str, agent: &AgentS
         store.paths(),
         name,
         &crate::config::TaskEntry {
-            every: Some("1h".to_owned()),
+            cron: Some("0 * * * *".to_owned()),
             args: vec!["cargo".to_owned(), "xtask".to_owned(), "gate".to_owned()],
             root: root.to_owned(),
             booked_by: vec![LaunchedBy {
@@ -878,7 +878,7 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
     let store = room(dir.path());
     let (agent, _) = rested();
     booked_task(&store, dir.path(), "nightly", &agent);
-    // The task fired 50 minutes ago, so its hourly trigger is due in ten.
+    // The task fired 50 minutes ago, so its hourly cron fires next on the hour.
     let stamps = store.runtime_paths().lane_path("loop-fire.json");
     std::fs::create_dir_all(stamps.parent().unwrap()).unwrap();
     std::fs::write(
@@ -904,10 +904,7 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
         ]
     );
     let task = &read.outliving[0];
-    assert_eq!(
-        (task.status.as_str(), task.due),
-        ("fires", Some(ts(DUE + 600)))
-    );
+    assert_eq!((task.status.as_str(), task.due), ("fires", Some(ts(3_600))));
     assert!(
         task.detail
             .iter()

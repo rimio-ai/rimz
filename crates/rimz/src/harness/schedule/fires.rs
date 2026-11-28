@@ -15,7 +15,7 @@ use super::run_log::{LoopRunRecord, LoopRunResult, QuietFires};
 use super::strikes::{self, Signal};
 use super::task_record::{self, Binding, FireMark, TaskRecord, TaskRecordErr};
 use super::task_record_store::{self, TaskStoreErr};
-use crate::ids::{FireId, TaskId, WorkflowRunId};
+use crate::ids::{FireId, MessageId, TaskId, WorkflowRunId};
 
 pub(super) type Result<T> = std::result::Result<T, TaskStoreErr>;
 
@@ -48,6 +48,8 @@ pub(super) fn scheduled_since(
 pub(super) struct Opening<'a> {
     pub(super) checkout: &'a Path,
     pub(super) booked_by: Vec<crate::agents::LaunchedBy>,
+    /// Which of the fire's outcomes message its booker.
+    pub(super) on: Option<crate::config::CheckOn>,
     pub(super) once: bool,
     pub(super) scope: crate::store::workflow::ScopeKind,
     pub(super) at: Timestamp,
@@ -74,6 +76,8 @@ pub(super) fn open(
                 fire: fire.clone(),
                 at: opening.at,
                 booked_by: opening.booked_by,
+                on: opening.on,
+                report: None,
                 once: opening.once,
                 run: None,
                 scope: opening.scope,
@@ -168,12 +172,15 @@ pub(super) struct Outcome<'a> {
 }
 
 /// What a settled outcome did to the task's count.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct Settled {
     pub(super) count: u32,
     /// Whether this report moved the count: a fire's second report moves nothing.
     pub(super) counted: bool,
     pub(super) disabled: bool,
+    /// Who the fire's outcome goes to, under the one message id every report of the fire
+    /// carries, so a report retried after a failed write queues it once.
+    pub(super) booker: Option<super::run_log::Booker>,
 }
 
 /// Move the strike count once per fire id, note the quiet summary, close the fire's mark and
@@ -197,15 +204,21 @@ pub(super) fn settle_open(outcome: Outcome<'_>) -> Result<Option<Settled>> {
 }
 
 fn settle_record(record: &mut TaskRecord, outcome: Outcome<'_>) -> Settled {
-    if let Some(mark) = mark_of(record, outcome.fire) {
+    let booker = mark_of(record, outcome.fire).and_then(|mark| {
         mark.result.get_or_insert(outcome.result);
-    }
+        if mark.booked_by.is_empty() {
+            return None;
+        }
+        let message = mark.report.get_or_insert_with(MessageId::new).clone();
+        super::run_log::Booker::of(&mark.booked_by, mark.on, message)
+    });
     let (count, counted) = strikes::apply(record, Some(outcome.fire), outcome.signal);
     if !counted {
         return Settled {
             count,
             counted,
             disabled: false,
+            booker,
         };
     }
     if let Some(last) = outcome.quiet {
@@ -230,6 +243,7 @@ fn settle_record(record: &mut TaskRecord, outcome: Outcome<'_>) -> Settled {
         count,
         counted,
         disabled,
+        booker,
     }
 }
 

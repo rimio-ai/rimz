@@ -1,9 +1,10 @@
-//! `schedule`: the job of `rimz loop add` for an agent, a team, or a workflow, booked in the
-//! caller's room through the write the command makes. The command's check of a fire's launch
-//! parses with the binary's root parser, out of reach here, so this refuses each argument the
-//! stored launch would misparse, and resolves each target the way that check resolves it.
+//! `schedule`: the job of `rimz loop add` for an agent, a team, a workflow, or a command,
+//! booked in the caller's room through the write the command makes. The command's check of a
+//! fire's launch parses with the binary's root parser, out of reach here, so this refuses each
+//! argument the stored launch would misparse, and resolves each target the way that check
+//! resolves it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
@@ -13,15 +14,16 @@ use super::start::{Start, TaskKind};
 use super::workflow::parse_when;
 use crate::agents::LaunchedBy;
 use crate::config::effective::{self, ProfileScope};
-use crate::config::{LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
+use crate::config::{CheckOn, LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
 use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
-use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
+use crate::harness::block::{On, Schedule, ScheduleOverlap, ScheduleTrigger};
+use crate::harness::schedule::arm::task_label;
+use crate::harness::schedule::attention::when_scope;
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
-use crate::harness::schedule::{self, ScheduleErr, TaskShape};
-use crate::harness::signal::SelectorErr;
+use crate::harness::schedule::{self, TaskShape, shell_task, timer_units};
 use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
@@ -29,8 +31,20 @@ use crate::launcher::workflow_start;
 use crate::mcp::catalog::{Booking, ScheduleTarget, WorkflowArgs};
 use crate::mcp::{Answer, Failure};
 
-/// What a booker hears of a fire: nothing delivers one a message.
-const REPORT: &str = "no message when it fires; `tasks` lists it and `stop` removes it";
+/// What a booker hears of a fire: each one's outcome, as a message.
+const REPORT: &str = "a message to you follows each fire; `tasks` lists it and `stop` removes it";
+const NO_REPORT: &str = "no report comes from a fire, since this agent's provider cannot report; \
+                         `tasks` lists the booking and `stop` removes it";
+
+/// What follows each fire of a booking whose target routes to `kinds`: an agent whose provider
+/// cannot report sends no report, as the direct `agent` tool says.
+fn report_sentence(kinds: &[String]) -> &'static str {
+    let silent = kinds
+        .iter()
+        .filter_map(|kind| crate::agents::registry::find_definition(kind))
+        .any(|adapter| !crate::harness::run::peer_can_report(adapter));
+    if silent { NO_REPORT } else { REPORT }
+}
 
 /// What a fire launches, as its stored row holds it.
 struct Launch {
@@ -38,8 +52,11 @@ struct Launch {
     target: String,
     args: Vec<String>,
     worktree: Option<String>,
-    /// Whether the booking sets a place (`worktree`, `from_pr`, or `cwd`).
-    has_place: bool,
+    /// The directory a command's `cwd` names; the caller's checkout when `None`.
+    dir: Option<PathBuf>,
+    /// A command's time limit and label.
+    timeout: Option<String>,
+    label: Option<String>,
     /// The agent kinds the target routes to; empty for a team or a workflow.
     kinds: Vec<String>,
     warnings: Vec<String>,
@@ -65,9 +82,15 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     let launch = launch(tools, &room, &machine, booking)?;
     let mut entry = TaskEntry {
         kind: Some(launch.kind),
-        target: Some(launch.target.clone()),
+        target: (launch.kind != LaunchKind::Shell).then(|| launch.target.clone()),
         args: launch.args.clone(),
         worktree: launch.worktree.clone(),
+        dir: Some(match &launch.dir {
+            Some(dir) => dir.clone(),
+            None => room.workspace.worktree_root.clone(),
+        }),
+        timeout: launch.timeout.clone(),
+        label: launch.label.clone(),
         max_strikes: args.max_strikes,
         overlap: args.overlap.map(|overlap| match overlap {
             ScheduleOverlap::Skip => OverlapPolicy::Skip,
@@ -76,13 +99,18 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
             ScheduleOverlap::Replace => OverlapPolicy::Replace,
             ScheduleOverlap::Allow => OverlapPolicy::Allow,
         }),
+        on: args.on.map(|on| match on {
+            On::Fail => CheckOn::Fail,
+            On::Success => CheckOn::Success,
+        }),
         root: root.clone(),
         repeat: args.repeat,
+        booked_by,
         ..TaskEntry::default()
     };
     set_trigger(&mut entry, args, &machine)?;
     if let Some(clauses) = &entry.when {
-        let scope = entry.run_dir();
+        let scope = when_scope(&entry);
         let place = WhenPlace {
             root: &root,
             scope: Some(&scope),
@@ -94,34 +122,27 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
         entry.provider = armed.provider;
     }
     let shape = TaskShape::compile(&args.name, &entry);
-    shape.trigger().as_ref().map_err(|err| match err {
-        ScheduleErr::Selector(SelectorErr::ObsoleteCiSignal { name }) => Failure::new(format!(
-            "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; \
-             leave `conclusion` out of `match`"
-        )),
-        err => Failure::new(err.to_string()),
-    })?;
+    shape
+        .trigger()
+        .as_ref()
+        .map_err(|err| Failure::new(err.to_string()))?;
     shape
         .action()
         .map_err(|err| Failure::new(err.to_string()))?;
-    entry.booked_by = booked_by;
     let _held = TaskCatalog::lock_edits()?;
     let catalog = TaskCatalog::load(Some(&root))?;
     refuse_held_name(&catalog, &args.name, &entry.booked_by)?;
     catalog.replace_machine(&args.name, &entry)?;
     let mut warnings = launch.warnings;
     warnings.extend(idle_warning(booking));
-    if !launch.has_place && room.workspace.worktree_root != root {
-        warnings.push(format!(
-            "runs at the project root {}, not {}; set `worktree` to run each fire in a \
-             RimZ-owned worktree",
-            root.display(),
-            room.workspace.worktree_root.display()
-        ));
-    }
+    warnings.extend(timer_warning());
     Ok(Answer::data(&Start {
         warnings,
-        ..Start::running(TaskKind::Schedule, &args.name, REPORT)
+        ..Start::running(
+            TaskKind::Schedule,
+            &args.name,
+            report_sentence(&launch.kinds),
+        )
     }))
 }
 
@@ -249,13 +270,8 @@ fn launch(
                 .cwd
                 .as_deref()
                 .map(|cwd| {
-                    let resolved = tools.dir(Some(cwd))?;
-                    let host = crate::launcher::checkout::resolve_launch_cwd(
-                        Some(&resolved),
-                        room.store.paths(),
-                    )?
-                    .unwrap_or(resolved);
-                    host.to_str()
+                    host_dir(tools, room, cwd)?
+                        .to_str()
                         .map(str::to_owned)
                         .ok_or_else(|| Failure::new("`arguments.cwd` is not valid UTF-8"))
                 })
@@ -296,7 +312,9 @@ fn launch(
                 target: profile.to_owned(),
                 args: tail,
                 worktree: args.worktree.clone(),
-                has_place: args.worktree.is_some() || from_pr.is_some() || cwd.is_some(),
+                dir: None,
+                timeout: None,
+                label: None,
                 kinds,
                 warnings: Vec::new(),
             })
@@ -333,13 +351,49 @@ fn launch(
                 target: team_name.to_owned(),
                 args: tail,
                 worktree: args.worktree.clone(),
-                has_place: true,
+                dir: None,
+                timeout: None,
+                label: None,
                 kinds: Vec::new(),
                 warnings: Vec::new(),
             })
         }
         ScheduleTarget::Workflow(run) => workflow_launch(root, args.worktree.as_deref(), run),
+        ScheduleTarget::Shell(shell) => Ok(Launch {
+            kind: LaunchKind::Shell,
+            target: String::new(),
+            args: vec!["sh".to_owned(), "-c".to_owned(), shell.command.clone()],
+            worktree: args.worktree.clone(),
+            dir: shell
+                .cwd
+                .as_deref()
+                .map(|cwd| host_dir(tools, room, cwd))
+                .transpose()?,
+            timeout: Some(shell.timeout.as_deref().map_or_else(
+                || shell_task::default_timeout(machine),
+                |timeout| timeout.trim().to_owned(),
+            )),
+            label: shell
+                .label
+                .as_deref()
+                .map(|raw| {
+                    task_label(raw).map_err(|err| Failure::new(format!("`arguments.label`: {err}")))
+                })
+                .transpose()?,
+            kinds: Vec::new(),
+            warnings: Vec::new(),
+        }),
     }
+}
+
+/// The host directory `cwd` names from the caller's, where a fire, which runs outside the
+/// caller's sandbox, finds it.
+fn host_dir(tools: &Tools, room: &Room, cwd: &Path) -> Result<PathBuf, Failure> {
+    let resolved = tools.dir(Some(cwd))?;
+    Ok(
+        crate::launcher::checkout::resolve_launch_cwd(Some(&resolved), room.store.paths())?
+            .unwrap_or(resolved),
+    )
 }
 
 fn parse_pr_flag(raw: Option<&str>) -> Result<Option<String>, Failure> {
@@ -389,13 +443,14 @@ fn workflow_launch(
     if run.skip_capacity {
         tail.push("--skip-capacity".to_owned());
     }
-    let has_place = worktree.is_some();
     Ok(Launch {
         kind: LaunchKind::Workflow,
         target: wf_name.to_owned(),
         args: tail,
         worktree,
-        has_place,
+        dir: None,
+        timeout: None,
+        label: None,
         kinds: Vec::new(),
         warnings,
     })
@@ -413,23 +468,7 @@ fn set_trigger(
                 .map_err(|err| at_refusal(err, "`at`"))?;
             entry.fire_at = Some(fire_at);
         }
-        ScheduleTrigger::In => {
-            let delay = schedule::parse_delay(&args.value)
-                .map_err(|err| Failure::new(format!("invalid in `{}`: {err}", args.value)))?;
-            let fire_at = schedule::delayed_instant(delay, now.timestamp()).map_err(|_| {
-                Failure::new(format!(
-                    "invalid in `{}`: lands past the latest time RimZ can schedule",
-                    args.value
-                ))
-            })?;
-            entry.fire_at = Some(fire_at);
-        }
-        ScheduleTrigger::Every => entry.every = Some(args.value.clone()),
         ScheduleTrigger::Cron => entry.cron = Some(args.value.clone()),
-        ScheduleTrigger::Signal => {
-            entry.signal = Some(args.value.clone());
-            entry.matches = args.matches.clone().filter(|matches| !matches.is_empty());
-        }
         ScheduleTrigger::When => {
             entry.when = Some(vec![args.value.clone()]);
             entry.hold.clone_from(&args.hold);
@@ -460,6 +499,15 @@ fn window_account(kinds: &[String], entry: &TaskEntry) -> anyhow::Result<WindowA
     })
 }
 
+/// Without the loop timer, only an open room's sidebar fires a booking.
+fn timer_warning() -> Option<String> {
+    (!timer_units::installed()).then(|| {
+        "warning: no loop timer is installed, so this booking fires only while a room is open; \
+         run `rimz loop timer install` to fire it without one"
+            .to_owned()
+    })
+}
+
 /// The note `rimz loop add` owes a repeating agent or team booking with no overlap policy.
 fn idle_warning(booking: &Booking) -> Option<String> {
     if !booking.schedule.repeats() || booking.schedule.overlap.is_some() {
@@ -468,10 +516,30 @@ fn idle_warning(booking: &Booking) -> Option<String> {
     let choices = match booking.target {
         ScheduleTarget::Team(_) => "`replace`",
         ScheduleTarget::Agent(_) => "`replace` or `allow`",
-        ScheduleTarget::Workflow(_) => return None,
+        ScheduleTarget::Workflow(_) | ScheduleTarget::Shell(_) => return None,
     };
     Some(format!(
         "note: an agent left idle holds later fires; say in `arguments.prompt` when it ends its \
          session, or set `overlap` to {choices}"
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_booking_says_no_report_comes_from_an_agent_whose_provider_cannot_report() {
+        assert_eq!(report_sentence(&[]), REPORT);
+        for definition in crate::agents::registry::all_definitions() {
+            let reports = crate::harness::run::peer_can_report(definition);
+            assert_eq!(
+                report_sentence(&[definition.spec().kind.to_owned()]),
+                if reports { REPORT } else { NO_REPORT },
+                "{}",
+                definition.spec().kind
+            );
+        }
+        assert!(NO_REPORT.starts_with("no report comes") && NO_REPORT.contains("cannot report"));
+    }
 }

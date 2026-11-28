@@ -30,7 +30,7 @@
 ## args = ["gh", "pr", "checks"]
 ## timeout = "5m"                      # how long the command may run; required on a shell task
 ## root = "/home/you/code/app"
-## every = "15m"                       # interval: a duration in s, m, h, or d
+## cron = "*/15 * * * *"               # every 15 minutes
 ## overlap = "coalesce"                # busy triggers: skip (default), coalesce (newest), queue, replace (stop for newest), allow (agent tasks: launch anyway)
 ## # overlap-limit = 10                # only with overlap = "queue"; at least 1
 ##
@@ -38,8 +38,8 @@
 ## kind = "workflow"
 ## target = "smoke"
 ## root = "/home/you/code/app"
-## signal = "deploy.done"
-## repeat = true                       # signal and when tasks fire once unless they repeat
+## when = ["ci=passed"]
+## repeat = true                       # a when task fires once unless it repeats
 ##
 ## [tasks.roomy]
 ## kind = "agent"

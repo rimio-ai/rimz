@@ -407,7 +407,7 @@ pub(crate) fn agent_rollup_with_carryover(
 /// [`AgentState::normalize_prompt_labels`]'s rules change — a
 /// mismatched cache reads as absent and cold-rebuilds. A reducer that folds
 /// one log to different row values bumps [`super::SNAPSHOT_VERSION`] too.
-const ROLLUP_CACHE_VERSION: u32 = 86;
+const ROLLUP_CACHE_VERSION: u32 = 87;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map stamped with the log extent folded so far.

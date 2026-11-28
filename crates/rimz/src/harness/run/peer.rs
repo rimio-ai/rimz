@@ -277,7 +277,10 @@ pub fn describes_latest_turn(
 }
 
 fn peer_launch_id(peer: &AgentState) -> Option<&AgentSessionId> {
-    if peer.launched_by.is_none() || peer.parent_agent_id.is_some() || peer.is_team_seat() {
+    if crate::harness::fleet::report_recipient(peer).is_none()
+        || peer.parent_agent_id.is_some()
+        || peer.is_team_seat()
+    {
         return None;
     }
     peer.launch_id.as_ref()

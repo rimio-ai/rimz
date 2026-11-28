@@ -1552,6 +1552,7 @@ fn an_agent_starts_home_and_pack_workflows_but_never_a_loose_directory() {
             task: "t".into(),
             evidence: None,
             booked_by: vec![],
+            on: None,
         },
         fire_facts: json!({}),
         manual: true,

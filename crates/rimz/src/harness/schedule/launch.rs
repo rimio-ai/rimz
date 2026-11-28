@@ -1,7 +1,7 @@
 //! The launch child of a workflow, agent or team fire: `rimz` run with the task's stored launch
-//! argv in the fire's checkout. Its environment carries the fire's stamps with the room's
-//! channel, any agent identity and the firing shell's room pin dropped, so it resolves the
-//! task's room from the checkout as a timer fire does. Its stdin is null, and its output goes to
+//! argv in the fire's checkout. Its environment carries the fire's stamps and the task's room
+//! pin, with the room's channel and any agent identity dropped, so it acts in the task's room
+//! whatever the checkout, as a timer fire does. Its stdin is null, and its output goes to
 //! a log file, never a pipe, since a `-p` child outlives the fire.
 
 use std::fs::File;
@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use super::TaskLaunch;
 use crate::agents::LaunchedBy;
 use crate::harness::loop_task::{
-    LOOP_BOOKED_BY_ENV, LOOP_FIRE_ENV, LOOP_TASK_ENV, LOOP_TRIGGER_ENV,
+    LOOP_BOOKED_BY_ENV, LOOP_FIRE_ENV, LOOP_ON_ENV, LOOP_TASK_ENV, LOOP_TRIGGER_ENV,
 };
 use crate::ids::{FireId, RunId, WorkflowRunId};
 
@@ -34,10 +34,13 @@ pub(super) struct Request<'a> {
     pub(super) fire: &'a FireId,
     /// The task's name at the fire.
     pub(super) task: &'a str,
+    /// The task's room, pinned whatever `checkout` is.
+    pub(super) root: &'a Path,
     pub(super) checkout: &'a Path,
     /// What fired it, as loop words it for a launch prompt; empty for none.
     pub(super) trigger: &'a str,
     pub(super) booked_by: &'a [LaunchedBy],
+    pub(super) on: Option<crate::config::CheckOn>,
     /// A workflow fire's start, handed over as `--loop-fire-json`.
     pub(super) start: Option<&'a crate::harness::workflow::TaskStart>,
 }
@@ -64,8 +67,8 @@ pub(super) enum Ended {
 
 /// Spawn the launch child in its own process group, so a terminal's interrupt to a `loop fire`
 /// by hand does not reach it. The child acts in the task's room but keeps the task's checkout,
-/// so it removes the room pin (`ENV_PROJECT_ROOT`, `ENV_WORKSPACE_ID`) and sets
-/// `ENV_WORKTREE_PATH` rather than passing `--root`, as the task's stops do.
+/// so it pins the room (`ENV_PROJECT_ROOT`, `ENV_WORKSPACE_ID`) and sets `ENV_WORKTREE_PATH`
+/// rather than passing `--root`.
 pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     let dir = crate::disk::paths::loop_launch_logs_dir();
     std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
@@ -88,8 +91,10 @@ pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     crate::harness::check_run::drop_room_identity(&mut command);
     crate::child_process::restore_user_temp_env(&mut command);
     command
-        .env_remove(crate::workspace::ENV_PROJECT_ROOT)
-        .env_remove(crate::workspace::ENV_WORKSPACE_ID)
+        .envs(crate::workspace::pin_env(
+            &crate::ids::WorkspaceId::from_project_root(request.root),
+            request.root,
+        ))
         .env(LOOP_FIRE_ENV, request.fire.as_str())
         .env(LOOP_TASK_ENV, request.task)
         .env(crate::workspace::ENV_WORKTREE_PATH, request.checkout);
@@ -100,6 +105,10 @@ pub(super) fn spawn(request: &Request<'_>) -> Result<Spawned> {
     match serde_json::to_string(request.booked_by) {
         Ok(chain) if !request.booked_by.is_empty() => command.env(LOOP_BOOKED_BY_ENV, chain),
         _ => command.env_remove(LOOP_BOOKED_BY_ENV),
+    };
+    match request.on.map(|on| serde_json::to_string(&on)) {
+        Some(Ok(on)) => command.env(LOOP_ON_ENV, on),
+        _ => command.env_remove(LOOP_ON_ENV),
     };
     #[cfg(unix)]
     {

@@ -133,7 +133,7 @@ Read a definition's routes as a graph before you start a larger one. `show` with
 ```console
 $ rimz workflow show fix-tests
 fix-tests
-one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow fix-tests --each-worktree --every '<duration>' · by hand: rimz workflow run fix-tests -w '<worktree>'
+one run per worktree · no loop task starts it; from a loop: rimz loop add '<task>' --workflow fix-tests --each-worktree --cron '<expression>' · by hand: rimz workflow run fix-tests -w '<worktree>'
 
 ◇ tests  check  sh: cargo test · waits ≤30m, then @failed
 │   fail → fix · pass @done
@@ -201,14 +201,7 @@ A run an agent starts is the agent's to follow: RimZ records the agent as its st
 
 So an agent that orchestrates runs has two ways to learn the result. It starts the run with `rimz workflow run`, then either blocks in `rimz workflow wait "$RUN"` and reads the line it prints, or ends its turn and reads the `WORKFLOW_REPORT` RimZ sends it when the run ends. A `3` from `wait` means the run needs you: the agent says so and leaves the answer to you in the run's pane. A run started in the agent's own checkout runs beside the agent waiting for its report: its agent steps neither wait on that agent nor stop it.
 
-An agent that did not start a run, or one that wants to hear every move rather than the ending alone, subscribes to the run signals instead. Each run fires `workflow.moved` when it moves to another node, `workflow.waiting` when it starts to need you, and `workflow.ended` when it ends, with `workflow.failed` beside it on a failure ([run signals](../reference/cli/workflow.md#run-signals)). A loop task turns them into messages for the agent:
-
-```sh
-rimz loop add run-news --signal 'workflow.ended' --repeat --overlap queue -- \
-  sh -c 'rimz message --no-from @lead "$RIMZ_LOOP_TRIGGER"'
-```
-
-Each fire hands its command the trigger line, `Rule `run-news` fired here. workflow.ended wf_… · failed`, which names the run, so the agent can run `rimz workflow show` on it. `--overlap queue` keeps the signals that arrive while a fire's command still runs and fires for each in turn, where the default skips them. Use `'workflow.*'` for every signal, or `--match workflow=<name>` for one workflow's runs. The task belongs to the project, not to the agent: it keeps firing after the agent ends, so remove it with `rimz loop remove run-news` when the agent is done. A session step hears the same signals through [`subscribe`](#hand-signals-to-a-session), and never its own run's.
+An agent that did not start a run, or one that wants to hear every move rather than the ending alone, subscribes to the run signals instead. Each run fires `workflow.moved` when it moves to another node, `workflow.waiting` when it starts to need you, and `workflow.ended` when it ends, with `workflow.failed` beside it on a failure ([run signals](../reference/cli/workflow.md#run-signals)). A session step hears them through [`subscribe`](#hand-signals-to-a-session), and never its own run's.
 
 ## What a run does on your machine
 

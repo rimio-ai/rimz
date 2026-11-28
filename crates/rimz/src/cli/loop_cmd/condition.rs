@@ -31,7 +31,7 @@ pub(super) fn reading(entry: &TaskEntry, expr: &WhenExpr) -> ConditionReading {
 pub(super) fn write_json(entry: &TaskEntry, expr: &WhenExpr) -> Result<bool> {
     let room = crate::cli::wake_view::room_source(&entry.resolved_root());
     let reading = read_condition(&room, entry, expr, None);
-    let scope = entry.run_dir();
+    let scope = schedule::attention::when_scope(entry);
     let checked_at = if expr.reads_forge() {
         room.source
             .as_ref()
@@ -90,7 +90,7 @@ pub(super) fn observe(
     schedule::attention::RoomReadings::new(runtime.as_ref(), open, Timestamp::now()).observe(
         (key, name),
         entry,
-        &entry.run_dir(),
+        &schedule::attention::when_scope(entry),
         timing,
         now,
     )
@@ -104,7 +104,11 @@ pub(super) fn write_receipt(
     let schedule::Trigger::Condition { expr, hold } = &parsed.trigger else {
         return Ok(());
     };
-    writeln!(out, "scope: {}", entry.run_dir().display())?;
+    writeln!(
+        out,
+        "scope: {}",
+        schedule::attention::when_scope(entry).display()
+    )?;
     writeln!(
         out,
         "now: {}",
@@ -148,7 +152,7 @@ pub(super) fn write_show(
     if expr.reads_forge()
         && let Some(checked) = runtime_for_root(&entry.resolved_root())
             .map(|runtime| CiSource::read(&runtime))
-            .and_then(|source| source.checked_at(&entry.run_dir()))
+            .and_then(|source| source.checked_at(&schedule::attention::when_scope(entry)))
     {
         writeln!(
             out,

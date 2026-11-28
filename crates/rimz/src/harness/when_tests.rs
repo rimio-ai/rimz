@@ -1774,10 +1774,7 @@ fn window_readings_drop_windows_read_before_the_identity_floor() {
 fn the_conditions_guide_names_every_key_the_evaluator_reads() {
     let wording = crate::mcp::wording::Wording::built_in();
     let guide = wording
-        .guide(
-            &[crate::mcp::catalog::Capability::Watch],
-            "rimz-watch/conditions",
-        )
+        .guide(&[crate::mcp::catalog::Capability::Watch], "conditions")
         .expect("the conditions guide");
     let mut named: Vec<&str> = guide
         .lines()
@@ -1795,6 +1792,12 @@ fn the_conditions_guide_names_every_key_the_evaluator_reads() {
         .find(|tool| tool.name == "watch")
         .map(|tool| wording.description(tool).text())
         .unwrap_or_default();
-    assert!(wait.contains("`rimz-watch/conditions`"), "{wait}");
+    assert!(wait.contains("`conditions`"), "{wait}");
     assert!(!wait.contains("`pr.queue`"), "{wait}");
+    let schedule = crate::mcp::catalog::TOOLS
+        .iter()
+        .find(|tool| tool.name == "schedule")
+        .map(|tool| wording.description(tool).text())
+        .unwrap_or_default();
+    assert!(schedule.contains("`conditions`"), "{schedule}");
 }

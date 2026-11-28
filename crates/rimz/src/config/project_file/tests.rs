@@ -127,7 +127,7 @@ expect = ["crew/core"]
 
 [tasks.nightly]
 command = "make"
-every = "1d"
+cron = "0 0 * * *"
 
 [[hooks]]
 event = "session_start"
@@ -210,7 +210,7 @@ tier = "senior"
 
 [tasks.nightly]
 command = "make"
-every = "1d"
+cron = "0 0 * * *"
 bogus = 1
 
 [lsp]

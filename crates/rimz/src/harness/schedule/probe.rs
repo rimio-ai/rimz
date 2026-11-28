@@ -1,4 +1,4 @@
-//! Which checkouts and branches the room's condition tasks, forge signal tasks and active
+//! Which checkouts and branches the room's condition tasks, forge signal bindings and active
 //! workflow runs ask the forge about, read by the sidebar's heavy-lane refresh.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -13,7 +13,7 @@ fn probe_paths(
     records: &super::task_record::TaskRecords,
 ) -> Vec<std::path::PathBuf> {
     if !entry.each_worktree {
-        return vec![entry.run_dir()];
+        return vec![super::attention::when_scope(entry)];
     }
     owned
         .iter()
@@ -37,7 +37,7 @@ fn signal_branch(
 }
 
 /// Checkout scopes and branch selectors needed by live loops and Active workflows. A live
-/// forge signal task holds the branch its `branch` match names under the project root.
+/// forge signal binding holds the branch its `branch` match names under the project root.
 pub(crate) fn probe_demand(
     runtime: &crate::RuntimePaths,
     project_root: Option<&Path>,

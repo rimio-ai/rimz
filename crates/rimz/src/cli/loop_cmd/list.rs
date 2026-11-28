@@ -611,6 +611,10 @@ fn load(
                 .as_ref()
                 .map(|_| entry.run_dir())
                 .unwrap_or_else(|| task_root.clone());
+            let scope = entry.dir.as_ref().map_or_else(
+                || task_root.clone(),
+                |_| schedule::attention::when_scope(entry),
+            );
             let key = task.key_for_root(name, &task_root);
             let record = records.live(&key);
             let id = record.map(|(id, _)| id);
@@ -635,7 +639,7 @@ fn load(
             {
                 let readings = conditions
                     .get_or_init(|| attention::RoomReadings::new(runtime.as_ref(), open, now));
-                let timing = readings.observe((&key, name), entry, &run_dir, timing, now);
+                let timing = readings.observe((&key, name), entry, &scope, timing, now);
                 let resets = readings.resets(entry, &timing);
                 (timing, resets)
             } else {

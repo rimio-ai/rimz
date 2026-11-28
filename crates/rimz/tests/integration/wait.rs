@@ -504,7 +504,7 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
     let watches: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["watch", "list", "--json"])).unwrap();
     assert_eq!(watches.as_array().unwrap().len(), 1, "{watches}");
-    assert_eq!(watches[0]["owner"], "loop:deployment");
+    assert_eq!(watches[0]["owner"], "team:binding#main");
     wait_until(&env, "cancel left the self watcher alive", || {
         rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
             .unwrap()
@@ -512,7 +512,7 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
     });
     assert_eq!(
         wait_ok(&env, &["watch", "cancel", "--all"]),
-        "@planner#main · no watches · also woken by deploy.failed (loop deployment)\n"
+        "@planner#main · no watches · also woken by deploy.failed (team binding#main)\n"
     );
     wait_ok(&env, &["watch", "cancel", "deployment"]);
 }
@@ -556,7 +556,11 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
     subscription.signal = Some("ci.failed".into());
     subscription.team = Some("forge#main".parse().unwrap());
     tasks.0.insert("team-wake".into(), subscription.clone());
+    // A row on a signal is a team binding's, so the loop-owned rows wait on a condition.
     subscription.team = None;
+    subscription.signal = None;
+    subscription.when = Some(vec!["ci=failed".into()]);
+    subscription.repeat = true;
     subscription.loop_task = Some("sweep".into());
     tasks.0.insert("resident-wake".into(), subscription.clone());
     std::fs::write(
@@ -641,7 +645,7 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
         "{body}"
     );
     assert!(body.contains("  @stored\n"), "{body}");
-    assert!(body.contains("loop handwritten · ci.failed"), "{body}");
+    assert!(body.contains("loop handwritten · when ci=failed"), "{body}");
     assert!(!body.contains("@stale-child"), "{body}");
 }
 
@@ -827,7 +831,15 @@ fn wait_and_loop_labels_refuse_invalid_text_before_writing() {
         for args in [
             vec!["watch", "--label", &label, "pr=merged"],
             vec![
-                "loop", "add", "labelled", "--every", "1h", "--label", &label, "--", "true",
+                "loop",
+                "add",
+                "labelled",
+                "--cron",
+                "0 * * * *",
+                "--label",
+                &label,
+                "--",
+                "true",
             ],
         ] {
             let output = env.rimz().args(args).output().unwrap();
@@ -856,8 +868,8 @@ fn loop_labels_persist_in_machine_and_project_tasks() {
             "loop",
             "add",
             name,
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--label",
             "  gate docs  ",
         ];
@@ -1197,7 +1209,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     assert_eq!(rows[0]["name"], name);
     assert_eq!(rows[0]["type"], "signal");
     assert_eq!(rows[0]["state"], "waiting");
-    assert_eq!(rows[0]["owner"], "loop:deployment");
+    assert_eq!(rows[0]["owner"], "team:binding#main");
     assert_eq!(rows[0].get("parent"), Some(&serde_json::Value::Null));
     for key in ["elapsed", "elapsed_s", "check_in", "check_in_s"] {
         assert_eq!(rows[0].get(key), Some(&serde_json::Value::Null));
@@ -1205,7 +1217,7 @@ fn calling_agent_can_list_and_cancel_human_armed_loop_delivery_by_launch_identit
     assert!(rows[0].get("dir").is_none());
     assert_eq!(
         wait_ok(&env, &["watch", "list"]),
-        "@planner#main · no watches · also woken by deploy.failed (loop deployment)\n"
+        "@planner#main · no watches · also woken by deploy.failed (team binding#main)\n"
     );
 
     let canceled = agent_wait(&env)
@@ -2592,108 +2604,6 @@ fn a_signal_from_another_channel_wakes_a_starting_holder_and_not_a_namesake() {
     );
 }
 
-#[test]
-fn once_wait_subscriber_is_consumed_by_watcher_checkin() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    env.install_agent_hooks("claude");
-    register_calling_agent(&env);
-    seed_signal_wait(&env, "audit", "shell.*", false);
-    let release = env.home_root.join("release");
-    let receipt = wait_ok(
-        &env,
-        &[
-            "shell",
-            "--json",
-            "--check-in",
-            "1s",
-            "--",
-            &format!(
-                "printf checkin-marker; while [ ! -e {} ]; do sleep 0.05; done; printf final-marker",
-                shlex::try_quote(release.to_str().unwrap()).unwrap()
-            ),
-        ],
-    );
-    let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
-    let name = receipt["name"].as_str().unwrap();
-    let records = wait_for_wait_records(&env, 2);
-    assert_eq!(records.len(), 2);
-    let audit = records
-        .iter()
-        .find(|record| record.task == "audit")
-        .unwrap();
-    assert!(matches!(
-        audit.watch.as_ref().unwrap(),
-        rimz::harness::signal::WatchVerdict::Running { .. }
-    ));
-    let messages = wait_for_wait_messages(&env, 2);
-    let notice = messages
-        .iter()
-        .find(|message| Some(&message.message_id) == audit.message_id.as_ref())
-        .expect("subscriber check-in reached the durable message consumer");
-    assert_eq!(
-        notice.sender,
-        MessageSender::Harness {
-            notice: HarnessNotice::Signal
-        }
-    );
-    let tasks = wait_instances(&env);
-    assert!(
-        tasks.0.contains_key(name),
-        "check-in consumed the watched task"
-    );
-    assert!(
-        !tasks.0.contains_key("audit"),
-        "check-in did not consume the once subscriber"
-    );
-
-    std::fs::write(&release, "").unwrap();
-    wait_for_no_wait_instances(&env);
-    wait_until(&env, "watcher did not finish its exit delivery", || {
-        rimz::harness::schedule::signal::watcher_info(env.store().runtime_paths(), name)
-            .unwrap()
-            .is_none()
-    });
-    let records = wait_for_wait_records(&env, 3);
-    assert_eq!(records.len(), 3);
-    assert_eq!(
-        records
-            .iter()
-            .filter(|record| record.task == "audit")
-            .count(),
-        1
-    );
-    assert!(records.iter().any(|record| {
-        record.task == name
-            && matches!(
-                record.watch.as_ref(),
-                Some(rimz::harness::signal::WatchVerdict::Exited { code: Some(0), .. })
-            )
-    }));
-    assert_eq!(wait_for_wait_messages(&env, 2).len(), 2);
-    let checkin_id = records
-        .iter()
-        .find(|record| {
-            record.task == name
-                && matches!(
-                    record.watch.as_ref(),
-                    Some(rimz::harness::signal::WatchVerdict::Running { .. })
-                )
-        })
-        .unwrap()
-        .message_id
-        .as_ref()
-        .unwrap();
-    assert!(
-        env.store()
-            .list_message_history()
-            .unwrap()
-            .iter()
-            .any(|message| &message.message_id == checkin_id
-                && message.status == MessageStatus::Canceled)
-    );
-}
-
 /// A watcher fires in its own process, and that fire reconciles before it
 /// selects anything, so a watcher whose subscriber died retires its own row
 /// mid-fire. It has to survive doing so: `watcher_info` opens its own
@@ -3032,7 +2942,7 @@ fn watch_arms_a_one_shot_self_wait_in_the_arming_checkout() {
         );
         assert_eq!(entry.root, canonical(&env.project_root));
         assert_eq!(entry.dir.as_deref(), Some(linked.as_path()));
-        assert!(entry.every.is_none() && entry.cron.is_none());
+        assert!(entry.cron.is_none());
         assert!(entry.signal.is_none() && entry.hold.is_none() && entry.prompt.is_none());
         assert!(entry.fire_at.is_none(), "{entry:?}");
         assert!(!entry.repeat, "{entry:?}");

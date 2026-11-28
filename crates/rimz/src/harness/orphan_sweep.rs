@@ -170,7 +170,7 @@ fn digest_parents_from<'a>(
         .filter(|parent| parent.ended_at.is_none())
         .filter_map(|parent| {
             let fleet = FleetRuns::of(agents.clone(), runs, parent);
-            let peer_needs_settlement = crate::address::launched_fleet(agents.clone(), parent)
+            let peer_needs_settlement = super::fleet::reporting_fleet(agents.clone(), parent)
                 .into_iter()
                 .filter(|peer| crate::address::is_launch_row(agents.clone(), peer))
                 .any(|peer| {

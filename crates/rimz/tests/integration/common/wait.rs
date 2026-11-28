@@ -46,6 +46,8 @@ pub fn seed_signal_wait(env: &Env, name: &str, signal: &str, repeat: bool) {
         TaskEntry {
             root: env.project_root.clone(),
             signal: Some(signal.to_owned()),
+            // A row on a signal is a team binding's, the one writer of such a row.
+            team: Some("binding#main".parse().unwrap()),
             repeat,
             wait: Some(TaskTarget {
                 kind: AgentKind::new_unchecked("claude"),

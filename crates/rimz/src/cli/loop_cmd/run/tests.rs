@@ -28,7 +28,7 @@ fn manual_condition_notice_reports_unmet_or_unknown_and_counts_conjunctions() {
     ] {
         let entry = TaskEntry {
             when: condition.map(|expr| vec![expr.into()]),
-            every: condition.is_none().then(|| "1h".into()),
+            cron: condition.is_none().then(|| "0 * * * *".into()),
             ..Default::default()
         };
         let shape = schedule::TaskShape::compile("task", &entry);

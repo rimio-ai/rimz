@@ -1797,7 +1797,7 @@ fn only_serves_the_named_capability() {
     assert!(wait["error"]["code"].is_i64(), "{wait}");
     server.start_call(3, "no_such_tool", json!({}));
     assert!(server.reply(&json!(3))["error"]["code"].is_i64());
-    server.start_call(4, "guide", json!({"name": "rimz-watch/conditions"}));
+    server.start_call(4, "guide", json!({"name": "conditions"}));
     let guide = server.reply(&json!(4));
     assert_eq!(guide["error"]["code"], -32602, "{guide}");
 
@@ -1825,20 +1825,20 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
         .collect();
     assert_eq!(names, ["watch", "tasks", "join", "stop", "guide"]);
 
-    let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-watch/conditions"}));
+    let (text, is_error) = server.call(2, "guide", json!({"name": "conditions"}));
     assert!(!is_error, "{text}");
     assert_eq!(
         Ok(text.as_str()),
-        Wording::built_in().guide(&[Capability::Watch], "rimz-watch/conditions")
+        Wording::built_in().guide(&[Capability::Watch], "conditions")
     );
-    for (id, name) in [(3, "rimz-watch/none"), (4, "rimz-lsp/conditions")] {
+    for (id, name) in [(3, "rimz-watch/conditions"), (4, "rimz-lsp/conditions")] {
         let (failure, is_error) = server.answer(id, "guide", json!({"name": name}));
         assert!(is_error, "{failure}");
         assert_eq!(
             failure,
             json!({
                 "error": format!("no guide {name:?}"),
-                "hint": "this launch has: rimz-watch/conditions",
+                "hint": "this launch has: conditions",
             }),
         );
     }
@@ -4378,6 +4378,11 @@ fn stop_refuses_a_subscription_another_armed_for_the_caller() {
     seed_signal_wait(&env, "team-ping", "team-ping", false);
     let mut tasks = wait_instances(&env);
     tasks.0.get_mut("team-ping").unwrap().team = Some("forge#main".parse().unwrap());
+    // A row on a signal is a team binding's, so the caller's own wait waits on a condition.
+    let own = tasks.0.get_mut("own-ping").unwrap();
+    own.team = None;
+    own.signal = None;
+    own.when = Some(vec!["ci=failed".into()]);
     std::fs::write(
         crate::common::wait::loop_instances_path(&env),
         serde_json::to_vec(&tasks).unwrap(),
@@ -5222,7 +5227,7 @@ fn the_workflow_tool_starts_nothing_for_a_caller_it_could_not_own_it_for() {
     inside.close();
 }
 
-/// A schedule the agent booked: `join` answers that no message comes when it fires, and
+/// A schedule the agent booked: `join` answers that a message comes after each fire, and
 /// `stop` removes the booking while the run it already started runs on, named.
 #[test]
 fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
@@ -5230,7 +5235,15 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
     env.record(&env.project_root);
     crate::common::wait::register_calling_agent(&env);
     let output = crate::common::wait::agent_wait(&env)
-        .args(["loop", "add", "nightly", "--every", "1h", "--", "true"])
+        .args([
+            "loop",
+            "add",
+            "nightly",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "true",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -5261,7 +5274,7 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
         json!({
             "id": "schedule:nightly",
             "status": "running",
-            "report": "no message comes when it fires; join does not wait for it",
+            "report": "a message comes after each fire; join does not wait for it",
         })
     );
     let (stopped, is_error) = server.answer(3, "stop", json!({"id": "schedule:nightly"}));
@@ -5287,7 +5300,7 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
     // A switched-off schedule promises no message, and a stop that leaves nothing running
     // says so with an empty list.
     for args in [
-        &["loop", "add", "weekly", "--every", "7d", "--", "true"][..],
+        &["loop", "add", "weekly", "--cron", "0 0 * * 0", "--", "true"][..],
         &["loop", "disable", "weekly"],
     ] {
         let output = crate::common::wait::agent_wait(&env)
@@ -5310,7 +5323,7 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
     // A schedule booked from outside the caller's tree is another's.
     let output = env
         .rimz()
-        .args(["loop", "add", "hourly", "--every", "1h", "--", "true"])
+        .args(["loop", "add", "hourly", "--cron", "0 * * * *", "--", "true"])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -5541,12 +5554,82 @@ fn schedule_targets(env: &Env) {
     deploy_workflow(env, "held", HELD_WORKFLOW);
 }
 
+/// A room whose caller may book: the targets are defined and the loop timer is installed, so a
+/// booking answers no warning of its own.
 fn schedule_room() -> Env {
+    let env = timerless_schedule_room();
+    install_loop_timer(&env);
+    env
+}
+
+fn timerless_schedule_room() -> Env {
     let env = Env::new();
     env.record(&env.project_root);
     crate::common::wait::register_calling_agent(&env);
     schedule_targets(&env);
     env
+}
+
+/// The unit files `rimz loop timer install` writes for this platform's timer.
+fn install_loop_timer(env: &Env) {
+    let (dir, units) = if cfg!(target_os = "macos") {
+        (
+            env.home_root.join("Library/LaunchAgents"),
+            &["ai.rimz.loop.plist"][..],
+        )
+    } else {
+        (
+            env.config_root().join("systemd/user"),
+            &["rimz-loop.timer", "rimz-loop.service"][..],
+        )
+    };
+    std::fs::create_dir_all(&dir).unwrap();
+    for unit in units {
+        std::fs::write(dir.join(unit), "").unwrap();
+    }
+}
+
+/// A booking with no loop timer installed fires only while a room is open, so its answer warns
+/// and names the command that installs one; once the timer is installed, booking is quiet.
+#[test]
+fn a_booking_warns_while_no_loop_timer_is_installed() {
+    let env = timerless_schedule_room();
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let book = |name: &str| {
+        json!({
+            "name": name,
+            "trigger": "at",
+            "value": "10m",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "check the build"},
+        })
+    };
+    let (unarmed, is_error) = server.answer(1, "schedule", book("unarmed"));
+    assert!(!is_error, "{unarmed}");
+    assert_eq!(
+        unarmed["warnings"],
+        json!([
+            "warning: no loop timer is installed, so this booking fires only while a room is \
+             open; run `rimz loop timer install` to fire it without one"
+        ]),
+        "{unarmed}"
+    );
+
+    if !cfg!(target_os = "macos") {
+        // `rimz loop timer install` writes the service first: alone it fires nothing.
+        let units = env.config_root().join("systemd/user");
+        std::fs::create_dir_all(&units).unwrap();
+        std::fs::write(units.join("rimz-loop.service"), "").unwrap();
+        let (half, is_error) = server.answer(3, "schedule", book("half"));
+        assert!(!is_error, "{half}");
+        assert_eq!(half["warnings"], unarmed["warnings"], "{half}");
+    }
+    install_loop_timer(&env);
+    let (armed, is_error) = server.answer(2, "schedule", book("armed"));
+    server.close();
+    assert!(!is_error, "{armed}");
+    assert!(armed.get("warnings").is_none(), "{armed}");
 }
 
 fn loop_rows(env: &Env) -> toml::Table {
@@ -5573,7 +5656,7 @@ fn loop_instances(env: &Env) -> rimz::config::Tasks {
 }
 
 /// A booking the tool makes is the caller's from the start: `tasks` lists it, and `stop` on the
-/// id it answered removes it. The answer promises no message, since a fire sends the booker none.
+/// id it answered removes it. The answer says a message follows each fire.
 #[test]
 fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
     let env = schedule_room();
@@ -5584,8 +5667,8 @@ fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
         "schedule",
         json!({
             "name": "nightly",
-            "trigger": "every",
-            "value": "1h",
+            "trigger": "cron",
+            "value": "0 * * * *",
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "check the build"},
             "overlap": "replace",
@@ -5594,8 +5677,10 @@ fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
     assert!(!is_error, "{booked}");
     assert_eq!(booked["id"], json!("schedule:nightly"), "{booked}");
     assert_eq!(booked["stop"], json!("stop({id: \"schedule:nightly\"})"));
-    let report = booked["report"].as_str().unwrap();
-    assert!(!report.contains("message to you"), "{report}");
+    assert_eq!(
+        booked["report"],
+        json!("a message to you follows each fire; `tasks` lists it and `stop` removes it")
+    );
     let (listed, _) = server.answer(2, "tasks", json!({"kind": "schedule"}));
     assert_eq!(task_ids(&listed), ["schedule:nightly"], "{listed}");
     let (stopped, is_error) = server.answer(3, "stop", json!({"id": "schedule:nightly"}));
@@ -5610,7 +5695,7 @@ fn a_schedule_the_tool_books_is_listed_and_stopped_by_its_caller() {
         "schedule",
         json!({
             "name": "later",
-            "trigger": "in",
+            "trigger": "at",
             "value": "30m",
             "worktree": "later",
             "tool": "team",
@@ -5643,8 +5728,8 @@ fn a_schedule_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
     let book = |tool: &str, arguments: serde_json::Value| {
         let mut call = json!({
             "name": "nightly",
-            "trigger": "every",
-            "value": "1h",
+            "trigger": "cron",
+            "value": "0 * * * *",
             "tool": tool,
             "arguments": arguments,
             "overlap": "replace",
@@ -5711,8 +5796,8 @@ fn a_schedule_team_refuses_while_definition_set_has_failed() {
             "schedule",
             json!({
                 "name": "nightly",
-                "trigger": "every",
-                "value": "1h",
+                "trigger": "cron",
+                "value": "0 * * * *",
                 "worktree": "nightly",
                 "tool": "team",
                 "arguments": {"team": team, "prompt": "ship it"},
@@ -5773,7 +5858,7 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
         (
             5,
             "to-pr-team",
-            "in",
+            "at",
             "30m",
             "team",
             json!({"team": "forge", "from_pr": "42", "prompt": "ship pr"}),
@@ -5791,7 +5876,7 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
         (
             7,
             "to-pr-seat",
-            "in",
+            "at",
             "30m",
             "agent",
             json!({"profile": "forge.coder", "from_pr": "42", "prompt": "ship pr seat"}),
@@ -5872,8 +5957,8 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
                 &format!("check-{name}"),
                 flag,
                 row.target.as_deref().unwrap(),
-                "--every",
-                "1h",
+                "--cron",
+                "0 * * * *",
                 "--",
             ])
             .args(&row.args)
@@ -5905,7 +5990,7 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
             .rimz()
             .args(["loop", "add", &check, flag, row["target"].as_str().unwrap()])
             .args(worktree.iter().flatten())
-            .args(["--every", "1h", "--"])
+            .args(["--cron", "0 * * * *", "--"])
             .args(&tail)
             .output()
             .unwrap();
@@ -5914,8 +5999,8 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
 }
 
 /// A booking carrying `cwd`, `name`, `agent`, and `description` resolves relative `cwd` at the
-/// call, routes `agent` into a usage-window condition's provider lookup, omits the root-run
-/// warning when a place is set, and stores a row `rimz loop add` accepts.
+/// call, routes `agent` into a usage-window condition's provider lookup, stores the checkout it
+/// was booked from, and stores a row `rimz loop add` accepts.
 #[test]
 fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_accepts() {
     let env = schedule_room();
@@ -5960,8 +6045,8 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         "schedule",
         json!({
             "name": "idle-note",
-            "trigger": "every",
-            "value": "1h",
+            "trigger": "cron",
+            "value": "0 * * * *",
             "worktree": "crew",
             "tool": "team",
             "arguments": {"team": "forge", "prompt": "keep shipping"},
@@ -6002,8 +6087,8 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
             "check-full",
             "--agent",
             "codex-worker",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
         ])
         .args(&tail)
@@ -6011,8 +6096,8 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         .unwrap();
     assert!(output.status.success(), "{tail:?}: {output:?}");
 
-    // From a linked worktree, the "runs at the project root" warning appears only when the
-    // booking carries no place at all (`worktree`, `from_pr`, or `cwd`).
+    // From a linked worktree, a booking with no place of its own (`worktree`, `from_pr`, or
+    // `cwd`) fires in that worktree, and none warns of the project root.
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["config", "user.email", "rimz@example.test"],
@@ -6037,7 +6122,7 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         "schedule",
         json!({
             "name": "placed-cwd",
-            "trigger": "in",
+            "trigger": "at",
             "value": "10m",
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "go", "cwd": "."},
@@ -6053,7 +6138,7 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         "schedule",
         json!({
             "name": "placed-pr",
-            "trigger": "in",
+            "trigger": "at",
             "value": "10m",
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "go", "from_pr": "42"},
@@ -6069,109 +6154,605 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         "schedule",
         json!({
             "name": "unplaced",
-            "trigger": "in",
+            "trigger": "at",
             "value": "10m",
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "go"},
         }),
     );
     assert!(!is_error, "{unplaced}");
-    let root_warnings = unplaced["warnings"].as_array().unwrap();
-    assert!(
-        root_warnings.iter().any(|line| line
-            .as_str()
-            .unwrap_or("")
-            .contains("runs at the project root")),
-        "{unplaced}"
-    );
+    assert!(unplaced.get("warnings").is_none(), "{unplaced}");
     in_wt.close();
+    assert_eq!(
+        loop_instances(&env).0["unplaced"].dir,
+        Some(std::fs::canonicalize(&side).unwrap())
+    );
 }
 
-/// A repeating `when` booking with `for` and a repeating `signal` booking with `match` store
-/// rows whose trigger and launch, read back as `rimz loop add` flags, pass the command's own
-/// checks.
+/// A shell booking stores its command as `sh -c` in the checkout its `cwd` names, under its own
+/// `timeout` or else `loop.default-timeout`. A fire runs it there, and a fire past its time limit
+/// is killed and fails as timed out, which the loop log records.
+#[cfg(unix)]
 #[test]
-fn a_when_and_a_signal_booking_store_rows_the_command_accepts() {
+fn a_shell_booking_runs_its_command_in_its_checkout_under_its_time_limit() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
     let env = schedule_room();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.test"],
+        &["config", "user.name", "RimZ Test"],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        crate::common::git::git(&env.project_root, args);
+    }
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "shell",
+    );
+    let set = env
+        .rimz()
+        .args(["config", "set", "loop.default-timeout", "45m"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "{set:?}");
+    let checkout = env.project_root.join("sub");
+    std::fs::create_dir(&checkout).unwrap();
+    let seen = env.home_root.join("seen");
+    let command = format!("pwd > '{}' < /dev/null", seen.display());
+    let placed_seen = env.home_root.join("placed-seen");
+    let placed = format!("pwd > '{}' < /dev/null", placed_seen.display());
     let mut server = serve_as_agent(&env);
     server.initialize();
-    for (id, name, mut call) in [
+    for (id, name, arguments, worktree) in [
         (
             1,
-            "on-green",
-            json!({"trigger": "when", "value": "ci=passed", "for": "10m"}),
+            "where",
+            json!({"command": command, "cwd": "sub", "label": "check the checkout"}),
+            None,
         ),
         (
             2,
-            "on-red",
-            json!({"trigger": "signal", "value": "ci.failed", "match": {"branch": "feature"}}),
+            "slow",
+            json!({"command": "sleep 30", "timeout": "1s"}),
+            None,
         ),
+        (3, "placed", json!({"command": placed}), Some("deps")),
     ] {
-        let map = call.as_object_mut().unwrap();
-        map.insert("name".to_owned(), json!(name));
-        map.insert("repeat".to_owned(), json!(true));
-        map.insert("overlap".to_owned(), json!("replace"));
-        map.insert("tool".to_owned(), json!("agent"));
-        map.insert(
-            "arguments".to_owned(),
-            json!({"profile": "worker", "prompt": "fix it"}),
-        );
+        let mut call = json!({"name": name, "trigger": "cron", "value": "0 0 1 1 *",
+                              "tool": "shell", "arguments": arguments});
+        if let Some(worktree) = worktree {
+            call["worktree"] = json!(worktree);
+        }
         let (booked, is_error) = server.answer(id, "schedule", call);
-        assert!(!is_error, "{booked}");
+        assert!(!is_error, "{name}: {booked}");
     }
     server.close();
     let rows = loop_rows(&env);
-    let text = |row: &toml::Table, key: &str| row[key].as_str().unwrap().to_owned();
-    let on_green = rows["on-green"].as_table().unwrap();
-    assert_eq!(
-        on_green["when"],
-        toml::Value::from(vec!["ci=passed"]),
-        "{on_green:?}"
-    );
-    assert_eq!(text(on_green, "for"), "10m", "{on_green:?}");
-    let on_red = rows["on-red"].as_table().unwrap();
-    assert_eq!(text(on_red, "signal"), "ci.failed", "{on_red:?}");
-    let matched: Vec<String> = on_red["match"]
-        .as_table()
-        .unwrap()
-        .iter()
-        .map(|(key, value)| format!("{key}={}", value.as_str().unwrap()))
-        .collect();
-    assert_eq!(matched, ["branch=feature"], "{on_red:?}");
-    let green_trigger = vec![
-        "--when".to_owned(),
-        on_green["when"][0].as_str().unwrap().to_owned(),
-        "--for".to_owned(),
-        text(on_green, "for"),
-    ];
-    let mut red_trigger = vec!["--signal".to_owned(), text(on_red, "signal")];
-    red_trigger.extend(
-        matched
-            .iter()
-            .flat_map(|pair| ["--match".to_owned(), pair.clone()]),
-    );
-    for (name, row, trigger) in [
-        ("on-green", on_green, green_trigger),
-        ("on-red", on_red, red_trigger),
-    ] {
-        assert_eq!(row["repeat"], toml::Value::from(true), "{row:?}");
-        let tail: Vec<&str> = row["args"]
+    let row = |name: &str| rows[name].as_table().unwrap().clone();
+    let words = |row: &toml::Table| -> Vec<String> {
+        row["args"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|word| word.as_str().unwrap())
-            .collect();
-        let output = env
-            .rimz()
-            .args(["loop", "add", &format!("check-{name}"), "--agent"])
-            .arg(row["target"].as_str().unwrap())
-            .args(&trigger)
-            .args(["--repeat", "--overlap", &text(row, "overlap"), "--"])
-            .args(&tail)
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{trigger:?} {tail:?}: {output:?}");
+            .map(|word| word.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let here = row("where");
+    assert_eq!(here["kind"].as_str(), Some("shell"), "{here:?}");
+    assert_eq!(words(&here), ["sh", "-c", command.as_str()], "{here:?}");
+    assert_eq!(here["timeout"].as_str(), Some("45m"), "{here:?}");
+    assert_eq!(
+        here["label"].as_str(),
+        Some("check the checkout"),
+        "{here:?}"
+    );
+    assert_eq!(
+        here["dir"].as_str().map(std::path::Path::new),
+        Some(checkout.as_path()),
+        "{here:?}"
+    );
+    let slow = row("slow");
+    assert_eq!(words(&slow), ["sh", "-c", "sleep 30"], "{slow:?}");
+    assert_eq!(slow["timeout"].as_str(), Some("1s"), "{slow:?}");
+
+    let fire = |name: &str| {
+        let before = run_mark(&env, name);
+        let output = env.rimz().args(["loop", "run", name]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        wait_for_loop_report_after(&env, name, before)
+    };
+    assert_eq!(fire("where").result, LoopRunResult::Completed);
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap().trim_end(),
+        checkout.to_str().unwrap()
+    );
+    let placed_row = row("placed");
+    assert_eq!(
+        placed_row["worktree"].as_str(),
+        Some("deps"),
+        "{placed_row:?}"
+    );
+    assert_eq!(
+        words(&placed_row),
+        ["sh", "-c", placed.as_str()],
+        "{placed_row:?}"
+    );
+    assert_eq!(fire("placed").result, LoopRunResult::Completed);
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    let tree = owned
+        .iter()
+        .find(|tree| tree.marker.name == "deps")
+        .unwrap_or_else(|| panic!("the fire makes its worktree: {owned:?}"));
+    assert_eq!(
+        std::fs::canonicalize(std::fs::read_to_string(&placed_seen).unwrap().trim_end()).unwrap(),
+        std::fs::canonicalize(&tree.marker.worktree_path).unwrap(),
+        "the command runs in the booking's worktree"
+    );
+    let timed_out = fire("slow");
+    assert!(
+        timed_out
+            .check
+            .as_ref()
+            .is_some_and(|check| check.timed_out),
+        "{timed_out:?}"
+    );
+    let logs = env.rimz().args(["loop", "logs", "slow"]).output().unwrap();
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert!(logs.starts_with("✗ failed (timeout) · "), "{logs}");
+    assert!(
+        logs.contains("│ command ran past its timeout 1s\n"),
+        "{logs}"
+    );
+}
+
+/// Each fire of a booking messages its booker once, naming the booking, with a command's outcome
+/// in the `shell` tool's wording, and `on` keeps only the outcomes it names. A molted booker gets
+/// the message at its successor, found by launch id; an ended one gets nothing queued, while the
+/// loop log still records the fire.
+#[cfg(target_os = "linux")]
+#[test]
+fn each_fire_of_a_booking_messages_its_booker_while_it_lives() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
+    let env = schedule_room();
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "shell",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    for (id, name, command, on) in [
+        (1, "passes", "true", None),
+        (2, "breaks", "exit 3", None),
+        (3, "passes-quietly", "true", Some("fail")),
+        (4, "breaks-quietly", "exit 3", Some("success")),
+    ] {
+        let mut call = json!({"name": name, "trigger": "cron", "value": "0 0 1 1 *",
+                              "tool": "shell", "arguments": {"command": command}});
+        if let Some(on) = on {
+            call["on"] = json!(on);
+        }
+        let (booked, is_error) = server.answer(id, "schedule", call);
+        assert!(!is_error, "{name}: {booked}");
     }
+    server.close();
+    let reports = || -> Vec<(String, String)> {
+        env.store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| message.text.starts_with("schedule:"))
+            .map(|message| (message.agent_id.to_string(), message.text))
+            .collect()
+    };
+    let fire = |name: &str| {
+        let before = run_mark(&env, name);
+        let reported = reports().len();
+        env.rimz().args(["loop", "run", name]).output().unwrap();
+        let row = wait_for_loop_report_after(&env, name, before);
+        // The process that lands the row queues the message after it.
+        crate::common::wait::wait_for_loop_runs_to_exit(&env, name);
+        (row.result, reports().split_off(reported))
+    };
+
+    let (result, sent) = fire("passes");
+    assert_eq!(result, LoopRunResult::Completed);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "provider-session", "{sent:?}");
+    assert!(
+        sent[0].1.starts_with("schedule:passes · exit 0 after "),
+        "{sent:?}"
+    );
+    let (result, sent) = fire("breaks");
+    assert_eq!(result, LoopRunResult::Failed);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(
+        sent[0].1.starts_with("schedule:breaks · exit 3 after "),
+        "{sent:?}"
+    );
+    for name in ["passes-quietly", "breaks-quietly"] {
+        let (_, sent) = fire(name);
+        assert_eq!(sent, [], "{name}");
+    }
+
+    end_session(&env, "provider-session");
+    crate::common::wait::register_agent(
+        &env,
+        "successor-session",
+        "launch-session",
+        "planner",
+        rimz::agents::LaunchParams::default(),
+    );
+    let (_, sent) = fire("passes");
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "successor-session", "{sent:?}");
+
+    end_session(&env, "successor-session");
+    let (result, sent) = fire("breaks");
+    assert_eq!(
+        result,
+        LoopRunResult::Failed,
+        "the loop log records the fire"
+    );
+    assert_eq!(sent, [], "an ended booker is sent nothing");
+}
+
+/// A workflow fire's end reaches its booker once its run is collected, in the starter report's
+/// wording under the booking's id.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_workflow_fire_messages_its_booker_when_its_run_ends() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
+    let env = schedule_room();
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "flow",
+    );
+    deploy_workflow(
+        &env,
+        "quick",
+        "[workflow]\nscope = 'project'\nstart = 'hold'\n\
+         [test.hold]\ntimeout = '5m'\nshell = 'true'\non = { pass = '@done', fail = '@failed' }\n",
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (booked, is_error) = server.answer(
+        1,
+        "schedule",
+        json!({"name": "flow", "trigger": "cron", "value": "0 0 1 1 *", "tool": "workflow",
+               "arguments": {"name": "quick"}}),
+    );
+    assert!(!is_error, "{booked}");
+    server.close();
+    let before = run_mark(&env, "flow");
+    let fired = env.rimz().args(["loop", "run", "flow"]).output().unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    let row = wait_for_loop_report_after(&env, "flow", before);
+    assert_eq!(row.result, LoopRunResult::Completed, "{row:?}");
+    let sent = || -> Vec<(String, String)> {
+        env.store()
+            .list_messages()
+            .unwrap()
+            .into_iter()
+            .filter(|message| message.text.starts_with("schedule:flow\n"))
+            .map(|message| (message.agent_id.to_string(), message.text))
+            .collect()
+    };
+    // The process that collects the run queues the message after its row lands.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while sent().is_empty() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let sent = sent();
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert_eq!(sent[0].0, "provider-session", "{sent:?}");
+}
+
+/// A booking fires where it was booked: the same `when` booked from the project root and from a
+/// linked worktree stores each checkout as its row's `dir` and reads each one, and a booking
+/// whose checkout is gone by its fire fails that fire with no fallback to the root, and its
+/// booker is told of the failure.
+#[cfg(unix)]
+#[test]
+fn a_booking_reads_and_fires_in_the_checkout_it_was_booked_from() {
+    let env = schedule_room();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.test"],
+        &["config", "user.name", "RimZ Test"],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        crate::common::git::git(&env.project_root, args);
+    }
+    let made = env
+        .rimz()
+        .args(["worktree", "new", "side"])
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    let side = std::fs::canonicalize(env.home_root.join("project-worktrees/side")).unwrap();
+    let root = std::fs::canonicalize(&env.project_root).unwrap();
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "where",
+    );
+    std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+    let path = |dir: &std::path::Path| dir.to_string_lossy().into_owned();
+    std::fs::write(
+        runtime.lane_path("pr-state.json"),
+        json!({
+            "branch_ci": {},
+            "path_repos": {path(&root): "repo", path(&side): "repo"},
+            "repos": {"repo": {
+                "ok": true,
+                "refreshed_at_ms": jiff::Timestamp::now().as_millisecond() + 3_600_000,
+            }},
+            "states": {path(&root): {"state": "merged"}, path(&side): {"state": "open"}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let gone = side.join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let book = |dir: &std::path::Path, name: &str, tool: &str, value: &str, arguments: Value| {
+        let trigger = if value.contains('=') { "when" } else { "cron" };
+        let mut command = crate::common::wait::agent_wait(&env);
+        command.current_dir(dir).args(["mcp", "serve"]);
+        let mut server = McpServer::spawn(command);
+        server.initialize();
+        let (booked, is_error) = server.answer(
+            1,
+            "schedule",
+            json!({"name": name, "trigger": trigger, "value": value, "tool": tool,
+                   "arguments": arguments}),
+        );
+        server.close();
+        assert!(!is_error, "{name}: {booked}");
+        assert!(booked.get("warnings").is_none(), "{name}: {booked}");
+    };
+    let worker = json!({"profile": "worker", "prompt": "go"});
+    book(&root, "at-root", "agent", "pr=merged", worker.clone());
+    book(&side, "at-side", "agent", "pr=merged", worker);
+    book(
+        &side,
+        "in-gone",
+        "shell",
+        "0 0 1 1 *",
+        json!({"command": "touch fired", "cwd": "gone"}),
+    );
+    // From a subdirectory, a booking reads and fires in its checkout; a shell `cwd` stays where
+    // the command runs, and its `when` reads that directory's checkout.
+    let pkg = side.join("pkg");
+    std::fs::create_dir(&pkg).unwrap();
+    let here = json!({"command": "pwd -P > here"});
+    book(
+        &pkg,
+        "from-pkg",
+        "agent",
+        "pr=merged",
+        json!({"profile": "worker", "prompt": "go"}),
+    );
+    book(&pkg, "pkg-shell", "shell", "pr=merged", here.clone());
+    book(
+        &side,
+        "into-pkg",
+        "shell",
+        "pr=merged",
+        json!({"command": "pwd -P > here", "cwd": "pkg"}),
+    );
+    let instances = loop_instances(&env).0;
+    assert_eq!(instances["at-root"].dir, Some(root.clone()));
+    assert_eq!(instances["at-side"].dir, Some(side.clone()));
+    assert_eq!(instances["from-pkg"].dir, Some(side.clone()));
+    assert_eq!(instances["pkg-shell"].dir, Some(side.clone()));
+    assert_eq!(instances["into-pkg"].dir, Some(pkg.clone()));
+    let rows = loop_rows(&env);
+    assert_eq!(
+        rows["in-gone"]["dir"].as_str().map(std::path::Path::new),
+        Some(gone.as_path())
+    );
+    let show = |name: &str| {
+        let output = env.rimz().args(["loop", "show", name]).output().unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    for (name, reading) in [
+        ("at-root", "✓ merged"),
+        ("at-side", "✗ open"),
+        ("from-pkg", "✗ open"),
+        ("pkg-shell", "✗ open"),
+        ("into-pkg", "✗ open"),
+    ] {
+        let shown = show(name);
+        assert!(
+            shown.contains(&format!("\n  pr=merged   {reading}\n")),
+            "{name}: {shown}"
+        );
+    }
+    for (name, ran_in) in [("pkg-shell", &side), ("into-pkg", &pkg)] {
+        let before = crate::loop_schedule::run_mark(&env, name);
+        let fired = env.rimz().args(["loop", "run", name]).output().unwrap();
+        assert!(fired.status.success(), "{name}: {fired:?}");
+        let ran = crate::loop_schedule::wait_for_loop_report_after(&env, name, before);
+        assert_eq!(
+            ran.result,
+            rimz::harness::schedule::run_log::LoopRunResult::Completed,
+            "{name}: {ran:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ran_in.join("here"))
+                .unwrap()
+                .trim_end(),
+            ran_in.to_str().unwrap(),
+            "{name}"
+        );
+    }
+
+    std::fs::remove_dir(&gone).unwrap();
+    let fired = env
+        .rimz()
+        .args(["loop", "run", "in-gone"])
+        .output()
+        .unwrap();
+    let logs = env
+        .rimz()
+        .args(["loop", "logs", "in-gone"])
+        .output()
+        .unwrap();
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert!(!fired.status.success(), "{fired:?}");
+    assert!(logs.starts_with("✗ error · "), "{logs}");
+    assert!(
+        logs.contains(&format!(
+            "│ task checkout {}: No such file or directory (os error 2)\n",
+            gone.display()
+        )),
+        "{logs}"
+    );
+    assert!(!root.join("fired").exists() && !side.join("fired").exists());
+    let told: Vec<String> = env
+        .store()
+        .list_messages()
+        .unwrap()
+        .into_iter()
+        .map(|message| message.text)
+        .filter(|text| text.starts_with("schedule:in-gone"))
+        .collect();
+    assert_eq!(
+        told,
+        [format!(
+            "schedule:in-gone · error\ntask checkout {}: No such file or directory (os error 2)",
+            gone.display()
+        )]
+    );
+}
+
+/// A booking from an agent whose start directory lies outside the room's repository fires in
+/// the booking's room: the fire's launch runs in the booked directory under the room's pin.
+#[cfg(unix)]
+#[test]
+fn a_fire_acts_in_the_booking_room_whatever_its_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = schedule_room();
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &workspace.session_name,
+        "away",
+    );
+    let outside = env.home_root.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let outside = std::fs::canonicalize(&outside).unwrap();
+    let mut command = crate::common::wait::agent_wait(&env);
+    command
+        .current_dir(&outside)
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .args(["mcp", "serve"]);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let (booked, is_error) = server.answer(
+        1,
+        "schedule",
+        json!({"name": "away", "trigger": "cron", "value": "0 0 1 1 *", "tool": "agent",
+               "arguments": {"profile": "worker", "prompt": "go"}}),
+    );
+    server.close();
+    assert!(!is_error, "{booked}");
+    let seen = env.home_root.join("away-seen");
+    let wrapper = env.home_root.join("rimz-away");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh
+case \"$1\" in agents) ;; *) exec {real:?} \"$@\";; esac
+\
+             echo \"$(pwd -P) ${{RIMZ_PROJECT_ROOT-unset}} ${{RIMZ_WORKSPACE_ID-unset}}\" > {seen:?}
+",
+            real = env.rimz_bin().display().to_string(),
+            seen = seen.display().to_string(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fired = env
+        .rimz()
+        .env("RIMZ_BIN", &wrapper)
+        .args(["loop", "run", "away"])
+        .output()
+        .unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap().trim_end(),
+        format!(
+            "{} {} {}",
+            outside.display(),
+            workspace.project_root.display(),
+            workspace.workspace_id
+        )
+    );
+}
+
+/// A repeating `when` booking with `for` stores a row whose trigger and launch, read back as
+/// `rimz loop add` flags, pass the command's own checks.
+#[test]
+fn a_when_booking_stores_a_row_the_command_accepts() {
+    let env = schedule_room();
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (booked, is_error) = server.answer(
+        1,
+        "schedule",
+        json!({"name": "on-green", "trigger": "when", "value": "ci=passed", "for": "10m",
+               "repeat": true, "overlap": "replace", "tool": "agent",
+               "arguments": {"profile": "worker", "prompt": "fix it"}}),
+    );
+    assert!(!is_error, "{booked}");
+    server.close();
+    let rows = loop_rows(&env);
+    let text = |row: &toml::Table, key: &str| row[key].as_str().unwrap().to_owned();
+    let row = rows["on-green"].as_table().unwrap();
+    assert_eq!(row["when"], toml::Value::from(vec!["ci=passed"]), "{row:?}");
+    assert_eq!(text(row, "for"), "10m", "{row:?}");
+    assert_eq!(row["repeat"], toml::Value::from(true), "{row:?}");
+    let tail: Vec<&str> = row["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|word| word.as_str().unwrap())
+        .collect();
+    let output = env
+        .rimz()
+        .args(["loop", "add", "check-on-green", "--agent"])
+        .arg(row["target"].as_str().unwrap())
+        .args([
+            "--when",
+            row["when"][0].as_str().unwrap(),
+            "--for",
+            &text(row, "for"),
+        ])
+        .args(["--repeat", "--overlap", &text(row, "overlap"), "--"])
+        .args(&tail)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{tail:?}: {output:?}");
 }
 
 /// Each refusal of `rimz loop add` and of a fire reaches the caller in the tool's own terms,
@@ -6198,97 +6779,84 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
     };
     let cases = [
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "repeat": true, "tool": "agent", "arguments": agent}),
-            "invalid arguments: `repeat` takes a `signal` or `when` trigger".to_owned(),
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "repeat": true, "tool": "agent", "arguments": agent}),
+            "invalid arguments: `repeat` takes a `when` trigger".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "in", "value": "1h", "overlap": "queue", "tool": "agent", "arguments": agent}),
+            json!({"name": "bad", "trigger": "at", "value": "1h", "overlap": "queue", "tool": "agent", "arguments": agent}),
             "invalid arguments: `overlap` takes a repeating trigger".to_owned(),
-        ),
-        (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "match": {"branch": "x"}, "tool": "agent", "arguments": agent}),
-            "invalid arguments: `match` takes a `signal` trigger".to_owned(),
         ),
         (
             json!({"name": "bad", "trigger": "cron", "value": "@daily", "for": "1m", "tool": "agent", "arguments": agent}),
             "invalid arguments: `for` takes a `when` trigger".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "in", "value": "0s", "tool": "agent", "arguments": agent}),
-            "invalid arguments: `value`: must be greater than zero".to_owned(),
-        ),
-        (
-            json!({"name": "bad", "trigger": "in", "value": "9999999999d", "tool": "agent", "arguments": agent}),
-            "invalid in `9999999999d`: lands past the latest time RimZ can schedule".to_owned(),
-        ),
-        (
-            json!({"name": "bad", "trigger": "signal", "value": "ci.finished", "tool": "agent", "arguments": agent}),
-            "schedule `bad`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; leave \
-             `conclusion` out of `match`"
+            json!({"name": "bad", "trigger": "at", "value": "0s", "tool": "agent", "arguments": agent}),
+            "invalid arguments: `value`: `0s` is neither a delay above zero (`30m`, `2h`) nor a \
+             clock time (`HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`)"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "signal", "value": "ci.*", "match": {"conclusion": "failure"},
-                   "tool": "agent", "arguments": agent}),
-            "schedule `bad`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; leave \
-             `conclusion` out of `match`"
+            json!({"name": "bad", "trigger": "at", "value": "9999999999d", "tool": "agent", "arguments": agent}),
+            "`at` `9999999999d` is neither a delay above zero (`30m`, `2h`) nor a clock time \
+             (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`)"
                 .to_owned(),
         ),
         (
             json!({"name": "bad", "trigger": "at", "value": "soon", "tool": "agent", "arguments": agent}),
-            "invalid arguments: `value`: `soon` is not `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD \
-             HH:MM`"
+            "invalid arguments: `value`: `soon` is neither a delay above zero (`30m`, `2h`) nor \
+             a clock time (`HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`)"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "-w now"}}),
             "invalid arguments: `arguments.prompt` starts with `-`, which a fire's launch reads as a flag"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                    "arguments": held(json!({"input": {"outcome": "go"}}))}),
             "invalid arguments: `arguments.input`: a fire starts a run with no input".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                    "arguments": held(json!({"detach": true}))}),
             "invalid arguments: `arguments.detach`: a fire's run owes its task a report".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                    "arguments": held(json!({"worktree": "feat"}))}),
             "invalid arguments: `arguments.worktree`: pass top-level `worktree` instead".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "go", "worktree": "feat"}}),
             "invalid arguments: `arguments.worktree`: pass top-level `worktree` instead".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "in", "value": "5m", "tool": "team",
+            json!({"name": "bad", "trigger": "at", "value": "5m", "tool": "team",
                    "arguments": {"team": "forge", "prompt": "go"}}),
             "invalid arguments: `arguments` (with top-level `worktree`): give exactly one of \
              `worktree` and `from_pr`"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "team",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "team",
                    "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"}}),
             "invalid arguments: `arguments.from_pr`: a repeating team booking cannot use `from_pr`; \
              set top-level `worktree` or use a one-shot trigger"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "forge.coder", "prompt": "go", "from_pr": "42"}}),
             "`arguments.from_pr`: a repeating booking of a team seat cannot use `from_pr`; set \
              top-level `worktree` or use a one-shot trigger"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "signal", "value": "ci.failed", "repeat": true,
+            json!({"name": "bad", "trigger": "when", "value": "ci=failed", "repeat": true,
                    "tool": "agent",
                    "arguments": {"profile": "forge.coder", "prompt": "go", "from_pr": "42"}}),
             "`arguments.from_pr`: a repeating booking of a team seat cannot use `from_pr`; set \
@@ -6296,93 +6864,88 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "crew", "tool": "team",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "crew", "tool": "team",
                    "arguments": {"team": "forge#crew", "prompt": "go"}}),
             "invalid arguments: `arguments.team` cannot include `#lane`; pass top-level `worktree` instead"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "crew", "tool": "team",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "crew", "tool": "team",
                    "arguments": {"team": "ghost", "prompt": "go"}}),
             "unknown team `ghost`".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "forge", "prompt": "go"}}),
             "`arguments.profile` `forge` is a team; book it with `tool` `team`".to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "feat",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "feat",
                    "tool": "workflow", "arguments": {"name": "whole"}}),
             "workflow `whole` has scope = project, so it runs at the project root; remove `worktree`"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "claude,true", "prompt": "go"}}),
             "`arguments.profile` `claude,true` names more than one cell; name one agent profile"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "true", "prompt": "go"}}),
             "`arguments.profile` `true` names a command, not an agent; name an agent profile"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "-probe",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "-probe",
                    "tool": "workflow", "arguments": held(json!({}))}),
             "invalid arguments: `worktree` starts with `-`, which a fire's launch reads as a flag"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                    "arguments": {"name": "-nightly"}}),
             "invalid arguments: `arguments.name` starts with `-`, which a fire's launch reads as a flag"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "crew", "tool": "team",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "crew", "tool": "team",
                    "arguments": {"team": "-nightly", "prompt": "ship it"}}),
             "invalid arguments: `arguments.team` starts with `-`, which a fire's launch reads as \
              a flag"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "go\u{0}"}}),
             "invalid arguments: `arguments.prompt` holds a NUL character, which a fire's launch \
              cannot pass"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "crew", "tool": "team",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "crew", "tool": "team",
                    "arguments": {"team": "forge", "prompt": "go\u{0}"}}),
             "invalid arguments: `arguments.prompt` holds a NUL character, which a fire's launch \
              cannot pass"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                    "arguments": held(json!({"prompt": "go\u{0}"}))}),
             "invalid arguments: `arguments.prompt` holds a NUL character, which a fire's \
              launch cannot pass"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "signal", "value": "ci.failed", "match": {"": "x"},
-                   "tool": "agent", "arguments": agent}),
-            "invalid arguments: a `match` key is empty".to_owned(),
-        ),
-        (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "logs", "prompt": "go"}}),
             "invalid arguments: `arguments.profile` `logs` is a `rimz agents` verb, which a \
              fire's launch reads in place of a profile"
                 .to_owned(),
         ),
         (
-            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+            json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "go", "name": "bad name"}}),
             "`arguments.name`: invalid agent name `bad name`; use ASCII letters, numbers, and `-`"
                 .to_owned(),
@@ -6405,7 +6968,7 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
     let (failure, is_error) = server.answer(
         98,
         "schedule",
-        json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+        json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                "arguments": {"profile": "worker", "prompt": "go", "cwd": "no-such-dir"}}),
     );
     assert!(is_error, "{failure}");
@@ -6419,7 +6982,7 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
     let (failure, is_error) = server.answer(
         99,
         "schedule",
-        json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+        json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "agent",
                "arguments": {"profile": "worker", "prompt": "go", "from_pr": "not-a-pr"}}),
     );
     assert!(is_error, "{failure}");
@@ -6433,7 +6996,7 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
     let (failure, is_error) = server.answer(
         100,
         "schedule",
-        json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "workflow",
+        json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "tool": "workflow",
                "arguments": {"name": "ghost"}}),
     );
     assert!(is_error, "{failure}");
@@ -6455,7 +7018,7 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
     let (failure, is_error) = server.answer(
         101,
         "schedule",
-        json!({"name": "bad", "trigger": "every", "value": "1h", "worktree": "crew", "tool": "team",
+        json!({"name": "bad", "trigger": "cron", "value": "0 * * * *", "worktree": "crew", "tool": "team",
                "arguments": {"team": "forge", "prompt": "go"}}),
     );
     assert!(is_error, "{failure}");
@@ -6494,8 +7057,8 @@ fn a_schedule_refuses_padded_path_workflow_names() {
             "schedule",
             json!({
                 "name": "bad-wf",
-                "trigger": "every",
-                "value": "1h",
+                "trigger": "cron",
+                "value": "0 * * * *",
                 "tool": "workflow",
                 "arguments": {"name": padded},
             }),
@@ -6538,7 +7101,7 @@ fn a_scoped_callers_schedule_cwd_stores_the_host_temp_unit() {
         "schedule",
         json!({
             "name": "scoped-cwd",
-            "trigger": "in",
+            "trigger": "at",
             "value": "10m",
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "go", "cwd": "/tmp"},
@@ -6563,33 +7126,47 @@ fn a_schedule_replaces_only_a_name_its_caller_booked() {
     let env = schedule_room();
     let output = env
         .rimz()
-        .args(["loop", "add", "taken", "--every", "2h", "--", "true"])
+        .args([
+            "loop",
+            "add",
+            "taken",
+            "--cron",
+            "0 */2 * * *",
+            "--",
+            "true",
+        ])
         .output()
         .unwrap();
     assert!(output.status.success(), "{output:?}");
     let mut server = serve_as_agent(&env);
     server.initialize();
-    let book = |name: &str, every: &str| {
+    let book = |name: &str, cron: &str| {
         json!({
             "name": name,
-            "trigger": "every",
-            "value": every,
+            "trigger": "cron",
+            "value": cron,
             "tool": "agent",
             "arguments": {"profile": "worker", "prompt": "go"},
         })
     };
-    let (failure, is_error) = server.answer(1, "schedule", book("taken", "1h"));
+    let (failure, is_error) = server.answer(1, "schedule", book("taken", "0 * * * *"));
     assert!(is_error, "{failure}");
     assert_eq!(
         failure["error"],
         json!("a schedule named `taken` exists that you did not book; choose another name")
     );
-    assert_eq!(loop_rows(&env)["taken"]["every"].as_str(), Some("2h"));
-    let (_, is_error) = server.answer(2, "schedule", book("mine", "1h"));
+    assert_eq!(
+        loop_rows(&env)["taken"]["cron"].as_str(),
+        Some("0 */2 * * *")
+    );
+    let (_, is_error) = server.answer(2, "schedule", book("mine", "0 * * * *"));
     assert!(!is_error);
-    let (again, is_error) = server.answer(3, "schedule", book("mine", "3h"));
+    let (again, is_error) = server.answer(3, "schedule", book("mine", "0 */3 * * *"));
     assert!(!is_error, "{again}");
-    assert_eq!(loop_rows(&env)["mine"]["every"].as_str(), Some("3h"));
+    assert_eq!(
+        loop_rows(&env)["mine"]["cron"].as_str(),
+        Some("0 */3 * * *")
+    );
     // A molt to another provider keeps the launch id, so the booking stays the caller's.
     let path = env.rimz_home().join("loop.toml");
     let mut table =
@@ -6602,9 +7179,12 @@ fn a_schedule_replaces_only_a_name_its_caller_booked() {
     );
     link["kind"] = toml::Value::from("codex");
     std::fs::write(&path, toml::to_string(&table).unwrap()).unwrap();
-    let (molted, is_error) = server.answer(4, "schedule", book("mine", "4h"));
+    let (molted, is_error) = server.answer(4, "schedule", book("mine", "0 */4 * * *"));
     assert!(!is_error, "{molted}");
-    assert_eq!(loop_rows(&env)["mine"]["every"].as_str(), Some("4h"));
+    assert_eq!(
+        loop_rows(&env)["mine"]["cron"].as_str(),
+        Some("0 */4 * * *")
+    );
     server.close();
 }
 
@@ -6630,7 +7210,7 @@ fn booking_fire_launches_fresh_into_a_closed_worktree(
     let (booked, is_error) = server.answer(
         1,
         "schedule",
-        json!({"name": "crew", "trigger": "every", "value": "1h", "worktree": "demo",
+        json!({"name": "crew", "trigger": "cron", "value": "0 * * * *", "worktree": "demo",
                "overlap": "replace", "tool": tool, "arguments": arguments}),
     );
     assert!(!is_error, "{booked}");
@@ -6690,7 +7270,7 @@ fn the_schedule_tool_refuses_a_caller_at_the_chain_limit() {
     let (failure, is_error) = server.answer(
         1,
         "schedule",
-        json!({"name": "nightly", "trigger": "every", "value": "1h",
+        json!({"name": "nightly", "trigger": "cron", "value": "0 * * * *",
                "tool": "agent", "arguments": {"profile": "worker", "prompt": "go"}}),
     );
     assert!(is_error, "{failure}");
@@ -6719,7 +7299,7 @@ fn the_schedule_tool_books_nothing_for_a_caller_it_cannot_identify() {
     let (failure, is_error) = stranger.answer(
         1,
         "schedule",
-        json!({"name": "nightly", "trigger": "every", "value": "1h",
+        json!({"name": "nightly", "trigger": "cron", "value": "0 * * * *",
                "tool": "agent", "arguments": {"profile": "worker", "prompt": "go"}}),
     );
     assert!(is_error, "{failure}");

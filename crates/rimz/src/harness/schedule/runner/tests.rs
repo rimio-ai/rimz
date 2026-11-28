@@ -23,7 +23,7 @@ fn backlog_fire<'a>(root: &Path, catalog: &'a TaskCatalog) -> TaskFire<'a> {
                 root: root.to_owned(),
                 args: vec!["true".to_owned()],
                 timeout: Some("1m".to_owned()),
-                every: Some("1h".into()),
+                cron: Some("0 * * * *".into()),
                 overlap: Some(crate::config::OverlapPolicy::Coalesce),
                 ..Default::default()
             },
@@ -120,7 +120,7 @@ fn nonretaining_agent_decisions_tolerate_an_unreadable_backlog() {
                             target: agent.then(|| "claude".to_owned()),
                             args: vec!["true".to_owned()],
                             timeout: (!agent).then(|| "1m".to_owned()),
-                            every: Some("1h".into()),
+                            cron: Some("0 * * * *".into()),
                             overlap,
                             ..Default::default()
                         },
@@ -637,7 +637,7 @@ fn a_scheduled_gate_skip_removes_a_fire_at_row_and_leaves_the_rest() {
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             root: dir.path().to_path_buf(),
-            every: (!fire_at).then(|| "1h".to_owned()),
+            cron: (!fire_at).then(|| "0 * * * *".to_owned()),
             fire_at: fire_at.then_some(Timestamp::UNIX_EPOCH),
             ..TaskEntry::default()
         };
@@ -693,7 +693,7 @@ fn check_room_hook_precedes_the_run_and_carries_the_rows_checkout() {
         timeout: Some("1m".to_owned()),
         root: project_root.clone(),
         dir: Some(worktree_root.clone()),
-        every: Some("1m".to_owned()),
+        cron: Some("* * * * *".to_owned()),
         ..TaskEntry::default()
     };
     let mut fire = TaskFire::new(
@@ -741,7 +741,7 @@ fn check_room_hook_is_after_lock_and_deadline_and_records_failure() {
         args: vec!["touch".to_owned(), "check-ran".to_owned()],
         timeout: Some("1m".to_owned()),
         root: dir.path().to_path_buf(),
-        every: Some("1m".to_owned()),
+        cron: Some("* * * * *".to_owned()),
         ..TaskEntry::default()
     };
     let make_fire = |entry: TaskEntry| {
@@ -1169,7 +1169,7 @@ fn launch_fire<'a>(
     let name = format!("launch-{}", TaskId::new().short());
     let entry = TaskEntry {
         root: root.to_owned(),
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         ..entry
     };
     TaskFire::new(
@@ -1545,7 +1545,7 @@ fn a_delivery_gates_scope_then_run_lock_then_deadline_then_watch() {
     record_room(&root).unwrap();
     let catalog = TaskCatalog::load(Some(&root)).unwrap();
     let every = || TaskEntry {
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         ..TaskEntry::default()
     };
     let prepared = |fire: &mut TaskFire<'_>| match fire.prepare(&mut |_| Ok(())).unwrap() {

@@ -758,6 +758,7 @@ pub enum RunEnding {
 /// a clock fire, or a manual one without `--signal`, has none. `booked_by` is the
 /// fired task row's booking chain as the fire read it, which every agent the run launches
 /// carries; a fire of a row with no chain, or of a record written before the field, has none.
+/// `on` is that row's `on`, which those agents carry beside the chain.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum RunFire {
@@ -768,6 +769,8 @@ pub enum RunFire {
         evidence: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         booked_by: Vec<crate::agents::LaunchedBy>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<crate::config::CheckOn>,
     },
     /// The task's trigger started the run; `trigger` words it as the brief does
     /// (``on the cron schedule `0 * * * *` ``), and a watch trigger has none.
@@ -779,6 +782,8 @@ pub enum RunFire {
         evidence: Option<String>,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         booked_by: Vec<crate::agents::LaunchedBy>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        on: Option<crate::config::CheckOn>,
     },
 }
 

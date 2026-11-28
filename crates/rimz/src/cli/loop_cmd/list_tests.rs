@@ -146,6 +146,8 @@ fn launched_counts_cover_the_marks_holding_a_checkout() {
         fire: FireId::new(&TaskId::new()),
         at,
         booked_by: Vec::new(),
+        on: None,
+        report: None,
         once: true,
         run,
         scope: rimz::store::workflow::ScopeKind::Worktree,
@@ -365,7 +367,7 @@ fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
         &schedule::parse_trigger(
             "struck",
             &TaskEntry {
-                every: Some("1h".into()),
+                cron: Some("0 * * * *".into()),
                 ..TaskEntry::default()
             },
         ),

@@ -964,6 +964,7 @@ pub enum ScheduleTarget {
     Agent(Agent),
     Team(Team),
     Workflow(WorkflowArgs),
+    Shell(Shell),
 }
 
 /// A `schedule` call: the booking, and its `arguments` parsed as the launch each fire stores.
@@ -980,6 +981,7 @@ fn parse_schedule(arguments: Value) -> Result<Call, serde_json::Error> {
         ScheduleTool::Agent => schedule.booked().map(ScheduleTarget::Agent),
         ScheduleTool::Team => schedule.booked().map(ScheduleTarget::Team),
         ScheduleTool::Workflow => schedule.booked().map(ScheduleTarget::Workflow),
+        ScheduleTool::Shell => schedule.booked().map(ScheduleTarget::Shell),
     }
     .map_err(serde::de::Error::custom)?;
     Ok(Call::Schedule(Box::new(Booking { schedule, target })))
@@ -1246,7 +1248,7 @@ impl ToolArgs for BlackboardRecordArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuideArgs {
-    /// The guide, as `<group>/<guide>`.
+    /// The guide, named as a tool description names it.
     pub name: String,
 }
 

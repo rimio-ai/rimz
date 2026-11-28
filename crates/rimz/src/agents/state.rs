@@ -1596,6 +1596,11 @@ pub struct AgentState {
     /// first, carried from its launch record; empty for an agent no loop fire started.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loop_booked_by: Vec<crate::agents::LaunchedBy>,
+    /// The `on` of the booking whose fire launched this agent, carried from its launch record:
+    /// the booker gets this agent's report only when it allows one
+    /// (`harness::fleet::report_recipient`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_on: Option<crate::config::CheckOn>,
     /// The loop fire this agent was launched under, carried from its launch record; `rimz loop
     /// show` lists the agent while it has not ended, and `rimz loop stop` stops it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2395,6 +2400,7 @@ impl AgentState {
             team: None,
             loop_task: None,
             loop_booked_by: Vec::new(),
+            loop_on: None,
             loop_fire: None,
             workflow: None,
             automation: None,

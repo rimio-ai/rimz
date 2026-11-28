@@ -24,7 +24,7 @@ pub(super) fn settle_ended_teams(
     if !projection
         .agents
         .iter()
-        .any(|agent| agent.is_team_seat() && agent.launcher_is(launcher))
+        .any(|agent| agent.is_team_seat() && rimz::harness::fleet::reports_to(agent, launcher))
     {
         return Ok(());
     }

@@ -509,7 +509,7 @@ fn a_run_in_progress_holds_back_only_the_failure_it_follows() {
                 root: root.to_path_buf(),
                 args: vec!["false".to_owned()],
                 timeout: Some("1m".to_owned()),
-                every: Some("1h".to_owned()),
+                cron: Some("0 * * * *".to_owned()),
                 max_strikes: Some(0),
                 ..TaskEntry::default()
             },

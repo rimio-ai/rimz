@@ -1908,7 +1908,6 @@ fn loop_tasks_parse_and_default_empty() {
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.cron.as_deref(), Some("0 7 * * 1-5"));
     assert_eq!(entry.timeout.as_deref(), Some("5m"));
-    assert_eq!(entry.every, None);
 
     let bound = config.r#loop.tasks.0.get("self_wait").expect("bind task");
     assert!(bound.args.is_empty());
@@ -1924,12 +1923,12 @@ fn loop_loads_skip_machine_tasks_without_absolute_roots() {
     let path = write_named(
         &dir,
         LOOP_FILE,
-        "[tasks.missing]\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.empty]\nroot=''\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.relative]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.dot]\nroot='.'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.home]\nroot='~/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.absolute]\nroot='/repo'\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+        "[tasks.missing]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.empty]\nroot=''\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.relative]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.dot]\nroot='.'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.home]\nroot='~/x'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.absolute]\nroot='/repo'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
     );
     let configs = [
         load_no_fragments(&path).unwrap(),

@@ -50,7 +50,7 @@ fn two_advances_at_once_answer_a_now_once() {
 fn a_schedule_is_booked_and_answered_with_its_id() {
     let h = Harness::new();
     h.start(script(
-        "return await schedule({ name: 'nightly', trigger: 'in', value: '1h', tool: 'agent', arguments: { profile: 'opus', prompt: 'p' } })",
+        "return await schedule({ name: 'nightly', trigger: 'at', value: '1h', tool: 'agent', arguments: { profile: 'opus', prompt: 'p' } })",
     ));
     assert_eq!(h.done(), json!({ "id": "booking-nightly" }));
 }
@@ -60,7 +60,7 @@ fn a_booking_the_room_refuses_fails_the_call_invalid() {
     let h = Harness::new();
     h.fake.refuse_bookings("the name is another starter's");
     h.start(script(
-        "try { await schedule({ name: 'n', trigger: 'in', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } }) } catch (e) { return [e.cause, e.reason, e.step] }",
+        "try { await schedule({ name: 'n', trigger: 'at', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } }) } catch (e) { return [e.cause, e.reason, e.step] }",
     ));
     assert_eq!(
         h.done(),
@@ -73,7 +73,7 @@ fn a_crash_between_a_booking_and_its_line_books_again_under_the_same_name() {
     let h = Harness::new();
     h.fake.crash_at("book", 1, true);
     h.start(script(
-        "return await schedule({ name: 'n', trigger: 'in', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } })",
+        "return await schedule({ name: 'n', trigger: 'at', value: '1h', tool: 'agent', arguments: { profile: 'o', prompt: 'p' } })",
     ));
     assert!(h.record().ended.is_none());
     h.advance();

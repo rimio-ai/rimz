@@ -22,7 +22,7 @@ pub enum SelectorErr {
     #[error("schedule `{name}` has an invalid signal name `{value}`")]
     BadSignal { name: String, value: String },
     #[error(
-        "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove --match conclusion"
+        "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; remove the `conclusion` match"
     )]
     ObsoleteCiSignal { name: String },
 }

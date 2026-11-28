@@ -1641,3 +1641,67 @@ fn a_digest_reaches_the_holder_after_a_cross_kind_molt_of_the_parent() {
         Some("L")
     );
 }
+
+/// A fired peer reports to its booker the outcomes the booking's `on` keeps, naming the
+/// booking: a delivered report is a success, an end without one a failure. A report `on` drops
+/// is dismissed, so no later digest carries it.
+#[test]
+fn a_fired_peer_reports_to_its_booker_the_outcomes_its_on_keeps() {
+    use rimz::config::CheckOn;
+    for (on, status, reports) in [
+        (Some(CheckOn::Fail), RunStatus::Completed, false),
+        (Some(CheckOn::Fail), RunStatus::Failed, true),
+        (Some(CheckOn::Success), RunStatus::Completed, true),
+        (Some(CheckOn::Success), RunStatus::Failed, false),
+        (None, RunStatus::Completed, true),
+        (None, RunStatus::Failed, true),
+    ] {
+        let (_dir, workspace, store) = fixture();
+        append_agent(&store, "booker", None);
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("fired")),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some("fired".to_owned());
+        observation.launch.launch_depth = Some(1);
+        observation.launch.loop_task = Some("nightly".to_owned());
+        observation.launch.loop_fire = Some(rimz::ids::FireId::new(&rimz::ids::TaskId::new()));
+        observation.launch.loop_booked_by = vec![rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("codex"),
+            agent_id: AgentSessionId::from("booker"),
+        }];
+        observation.launch.loop_on = on;
+        store
+            .append_agent_lifecycle(AgentLifecycleIntent {
+                session_name: "report-test",
+                agent_kind: AgentKind::new_unchecked("codex"),
+                event_name: "test",
+                observation: &observation,
+                spawned_subagents: &[],
+            })
+            .unwrap();
+        let mut fired = child_run(&workspace.workspace_id, "fired", status);
+        fired.subagent = false;
+        run::create(store.paths(), &fired).unwrap();
+
+        let outcome = report_settled_child(&workspace, &store, &fired).unwrap();
+        assert_eq!(
+            matches!(outcome, ReportOutcome::Queued { .. }),
+            reports,
+            "{on:?} {status:?}: {outcome:?}"
+        );
+        let messages = store.list_messages().unwrap();
+        assert_eq!(messages.len(), usize::from(reports), "{on:?} {status:?}");
+        assert!(
+            messages
+                .iter()
+                .all(|message| message.text.contains("- @fired (schedule:nightly): ")),
+            "{messages:?}"
+        );
+        assert_eq!(
+            report_fleet(&workspace, &store, &AgentSessionId::from("booker")).unwrap(),
+            ReportOutcome::NothingToReport,
+            "{on:?} {status:?}"
+        );
+    }
+}

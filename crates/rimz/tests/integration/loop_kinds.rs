@@ -53,20 +53,20 @@ fn loop_add_stores_each_kind_as_its_target_and_tail_unchanged() {
         &[
             "sh-task",
             "--shell",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "sh",
             "-c",
             "echo 'a b'",
         ],
-        &["wf-task", "--workflow", "smoke", "--every", "1h"],
+        &["wf-task", "--workflow", "smoke", "--cron", "0 * * * *"],
         &[
             "agent-task",
             "--agent",
             "worker",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "-p",
             "fix it",
@@ -77,8 +77,8 @@ fn loop_add_stores_each_kind_as_its_target_and_tail_unchanged() {
             "team-task",
             "--team",
             "forge#lane",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "ship it",
         ],
@@ -165,8 +165,8 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
             "inlane",
             "--agent",
             "reviewer",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "--channel",
             "forge",
@@ -176,7 +176,15 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
     let outside = env
         .rimz()
         .args([
-            "loop", "add", "outside", "--agent", "reviewer", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "outside",
+            "--agent",
+            "reviewer",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ])
         .output()
         .unwrap();
@@ -204,8 +212,8 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
             "sub-inlane",
             "--agent",
             "reviewer",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "--subagent-profile",
             "--channel",
@@ -221,8 +229,8 @@ fn loop_add_resolves_a_bare_role_in_its_team_lane() {
             "sub-team",
             "--agent",
             "forge",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "--subagent-profile",
             "go",
@@ -407,7 +415,7 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
         ),
     ];
     for (flags, expected) in cases {
-        let mut argv = vec!["loop", "add", "t", "--every", "1h"];
+        let mut argv = vec!["loop", "add", "t", "--cron", "0 * * * *"];
         // `--each-worktree` fans out on a clock already; the rest only need a trigger.
         argv.extend(flags);
         let (_, error) = loop_fail(&env, &argv);
@@ -451,7 +459,7 @@ fn loop_add_refuses_a_machine_team_whose_seat_allows_a_failed_project_subagent()
     loop_ok(&env, &["trust", "grant"]);
     let (_, error) = loop_fail(
         &env,
-        &["loop", "add", "t", "--every", "1h", "--team", "crew"],
+        &["loop", "add", "t", "--cron", "0 * * * *", "--team", "crew"],
     );
     assert_eq!(
         error,
@@ -465,7 +473,7 @@ fn loop_add_refuses_a_machine_team_whose_seat_allows_a_failed_project_subagent()
     assert!(!loop_config_path(&env).exists(), "nothing was written");
     loop_ok(
         &env,
-        &["loop", "add", "f", "--every", "1h", "--team", "forge"],
+        &["loop", "add", "f", "--cron", "0 * * * *", "--team", "forge"],
     );
 }
 
@@ -491,7 +499,7 @@ fn loop_add_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
     loop_ok(&env, &["trust", "grant"]);
     let (_, error) = loop_fail(
         &env,
-        &["loop", "add", "t", "--every", "1h", "--team", "crew"],
+        &["loop", "add", "t", "--cron", "0 * * * *", "--team", "crew"],
     );
     assert_eq!(
         error,
@@ -509,7 +517,10 @@ fn loop_add_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
             "leader: lead\nstages: [Build]\nlayout: \"lead,ghost\"\nroles:\n  - {role: lead, agent: worker, owns: [Build]}",
             "Build.",
         );
-        let (_, error) = loop_fail(&env, &["loop", "add", "t", "--every", "1h", "--team", name]);
+        let (_, error) = loop_fail(
+            &env,
+            &["loop", "add", "t", "--cron", "0 * * * *", "--team", name],
+        );
         assert_eq!(
             error,
             format!(
@@ -522,11 +533,19 @@ fn loop_add_refuses_a_machine_team_whose_layout_cell_does_not_resolve() {
     assert!(!loop_config_path(&env).exists(), "nothing was written");
     loop_ok(
         &env,
-        &["loop", "add", "a", "--every", "1h", "--agent", "worker"],
+        &[
+            "loop",
+            "add",
+            "a",
+            "--cron",
+            "0 * * * *",
+            "--agent",
+            "worker",
+        ],
     );
     loop_ok(
         &env,
-        &["loop", "add", "f", "--every", "1h", "--team", "forge"],
+        &["loop", "add", "f", "--cron", "0 * * * *", "--team", "forge"],
     );
 }
 
@@ -551,7 +570,10 @@ fn loop_add_team_refuses_while_definition_set_has_failed() {
         "Help.",
     );
     for team in ["crew", "forge"] {
-        let (_, error) = loop_fail(&env, &["loop", "add", "t", "--every", "1h", "--team", team]);
+        let (_, error) = loop_fail(
+            &env,
+            &["loop", "add", "t", "--cron", "0 * * * *", "--team", team],
+        );
         assert_eq!(
             error,
             format!(
@@ -605,13 +627,29 @@ fn an_agent_or_team_fire_records_its_childs_exit_at_the_fire() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "solo", "--agent", "worker", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "solo",
+            "--agent",
+            "worker",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     loop_ok(
         &env,
         &[
-            "loop", "add", "crew", "--team", "forge", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "crew",
+            "--team",
+            "forge",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     let fire = |task: &str, exit: &str| {
@@ -701,7 +739,15 @@ fn a_workflow_fire_publishes_the_tasks_run_and_a_hand_started_run_overlaps_it() 
     );
     loop_ok(
         &env,
-        &["loop", "add", "wf", "--workflow", "smoke", "--every", "1h"],
+        &[
+            "loop",
+            "add",
+            "wf",
+            "--workflow",
+            "smoke",
+            "--cron",
+            "0 * * * *",
+        ],
     );
     let before = run_mark(&env, "wf");
     loop_ok(&env, &["loop", "run", "wf"]);
@@ -763,7 +809,15 @@ fn a_workflow_fire_sees_a_hand_started_run_through_another_link() {
     std::os::unix::fs::symlink(workflows.join("first"), workflows.join("second")).unwrap();
     loop_ok(
         &env,
-        &["loop", "add", "wf", "--workflow", "second", "--every", "1h"],
+        &[
+            "loop",
+            "add",
+            "wf",
+            "--workflow",
+            "second",
+            "--cron",
+            "0 * * * *",
+        ],
     );
     let hand = env
         .rimz()
@@ -789,47 +843,6 @@ fn a_workflow_fire_sees_a_hand_started_run_through_another_link() {
     std::fs::write(&release, "").unwrap();
 }
 
-/// A workflow task's steps read the fire's evidence as `RIMZ_LOOP_TRIGGER`, never the run's
-/// `--prompt`, and still get it when the task passes no prompt.
-#[cfg(unix)]
-#[test]
-fn a_workflow_fires_steps_read_its_evidence_as_the_trigger() {
-    let env = live_room();
-    let seen = env.home_root.join("seen");
-    deploy_workflow(
-        &env,
-        "smoke",
-        "worktree",
-        &format!(
-            r#"printf %s "$RIMZ_LOOP_TRIGGER" > {:?}/"$RIMZ_LOOP_TASK""#,
-            seen.display().to_string()
-        ),
-    );
-    std::fs::create_dir_all(&seen).unwrap();
-    let signal = r#"{"name":"deploy.done","source":"cli","payload":{"env":"prod"}}"#;
-    for (task, tail) in [
-        ("prompted", &["--", "--prompt", "fix it"][..]),
-        ("bare", &[]),
-    ] {
-        let add = [
-            &["loop", "add", task, "--workflow", "smoke"][..],
-            &["--signal", "deploy.done", "--repeat"],
-            tail,
-        ]
-        .concat();
-        loop_ok(&env, &add);
-        let before = run_mark(&env, task);
-        loop_ok(&env, &["loop", "run", task, "--signal-json", signal]);
-        let report = wait_for_loop_report_after(&env, task, before);
-        assert_eq!(report.result, LoopRunResult::Completed, "{report:?}");
-        assert_eq!(
-            std::fs::read_to_string(seen.join(task)).unwrap(),
-            format!("Rule `{task}` fired here. deploy.done · env: prod"),
-            "task {task}"
-        );
-    }
-}
-
 /// A fire typed in a pane of another room launches into the task's room: the launch child
 /// drops the firing shell's room pin, so it resolves the room from the fire's checkout, as a
 /// fire from the timer, which carries no pin, does.
@@ -849,7 +862,15 @@ fn a_fire_from_a_shell_pinned_to_another_room_launches_in_the_tasks_room() {
     );
     loop_ok(
         &env,
-        &["loop", "add", "wf", "--workflow", "smoke", "--every", "1h"],
+        &[
+            "loop",
+            "add",
+            "wf",
+            "--workflow",
+            "smoke",
+            "--cron",
+            "0 * * * *",
+        ],
     );
     let other = env.home_root.join("other");
     env.record(&other);
@@ -915,7 +936,15 @@ fn a_workflow_fire_refused_on_trust_strikes_with_the_refusal() {
         .unwrap();
         loop_ok(
             &env,
-            &["loop", "add", task, "--workflow", task, "--every", "1h"],
+            &[
+                "loop",
+                "add",
+                task,
+                "--workflow",
+                task,
+                "--cron",
+                "0 * * * *",
+            ],
         );
         let before = read_loop_run_records(&env).len();
         loop_ok(&env, &["loop", "run", task]);
@@ -945,7 +974,7 @@ fn an_unknown_target_written_by_hand_strikes_with_the_launchs_error() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.ghost]\nroot = {:?}\nevery = '1h'\nkind = 'workflow'\ntarget = 'nowhere'\nargs = []\n",
+            "[tasks.ghost]\nroot = {:?}\ncron = '0 * * * *'\nkind = 'workflow'\ntarget = 'nowhere'\nargs = []\n",
             env.project_root
         ),
     );
@@ -978,7 +1007,15 @@ fn loop_show_lists_a_running_launch_child_and_loop_stop_ends_it() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "solo", "--agent", "worker", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "solo",
+            "--agent",
+            "worker",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     std::fs::write(&code, "hold").unwrap();
@@ -1050,7 +1087,15 @@ fn an_agent_fire_launches_unfocused_and_stamped_and_records_launched() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "solo", "--agent", "codex", "--every", "1h", "--", "repair",
+            "loop",
+            "add",
+            "solo",
+            "--agent",
+            "codex",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "repair",
         ],
     );
     let trace = env.home_root.join("fire-launch.log");
@@ -1146,7 +1191,16 @@ fn an_agent_print_fire_returns_at_its_run_and_records_its_launch_alone() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "print", "--agent", "codex", "--every", "1h", "--", "-p", "fix it",
+            "loop",
+            "add",
+            "print",
+            "--agent",
+            "codex",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "-p",
+            "fix it",
         ],
     );
     let before = read_loop_run_records(&env).len();
@@ -1274,7 +1328,15 @@ fn a_team_fire_stamps_every_member_and_writes_no_supervised_run() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "crew", "--team", "pair", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "crew",
+            "--team",
+            "pair",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     let trace = env.home_root.join("team-fire.log");
@@ -1362,8 +1424,8 @@ fn a_dead_fire_with_nothing_stamped_settles_as_an_error() {
             "solo",
             "--agent",
             "worker",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--max-strikes",
             "1",
             "--",
@@ -1438,7 +1500,15 @@ fn the_tick_settles_a_dead_fire_in_a_room_nothing_else_names() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "gone", "--agent", "worker", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "gone",
+            "--agent",
+            "worker",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     std::fs::write(&code, "hold").unwrap();
@@ -1553,8 +1623,8 @@ fn a_launched_agent_holds_skip_and_replace_launches_only_after_it_ends() {
                 task,
                 "--agent",
                 "worker",
-                "--every",
-                "1h",
+                "--cron",
+                "0 * * * *",
                 "--overlap",
                 overlap,
                 "--",
@@ -1644,8 +1714,8 @@ fn an_allow_task_launches_beside_its_alive_agents_and_stop_reaches_them_all() {
             "pile",
             "--agent",
             "worker",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--overlap",
             "allow",
             "--",
@@ -1741,23 +1811,23 @@ fn add_refuses_allow_where_fires_cannot_run_side_by_side() {
     let side_by_side = "loop task `pile` sets `overlap`; `allow` needs fires that run side by side";
     for (flags, reason) in [
         (
-            &["--every", "1h", "--", "true"][..],
+            &["--cron", "0 * * * *", "--", "true"][..],
             format!("{side_by_side}, and a shell task holds one unfinished run per checkout"),
         ),
         (
-            &["--workflow", "smoke", "--every", "1h"][..],
+            &["--workflow", "smoke", "--cron", "0 * * * *"][..],
             format!("{side_by_side}, and a workflow task holds one unfinished run per checkout"),
         ),
         (
-            &["--team", "forge", "--every", "1h", "--", "go"][..],
+            &["--team", "forge", "--cron", "0 * * * *", "--", "go"][..],
             format!("{side_by_side}, and a team task's fires launch the same team into one lane"),
         ),
         (
             &[
                 "--agent",
                 "worker",
-                "--every",
-                "1h",
+                "--cron",
+                "0 * * * *",
                 "--each-worktree",
                 "--",
                 "go",
@@ -1767,7 +1837,7 @@ fn add_refuses_allow_where_fires_cannot_run_side_by_side() {
                 .to_owned(),
         ),
         (
-            &["--agent", "worker", "--in", "1h", "--", "go"][..],
+            &["--agent", "worker", "--at", "1h", "--", "go"][..],
             "loop task `pile` sets `overlap`; a one-shot fires once, so no later fire overlaps it"
                 .to_owned(),
         ),
@@ -2050,7 +2120,15 @@ fn a_workflow_fire_refused_by_a_live_run_in_its_checkout_is_overlapped() {
     for task in ["first", "second"] {
         loop_ok(
             &env,
-            &["loop", "add", task, "--workflow", "smoke", "--every", "1h"],
+            &[
+                "loop",
+                "add",
+                task,
+                "--workflow",
+                "smoke",
+                "--cron",
+                "0 * * * *",
+            ],
         );
     }
     loop_ok(&env, &["loop", "run", "first"]);
@@ -2091,7 +2169,15 @@ fn loop_stop_forwards_rooted_stops_to_the_loaded_tasks_launches() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "foo", "--agent", "worker", "--every", "1h", "--", "go",
+            "loop",
+            "add",
+            "foo",
+            "--agent",
+            "worker",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "go",
         ],
     );
     let machine = seed_task(&env, &machine_task_key("foo"));
@@ -2136,8 +2222,8 @@ fn a_workflow_fire_is_held_only_by_its_own_run() {
             "wf",
             "--workflow",
             "smoke",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--overlap",
             "replace",
         ],
@@ -2187,8 +2273,8 @@ fn replace_stops_a_print_fires_run_once_its_launch_child_is_gone() {
             "swap",
             "--agent",
             "worker",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--overlap",
             "replace",
             "--",
@@ -2286,7 +2372,15 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
     let (wrapper, seen, code) = launch_stand_in(&env);
     let adds: [&[&str]; 6] = [
         &[
-            "sh-task", "-w", "deps", "--every", "1h", "--", "sh", "-c", "pwd -P",
+            "sh-task",
+            "-w",
+            "deps",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "sh",
+            "-c",
+            "pwd -P",
         ],
         // A tail flag that needs `-w` parses beside the loop's own.
         &[
@@ -2295,8 +2389,8 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
             "worker",
             "-w",
             "deps",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "--from-trunk",
             "go",
@@ -2307,8 +2401,8 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
             "smoke",
             "-w",
             "deps",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
         ],
         &[
             "agent-task",
@@ -2316,8 +2410,8 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
             "worker",
             "-w",
             "deps",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "go",
         ],
@@ -2327,8 +2421,8 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
             "forge",
             "-w",
             "deps",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "go",
         ],
@@ -2338,8 +2432,8 @@ fn loop_add_w_places_every_kind_and_each_fire_runs_there() {
             "worker",
             "--worktree",
             "deps",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "-w",
             "deps",
@@ -2432,7 +2526,15 @@ fn a_shell_fire_refuses_a_tree_rimz_does_not_own() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "plain", "-w", "plain", "--every", "1h", "--", "true",
+            "loop",
+            "add",
+            "plain",
+            "-w",
+            "plain",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "true",
         ],
     );
     let _ = env
@@ -2467,7 +2569,15 @@ fn a_shell_fire_creates_no_tree_under_an_unreadable_core_config() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "guarded", "-w", "guarded", "--every", "1h", "--", "true",
+            "loop",
+            "add",
+            "guarded",
+            "-w",
+            "guarded",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "true",
         ],
     );
     std::fs::write(env.rimz_home().join("config.toml"), "[agents\n").unwrap();
@@ -2511,7 +2621,14 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
     let idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch beside it";
     let team_idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, or `--overlap replace` to stop the old agent at each fire";
     let trap = receipt(&[
-        "trap", "--agent", "worker", "--every", "1h", "--", "-w", "one-word",
+        "trap",
+        "--agent",
+        "worker",
+        "--cron",
+        "0 * * * *",
+        "--",
+        "-w",
+        "one-word",
     ]);
     assert!(
         trap.lines()
@@ -2523,8 +2640,8 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
         "print",
         "--agent",
         "worker",
-        "--every",
-        "1h",
+        "--cron",
+        "0 * * * *",
         "--",
         "-p",
         "--timeout",
@@ -2546,8 +2663,8 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
         "deps",
         "--overlap",
         "replace",
-        "--every",
-        "1h",
+        "--cron",
+        "0 * * * *",
         "--",
         "go",
     ]);
@@ -2558,12 +2675,20 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
         assert!(placed.lines().any(|seen| seen == line), "{line}: {placed}");
     }
     assert!(!placed.contains("note: an agent left idle"), "{placed}");
-    let flow = receipt(&["flow", "--workflow", "smoke", "-w", "deps", "--every", "1h"]);
+    let flow = receipt(&[
+        "flow",
+        "--workflow",
+        "smoke",
+        "-w",
+        "deps",
+        "--cron",
+        "0 * * * *",
+    ]);
     assert!(
         flow.lines().any(|line| line == "launch: worktree `deps`"),
         "{flow}"
     );
-    let crew = receipt(&["crew", "--team", "forge", "--every", "1h", "--", "-w"]);
+    let crew = receipt(&["crew", "--team", "forge", "--cron", "0 * * * *", "--", "-w"]);
     assert!(
         crew.lines()
             .any(|line| line == "launch: a new worktree each fire · no prompt"),

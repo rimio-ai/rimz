@@ -593,7 +593,7 @@ fn pending_wait_requires_an_ephemeral_valid_trigger_and_one_shot_clock() {
             ..TaskEntry::default()
         },
         TaskEntry {
-            every: Some("1h".into()),
+            cron: Some("0 * * * *".into()),
             deadline: Some(deadline),
             ..TaskEntry::default()
         },

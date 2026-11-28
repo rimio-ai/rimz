@@ -566,8 +566,23 @@ fn pre_reached_snapshot_is_not_a_fresh_view() {
 }
 
 #[test]
-fn snapshot_launch_reannounce_contract_is_version_124() {
-    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 124);
+fn snapshot_fire_on_contract_is_version_125() {
+    assert_eq!(crate::store::snapshot::SNAPSHOT_VERSION, 125);
+}
+
+#[test]
+fn pre_125_fire_onless_snapshot_is_not_a_fresh_view() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = checkpoint_paths(workspace, dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut legacy = serde_json::to_value(rebuild(&paths).unwrap()).unwrap();
+    legacy["snapshot_version"] = serde_json::json!(124);
+    atomic::write_temp_then_rename_cache(&paths.latest_snapshot().unwrap(), &legacy).unwrap();
+    assert!(
+        read_fresh_latest_cold(&paths).is_none(),
+        "views published before rows carried their booking's `on` must refold"
+    );
 }
 
 #[test]

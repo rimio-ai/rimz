@@ -771,10 +771,10 @@ enum Subcmd {
     Answer(answer::AnswerArgs),
     /// Hand in the answer your launch's `schema` asked for.
     Submit(submit::SubmitArgs),
-    /// Run commands on a schedule, a signal, or a condition.
+    /// Run commands on a schedule or a condition.
     ///
     /// A clock or condition task fires from its room's sidebar host, or from the loop timer when
-    /// no room is open. A signal task fires in the process that emits the signal.
+    /// no room is open.
     #[command(name = "loop")]
     Loop(loop_cmd::LoopArgs),
     /// Run, inspect, and validate durable workflows.

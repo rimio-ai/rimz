@@ -43,8 +43,7 @@ pub(super) fn report(
     Ok(())
 }
 
-/// Queue the report for the starter's live row; a starter that ended, or a room without a
-/// record, is told nothing.
+/// Queue the report for the starter's live row.
 fn queue(
     state: &crate::StatePaths,
     run: &WorkflowRunId,
@@ -54,6 +53,28 @@ fn queue(
     let Some(RunStarter::Agent { kind, launch }) = &header.starter else {
         return Ok(());
     };
+    let starter = crate::agents::LaunchedBy {
+        kind: kind.clone(),
+        agent_id: launch.clone(),
+    };
+    queue_notice(
+        state,
+        &starter,
+        text(state, run, header),
+        HarnessNotice::WorkflowReport,
+        message,
+    )
+}
+
+/// Queue `text` as a harness `notice` for the live row of launch `to`, at its next turn
+/// boundary; a launch that ended, or a room without a record, is told nothing.
+pub(super) fn queue_notice(
+    state: &crate::StatePaths,
+    to: &crate::agents::LaunchedBy,
+    text: String,
+    notice: HarnessNotice,
+    message: &MessageId,
+) -> anyhow::Result<()> {
     let runtime = crate::disk::paths::RuntimePaths::for_state(state)?;
     let Some(store) = crate::store::Store::open_existing(state.clone(), runtime) else {
         return Ok(());
@@ -63,30 +84,23 @@ fn queue(
         store.runtime_paths(),
         projection.agents.iter_mut(),
     );
-    let Some(agent) = crate::address::launch_row(&projection.agents, kind, launch)
+    let Some(agent) = crate::address::launch_row(&projection.agents, &to.kind, &to.agent_id)
         .filter(|agent| agent.ended_at.is_none())
     else {
         return Ok(());
     };
     let room = crate::workspace::record::read(&state.workspace_record)?;
-    let mut record = MessageRecord::new(
-        room.workspace_id,
-        agent,
-        text(state, run, header),
-        DeliveryGate::Done,
-    )
-    .with_channel(agent.lane_name())
-    .with_sender(MessageSender::Harness {
-        notice: HarnessNotice::WorkflowReport,
-    })
-    .with_automated(true);
+    let mut record = MessageRecord::new(room.workspace_id, agent, text, DeliveryGate::Done)
+        .with_channel(agent.lane_name())
+        .with_sender(MessageSender::Harness { notice })
+        .with_automated(true);
     record.message_id = message.clone();
     store.queue_message_once(&record, &room.session_name)?;
     Ok(())
 }
 
 /// How the run ended, where it worked, its notes folder, and the command that shows its history.
-fn text(state: &crate::StatePaths, run: &WorkflowRunId, header: &RunHeader) -> String {
+pub(super) fn text(state: &crate::StatePaths, run: &WorkflowRunId, header: &RunHeader) -> String {
     let (ending, cause) = match &header.ending {
         Some(RunEnding::Done | RunEnding::Tried) => ("done", None),
         Some(RunEnding::Canceled) => ("canceled", None),

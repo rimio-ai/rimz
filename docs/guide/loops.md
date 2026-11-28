@@ -17,7 +17,7 @@ The trigger is a clock, a signal, or a condition on the room's state. This page 
 RimZ hands the words after `--` to the process as they are, with no shell in between: a `$`, a `*`, or a quote arrives as written. For a pipeline or a variable, write the shell yourself:
 
 ```sh
-rimz loop add watchdog --every 15m --timeout 20m -- sh -c 'cargo test 2>&1 | tail -n 50'
+rimz loop add watchdog --cron '*/15 * * * *' --timeout 20m -- sh -c 'cargo test 2>&1 | tail -n 50'
 ```
 
 A task with no kind flag (or `--shell`) runs a command. Each fire runs it once and lasts as long as the command does. Exit `0` records the fire `completed`. Any other exit, or a command still running at the task's timeout, records it `failed`. The timeout is `--timeout`, else `loop.default-timeout`, else two hours, and `add` writes it into the task.
@@ -25,11 +25,11 @@ A task with no kind flag (or `--shell`) runs a command. Each fire runs it once a
 Run `add` from the project the task belongs to. The receipt reads back what you asked for:
 
 ```console
-$ rimz loop add watchdog --every 15m --timeout 20m -- sh -c 'cargo test 2>&1 | tail -n 50'
+$ rimz loop add watchdog --cron '*/15 * * * *' --timeout 20m -- sh -c 'cargo test 2>&1 | tail -n 50'
 added loop task `watchdog`
 action: runs `sh -c 'cargo test 2>&1 | tail -n 50'` in /home/you/code/app · timeout 20m
-trigger: fires every 15m
-next fire: 2026-11-15 18:52 (in 14m)
+trigger: fires cron `*/15 * * * *`
+next fire: 2026-11-28 00:45 (in 37s)
 live while a room for /home/you/code/app is open
 no room is open there; start one with `rimz start`, or use `rimz loop timer install` to fire without one
 ```
@@ -38,7 +38,7 @@ The last two lines matter before your first task. A task belongs to the project 
 
 A task's command runs at the project root, even when you add it from a linked worktree. To keep its work off the tree you are editing, give the task `-w <name>`: every fire runs in the RimZ-owned worktree of that name, which the first fire creates when it is missing. For a fresh tree each fire, have the command make one with [`rimz worktree new`](./worktrees.md), or make the task an agent or team task with a bare `-w` in its arguments, [below](#start-an-agent-from-a-task). The name is optional: leave it out and the receipt prints the `loop-<petname>` name it chose.
 
-A clock repeats only with `--every` or `--cron`. A time (`--at 07:00`, `--at 'fri 09:30'`) or a delay (`--in 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
+A clock repeats with `--cron`, a five-field cron expression (`*/15 * * * *` is every 15 minutes). A time (`--at 07:00`, `--at 'fri 09:30'`) or a delay (`--at 30m`) fires once, and then the task removes itself. [Every schedule shape](#every-schedule-shape) lists them all.
 
 ## Start an agent from a task
 
@@ -89,13 +89,13 @@ rimz loop timer install
 
 That installs one systemd user timer on Linux, or one launchd agent on macOS. Once a minute it runs a RimZ tick that fires due clock tasks for every project without an open room. A project with an open room keeps its own time. Know one effect before you install it: a timer fire opens a room for the task's project before its command runs, and leaves that room open. A 02:00 task therefore means a multiplexer session running on the machine by morning. `rimz loop timer status` shows whether the timer is installed, and `rimz loop timer remove` stops it.
 
-Clock and condition tasks need a timekeeper, since both are checked on its tick. A signal task fires from the process that emits the signal, as the [next section](#fire-on-a-signal) explains.
+Clock and condition tasks need a timekeeper, since both are checked on its tick.
 
 Missed time is not made up in bulk. A new repeating task arms without firing, so adding one sets nothing off. A task that came due while nothing kept time fires once when a clock next sees it, then resumes its schedule, so a week of missed 02:00 fires arrives as one fire. A one-shot fires on the first clock that sees it at or past its time, however late, and its run says how late (`fired 2h 5m late`).
 
-## Fire on a signal
+## Signals
 
-A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge (GitHub or Gitea) for the pull request and CI result of each [worktree](./worktrees.md) branch in the room, the reporting hooks already know when an agent or a team changes state, and every workflow run reports its own moves. Each of those changes is a signal a task can fire on by name.
+A clock is a guess about when something will happen. A signal is the event itself, and most signals need no wiring. The sidebar already polls the forge (GitHub or Gitea) for the pull request and CI result of each [worktree](./worktrees.md) branch in the room, the reporting hooks already know when an agent or a team changes state, and every workflow run reports its own moves. Each of those changes is a signal. A task fires on the state a signal reports with `--when` ([below](#wait-for-done-and-green)), a workflow session step hears signals through [`subscribe`](./workflows.md#hand-signals-to-a-session), and a team wakes its own members on one through [signal bindings](./teams.md#define-your-own-team).
 
 | Family | Signals | Fires when |
 | --- | --- | --- |
@@ -110,14 +110,6 @@ A clock is a guess about when something will happen. A signal is the event itsel
 
 The [loop reference](../reference/cli/loop.md#built-in-signals) gives the exact moment each one fires and the payload fields it carries.
 
-Subscribe to one name, or to a whole family with `'ci.*'`. A task on `ci.failed` hears `ci.passed` too: it records the signal as heard, runs nothing, and stays armed, so `rimz loop show` can tell you the branch went green while the task waited for red. Narrow a subscription with `--match key=value` on a payload field. A signal that fails the match is ignored. When the task's selector names that signal or its family, `rimz events emit` names the task as excluded by its `--match`; a task on a sibling name, such as `ci.failed` hearing `ci.passed`, is not named. A `ci` or `pr` task that matches a branch by name, as below, has the sidebar read that branch from the forge even when no checkout in the room is on it, so it fires for a branch that lives only on the forge, such as a teammate's pull request.
-
-```sh
-rimz loop add ci-fix --signal ci.failed --match branch=feature --repeat --agent codex -- -w ci-fix "Fix the failing checks."
-```
-
-Without `--repeat` the task fires once and is gone. With it, the task keeps listening until you remove it. A signal reaches only the tasks subscribed at that moment, so add the task before you start the work that will emit it.
-
 ### Your own signals
 
 Anything that can run a command can put a signal into the room:
@@ -126,20 +118,9 @@ Anything that can run a command can put a signal into the room:
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
-```console
-emitted deploy.finished (evt_01a07076a71c72e09f0461533909ceb1) · fired 1 task
-  smoke
-```
+A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits hands the signal to its subscribers itself, so no daemon or running agent is needed. `emit` needs a room that has been started once for the project, but the room does not have to be open. The built-in `ci`, `pr`, and `trunk` signals are different, since the sidebar produces them: they arrive only while the room is open. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `shell`, `watch`, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields a subscription's `match` filters on and the trigger line prints as `key: value`.
 
-A CI job's last step, a git hook, a deploy script, or another agent can each emit. The process that emits fires the subscribed tasks itself, so no daemon or running agent is needed. `emit` needs a room that has been started once for the project, but the room does not have to be open: a fire opens it before its command runs. The built-in `ci`, `pr`, and `trunk` signals are different, since the sidebar produces them: they arrive only while the room is open. Names are lowercase words joined by dots, and the first word is the family. The families in the table above, and `shell`, `watch`, and `wait`, belong to RimZ, and `emit` refuses names in them. The payload is one JSON object, whose top-level fields `--match` filters on and the trigger line prints as `key: value`.
-
-A task subscribes to your own names as it does to RimZ's. The `smoke` task that `emit` fired above was added with:
-
-```sh
-rimz loop add smoke --signal deploy.finished --match env=prod --repeat -- ./scripts/smoke-test.sh
-```
-
-When a signal arrives while the task's previous run is still going, the default drops the new trigger, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one up to `--overlap-limit` (default 10), `--overlap replace` cancels the live run for the newest, and `--overlap allow` (agent tasks only) launches a new agent at every trigger and leaves the earlier ones open. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
+When a task's trigger comes while its previous run is still going, the default drops the new trigger, so two copies never run at once. `--overlap coalesce` keeps the newest waiting trigger, `--overlap queue` keeps each one up to `--overlap-limit` (default 10), `--overlap replace` cancels the live run for the newest, and `--overlap allow` (agent tasks only) launches a new agent at every trigger and leaves the earlier ones open. [Overlapping triggers](../reference/cli/loop.md#overlapping-triggers) gives the rules.
 
 ## Wait for Done and green
 
@@ -270,9 +251,9 @@ cron = "0 9 * * mon"
 
 A task holds the keys `rimz loop add` writes, plus a few you set by hand, such as `dir`. A task with a key RimZ does not know does not fire, and `rimz loop list` shows it under NEEDS YOU as `invalid` with the reason. Delete it and add it again with `rimz loop add`. The other tasks in the file keep firing.
 
-A task that fires once (`--at`, `--in`, or a `--signal` or `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the shells and watches agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
+A task that fires once (`--at`, or a `--when` task without `--repeat`) belongs to the room. It lives in `~/.rimz/ws/<workspace-dir>/records/loop-instances.json`, beside the shells and watches agents arm, so start the room with `rimz start` before you add one. It removes itself after its fire. [Where tasks are stored](../reference/cli/loop.md#where-tasks-are-stored) covers name clashes between the files.
 
-`--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat (`--every`, `--cron`, or `--signal` with `--repeat`) and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so it runs only when both of these hold:
+`--project` writes the task into the project config, `<root>/.rimz/config.toml`, so it travels with the repository. Such a task must repeat on `--cron` and always runs at the project root. A committed task runs commands on the machine of whoever pulls it, so it runs only when both of these hold:
 
 - **Trust decides whether the commands are acceptable.** The task's command is part of what you approve when you [trust the project](./security.md), and nothing runs until you do.
 - **Enablement decides whether this task runs here.** A project task pulled from a repository starts disabled, even in a trusted project, until you run `rimz loop enable <name>`. A task you add with `--project` starts enabled on your machine.
@@ -315,13 +296,11 @@ Each task names one trigger and one command after `--`.
 
 | Shape | Flags | Repeats? | Example |
 | --- | --- | --- | --- |
-| One-shot | `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`), or `--in <delay>` | fires once, then the task removes itself | `--in 30m` |
-| Interval | `--every <duration>`, measured from the last fire | yes | `--every 15m` |
+| One-shot | `--at`, a clock time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`) or a delay (`30m`, `2h`) | fires once, then the task removes itself | `--at 30m` |
 | Raw cron | `--cron`, a five-field expression with names such as `mon-fri` and steps, or a macro such as `@daily` | per the expression | `--cron "*/15 * * * *"` |
-| Signal | `--signal <name-or-family>`, narrowed with `--match key=value` ([above](#fire-on-a-signal)) | once, or on every delivering signal with `--repeat` | `--signal ci.failed`, `--signal 'ci.*'` |
 | Condition | `--when <expr>`, held with `--for <duration>` ([above](#wait-for-done-and-green)) | once, or each time it turns true again with `--repeat` | `--when 'pr[feat-x]=merged'` |
 
-`--every 1d` is an interval: it fires a day after the last fire and drifts with it. `--cron '0 7 * * *'` fires at 07:00 each day, and `--cron '0 7 * * 1-5'` on weekdays only. `--at` times and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
+`--cron '0 7 * * *'` fires at 07:00 each day, and `--cron '0 7 * * 1-5'` on weekdays only. `--at` times and cron use the top-level `timezone` setting, or the system zone when it is unset. Every command and flag is in the [loop CLI reference](../reference/cli/loop.md).
 
 ## Keep the fleet moving
 
@@ -396,7 +375,7 @@ Trust grants, notification handlers, and the permission mode itself are covered 
 
 ## A fleet that works nights
 
-A hands-off room stacks four layers, from least to most involved. [The reflexes](#keep-the-fleet-moving) keep one agent going through rate limits with no schedule at all. A clock task puts work on a schedule. A [signal](#fire-on-a-signal) or [condition](#wait-for-done-and-green) fires it only when something happened. A [notification handler](./notifications.md) catches what none of them can decide alone. Use the lowest layer that solves the problem.
+A hands-off room stacks four layers, from least to most involved. [The reflexes](#keep-the-fleet-moving) keep one agent going through rate limits with no schedule at all. A clock task puts work on a schedule. A [condition](#wait-for-done-and-green) fires it only when something happened. A [notification handler](./notifications.md) catches what none of them can decide alone. Use the lowest layer that solves the problem.
 
 A task's agent runs inside the room, so its prompt can use every other RimZ command:
 

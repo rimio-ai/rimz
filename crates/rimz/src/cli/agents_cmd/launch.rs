@@ -140,6 +140,7 @@ pub(super) fn launch_layout(
             .as_ref()
             .map(|fire| fire.booked_by.clone())
             .unwrap_or_default(),
+        loop_on: fire.as_ref().and_then(|fire| fire.on),
         loop_fire: fire.map(|fire| fire.fire),
         subagent_profile: launch.subagent_profile,
         one_seat: false,

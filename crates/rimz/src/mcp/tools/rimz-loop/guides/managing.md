@@ -22,9 +22,8 @@ Where the output of these commands and this text disagree, the output is right.
 
 - An open room (the rimz session for one project), attached or not, fires the project's time and condition tasks.
 - With no room open, the external timer fires the same tasks, and a fire opens the room. `rimz loop timer status` says whether it is installed. `rimz loop timer install` adds it, a per-minute systemd or launchd timer on the user's account, and `rimz loop timer remove` uninstalls it.
-- The process that emits a signal fires the signal tasks, open room or not. The room emits most signals (its CI and PR poll, its agents' lifecycle), so those stop while it is closed.
 
-The timer reads no forge, so a `ci` or `pr` term stays unknown under it. A task with such a term, or on a signal the room emits, waits for an open room with or without the timer.
+The timer reads no forge, so a `ci` or `pr` term stays unknown under it. A task with such a term waits for an open room with or without the timer.
 
 ## Fire it now
 
@@ -34,12 +33,6 @@ rimz loop show <name>
 ```
 
 The fire runs the task now, without its trigger. It runs a disabled or paused task too, ignores the task's `once-per-checkout` memory, and leaves a task that fires once in place. Under `--each-worktree` it fires only the worktree your shell is in. A shell or workflow run's final outcome reaches `rimz loop show` and `rimz loop logs` when it ends.
-
-For a signal task, `--signal <name>` gives the fire a pretend signal, so the command or prompt gets the evidence line a real one would, and `--json '<object>'` adds its payload. Nothing is emitted, so no other task or workflow wakes.
-
-```bash
-rimz loop fire ci-fix --signal ci.failed --json '{"branch":"feat-x"}'
-```
 
 ## A task that stopped firing
 

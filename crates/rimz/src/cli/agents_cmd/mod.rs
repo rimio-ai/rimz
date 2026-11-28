@@ -1370,6 +1370,7 @@ fn stamp_fire(
     request.loop_fire = Some(fire.fire);
     request.loop_task = Some(fire.task).filter(|task| !task.is_empty());
     request.loop_booked_by = fire.booked_by;
+    request.loop_on = fire.on;
 }
 
 /// `--detach` drops the report a launch task owes; refuse it where no such report exists. Only

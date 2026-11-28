@@ -7,13 +7,12 @@ use std::process::{Command, Output, Stdio};
 use jiff::ZonedDateTime;
 
 use rimz::disk::atomic::write_bytes_atomically;
-use rimz::disk::paths::{RuntimePaths, config_home, env_path};
+use rimz::disk::paths::RuntimePaths;
 use rimz::harness::schedule::catalog::TaskCatalog;
 use rimz::harness::schedule::fire::LoopRunHost;
-
-const SYSTEMD_SERVICE: &str = "rimz-loop.service";
-const SYSTEMD_TIMER: &str = "rimz-loop.timer";
-const LAUNCHD_LABEL: &str = "ai.rimz.loop";
+use rimz::harness::schedule::timer_units::{
+    LAUNCHD_LABEL, SYSTEMD_TIMER, launchd_path, systemd_paths,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TimerBackend {
@@ -403,26 +402,6 @@ fn current_exe() -> Result<PathBuf> {
 
 fn current_exe_lossy() -> PathBuf {
     current_exe().unwrap_or_else(|_| PathBuf::from("rimz"))
-}
-
-struct SystemdPaths {
-    service: PathBuf,
-    timer: PathBuf,
-}
-
-fn systemd_paths() -> SystemdPaths {
-    let root = config_home().join("systemd/user");
-    SystemdPaths {
-        service: root.join(SYSTEMD_SERVICE),
-        timer: root.join(SYSTEMD_TIMER),
-    }
-}
-
-fn launchd_path() -> PathBuf {
-    env_path("HOME")
-        .unwrap_or_else(std::env::temp_dir)
-        .join("Library/LaunchAgents")
-        .join(format!("{LAUNCHD_LABEL}.plist"))
 }
 
 fn launchd_domain() -> String {

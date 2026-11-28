@@ -12,31 +12,28 @@ fn args(argv: &[&str]) -> AddArgs {
 }
 
 #[test]
-fn repeat_with_every_refuses_and_repeat_needs_a_signal_or_condition() {
-    for clock in [["--every", "1h"], ["--cron", "0 * * * *"]] {
-        let argv = [&["--repeat"][..], &clock, &["--", "true"]].concat();
-        assert_eq!(
-            validate_add_args(&args(&argv)).unwrap_err().to_string(),
-            "--repeat cannot be used with --every or --cron; they repeat already"
-        );
-    }
+fn repeat_with_cron_refuses_and_repeat_needs_a_condition() {
     assert_eq!(
-        validate_add_args(&args(&["--repeat", "--in", "5m", "--", "true"]))
+        validate_add_args(&args(&["--repeat", "--cron", "0 * * * *", "--", "true"]))
             .unwrap_err()
             .to_string(),
-        "--repeat requires --signal or --when"
+        "--repeat cannot be used with --cron; it repeats already"
     );
-    for trigger in [["--signal", "pr.merged"], ["--when", "pr=open"]] {
-        let argv = [&["--repeat"][..], &trigger, &["--", "true"]].concat();
-        assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
-    }
+    assert_eq!(
+        validate_add_args(&args(&["--repeat", "--at", "5m", "--", "true"]))
+            .unwrap_err()
+            .to_string(),
+        "--repeat requires --when"
+    );
+    let argv = ["--repeat", "--when", "pr=open", "--", "true"];
+    assert!(validate_add_args(&args(&argv)).is_ok(), "{argv:?}");
 }
 
 #[test]
-fn at_and_every_conflict_in_either_order() {
+fn at_and_cron_conflict_in_either_order() {
     for argv in [
-        ["--at", "09:00", "--every", "1h"],
-        ["--every", "1h", "--at", "09:00"],
+        ["--at", "09:00", "--cron", "0 * * * *"],
+        ["--cron", "0 * * * *", "--at", "09:00"],
     ] {
         let error = parse(&[&argv[..], &["--", "true"]].concat()).unwrap_err();
         assert_eq!(
@@ -64,7 +61,7 @@ fn removed_flags_and_wait_are_unknown_to_loop_add() {
         "--budget",
         "--once",
     ] {
-        let error = parse(&[flag, "x", "--every", "1h", "--", "true"]).unwrap_err();
+        let error = parse(&[flag, "x", "--cron", "0 * * * *", "--", "true"]).unwrap_err();
         assert_eq!(
             error.kind(),
             clap::error::ErrorKind::UnknownArgument,
@@ -76,13 +73,13 @@ fn removed_flags_and_wait_are_unknown_to_loop_add() {
 #[test]
 fn the_command_is_required_and_kept_word_for_word() {
     assert_eq!(
-        validate_add_args(&args(&["--every", "1h"]))
+        validate_add_args(&args(&["--cron", "0 * * * *"]))
             .unwrap_err()
             .to_string(),
         "a shell task needs its command after `--`: `rimz loop add <name> ... -- <command>`"
     );
-    let words = ["sh", "-c", "echo 'a b' \"$HOME\" *.rs", "--every"];
-    let argv = [&["nightly", "--every", "1h", "--"][..], &words].concat();
+    let words = ["sh", "-c", "echo 'a b' \"$HOME\" *.rs", "--cron"];
+    let argv = [&["nightly", "--cron", "0 * * * *", "--"][..], &words].concat();
     let parsed = args(&argv);
     assert_eq!(parsed.name.as_deref(), Some("nightly"));
     assert_eq!(parsed.args, words);
@@ -134,11 +131,9 @@ fn once_per_checkout_is_stored_on_a_repeating_row_and_refused_on_a_one_shot() {
         build_task_entry(&args(&argv), "task", &workspace)
     };
     for trigger in [
-        &["--every", "1h"][..],
-        &["--cron", "0 * * * *"],
-        &["--signal", "pr.merged", "--repeat"],
+        &["--cron", "0 * * * *"][..],
         &["--when", "pr=open", "--repeat"],
-        &["--project", "--signal", "pr.merged", "--repeat"],
+        &["--project", "--cron", "0 * * * *"],
     ] {
         assert_eq!(
             entry(trigger).unwrap().once_per_checkout,
@@ -147,62 +142,46 @@ fn once_per_checkout_is_stored_on_a_repeating_row_and_refused_on_a_one_shot() {
         );
     }
     for trigger in [
-        &["--in", "5m"][..],
+        &["--at", "5m"][..],
         &["--at", "2099-01-01 09:00"],
-        &["--signal", "pr.merged"],
         &["--when", "pr=open"],
     ] {
         assert_eq!(
             entry(trigger).unwrap_err().to_string(),
             "--once-per-checkout cannot be used on a one-shot: its first fire removes the task, \
-             so launch memory never acts; make it repeat with --every, --cron, or --repeat beside \
-             --signal or --when",
+             so launch memory never acts; make it repeat with --cron, or --repeat beside --when",
             "{trigger:?}"
         );
     }
-    let plain = build_task_entry(&args(&["--every", "1h", "--", "true"]), "task", &workspace);
+    let plain = build_task_entry(
+        &args(&["--cron", "0 * * * *", "--", "true"]),
+        "task",
+        &workspace,
+    );
     assert_eq!(plain.unwrap().once_per_checkout, None);
 }
 
 #[test]
 fn project_rows_must_repeat() {
-    for argv in [
-        vec!["--project", "--in", "5m", "--", "true"],
-        vec!["--project", "--signal", "pr.merged", "--", "true"],
-    ] {
-        assert_eq!(
-            validate_add_args(&args(&argv)).unwrap_err().to_string(),
-            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
-            "{argv:?}"
-        );
-    }
-    assert!(
-        validate_add_args(&args(&[
-            "--project",
-            "--signal",
-            "pr.merged",
-            "--repeat",
-            "--",
-            "true"
-        ]))
-        .is_ok()
+    assert_eq!(
+        validate_add_args(&args(&["--project", "--at", "5m", "--", "true"]))
+            .unwrap_err()
+            .to_string(),
+        "--project tasks must repeat; set --cron",
     );
+    assert!(validate_add_args(&args(&["--project", "--cron", "0 * * * *", "--", "true"])).is_ok());
 }
 
 #[test]
 fn receipts_name_where_each_fire_runs() {
     for (toml, expected) in [
         (
-            "args=['cargo', 'test']\ntimeout='10m'\nevery='1h'\nroot='/repo'",
+            "args=['cargo', 'test']\ntimeout='10m'\ncron='0 * * * *'\nroot='/repo'",
             "action: runs `cargo test` in /repo · timeout 10m",
         ),
         (
-            "args=['true']\ntimeout='1h'\nevery='1h'\neach-worktree=true",
+            "args=['true']\ntimeout='1h'\ncron='0 * * * *'\neach-worktree=true",
             "action: runs `true` in each RimZ-owned worktree where the trigger holds · timeout 1h",
-        ),
-        (
-            "args=['true']\ntimeout='1h'\nsignal='deploy.done'\nrepeat=true",
-            "trigger: fires on deploy.done; repeats after each fire",
         ),
     ] {
         let entry: TaskEntry = toml::from_str(toml).unwrap();
@@ -238,7 +217,6 @@ fn each_worktree_with_when_needs_repeat() {
     );
     for trigger in [
         &["--when", "pr=merged", "--repeat"][..],
-        &["--every", "1h"],
         &["--cron", "0 * * * *"],
     ] {
         let argv = [&["--each-worktree"][..], trigger, &["--", "true"]].concat();
@@ -251,7 +229,7 @@ fn each_worktree_with_when_needs_repeat() {
 #[test]
 fn the_loops_worktree_is_validated_like_a_launchs_and_stored_on_the_row() {
     assert_eq!(
-        validate_add_args(&args(&["-w", "a b", "--every", "1h", "--", "true"]))
+        validate_add_args(&args(&["-w", "a b", "--cron", "0 * * * *", "--", "true"]))
             .unwrap_err()
             .to_string(),
         "invalid worktree name `a b`; use letters, numbers, `_`, `-`, with `/` separating \
@@ -259,7 +237,7 @@ fn the_loops_worktree_is_validated_like_a_launchs_and_stored_on_the_row() {
     );
     for kind in [&[][..], &["--agent", "worker"][..]] {
         let argv = [
-            &["-w", "deps", "--each-worktree", "--every", "1h"][..],
+            &["-w", "deps", "--each-worktree", "--cron", "0 * * * *"][..],
             kind,
             &["--", "true"],
         ]
@@ -273,7 +251,7 @@ fn the_loops_worktree_is_validated_like_a_launchs_and_stored_on_the_row() {
     let root = tempfile::tempdir().unwrap();
     let workspace = rimz::WorkspaceResolver::resolve(root.path(), None).unwrap();
     let entry = build_task_entry(
-        &args(&["--worktree", "feat/x", "--every", "1h", "--", "true"]),
+        &args(&["--worktree", "feat/x", "--cron", "0 * * * *", "--", "true"]),
         "t",
         &workspace,
     )
@@ -338,7 +316,7 @@ fn the_launch_line_reads_the_parsed_launch_back() {
 fn the_idle_note_is_owed_only_where_an_idle_agent_holds_later_fires() {
     for (argv, parsed, owed) in [
         (
-            &["--agent", "w", "--every", "1h"][..],
+            &["--agent", "w", "--cron", "0 * * * *"][..],
             launch(None, true, None),
             Some(AGENT_IDLE_NOTE),
         ),
@@ -348,47 +326,47 @@ fn the_idle_note_is_owed_only_where_an_idle_agent_holds_later_fires() {
             Some(TEAM_IDLE_NOTE),
         ),
         (
-            &["--agent", "w", "--signal", "s", "--repeat"],
+            &["--agent", "w", "--when", "pr=open", "--repeat"],
             launch(None, true, None),
             Some(AGENT_IDLE_NOTE),
         ),
         (
-            &["--agent", "w", "--every", "1h"],
+            &["--agent", "w", "--cron", "0 * * * *"],
             launch(None, true, Some(None)),
             None,
         ),
         (
-            &["--agent", "w", "--every", "1h", "--overlap", "skip"],
+            &["--agent", "w", "--cron", "0 * * * *", "--overlap", "skip"],
             launch(None, true, None),
             None,
         ),
         (
-            &["--agent", "w", "--every", "1h", "--overlap", "allow"],
+            &["--agent", "w", "--cron", "0 * * * *", "--overlap", "allow"],
             launch(None, true, None),
             None,
         ),
         (
-            &["--agent", "w", "--every", "1h", "--once-per-checkout"],
+            &["--agent", "w", "--cron", "0 * * * *", "--once-per-checkout"],
             launch(None, true, None),
             None,
         ),
         (
-            &["--team", "t", "--every", "1h", "--once-per-checkout"],
+            &["--team", "t", "--cron", "0 * * * *", "--once-per-checkout"],
             launch(None, true, None),
             None,
         ),
         (
-            &["--agent", "w", "--in", "5m"],
+            &["--agent", "w", "--at", "5m"],
             launch(None, true, None),
             None,
         ),
         (
-            &["--workflow", "w", "--every", "1h"],
+            &["--workflow", "w", "--cron", "0 * * * *"],
             launch(None, false, None),
             None,
         ),
         (
-            &["--every", "1h", "--", "true"],
+            &["--cron", "0 * * * *", "--", "true"],
             launch(None, false, None),
             None,
         ),
@@ -488,7 +466,7 @@ fn window_terms_default_to_the_launchs_kind_and_account() {
     );
     assert_eq!(
         source(
-            &["--every", "1h"],
+            &["--cron", "0 * * * *"],
             Agent,
             &parsed(&["claude"], Some("work"))
         )
@@ -509,7 +487,7 @@ fn window_terms_default_to_the_launchs_kind_and_account() {
     for kind in [Shell, Agent] {
         assert_eq!(
             source(
-                &["--every", "1h", "--account", "work"],
+                &["--cron", "0 * * * *", "--account", "work"],
                 kind,
                 &parsed(&["claude"], None)
             )
@@ -551,9 +529,10 @@ fn the_window_line_names_what_came_from_the_launch() {
 /// note, printed only for a task its own placement does not move, names `-w`.
 #[test]
 fn a_placed_row_names_its_worktree_and_the_linked_note_names_w() {
-    let entry: TaskEntry =
-        toml::from_str("args=['true']\ntimeout='1h'\nevery='1h'\nroot='/repo'\nworktree='deps'")
-            .unwrap();
+    let entry: TaskEntry = toml::from_str(
+        "args=['true']\ntimeout='1h'\ncron='0 * * * *'\nroot='/repo'\nworktree='deps'",
+    )
+    .unwrap();
     assert_eq!(
         fire_place(&entry),
         "worktree `deps` (created at the first fire if missing)"

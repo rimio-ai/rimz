@@ -1,6 +1,6 @@
 # Events CLI
 
-`rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and fires the loop tasks and workflow runs subscribed to it.
+`rimz events` reads and writes the workspace's durable event log. `follow` prints each agent lifecycle transition and each signal as one JSON object per line, so a script can react to agent state without reading panes. `emit` appends a named signal of your own and hands it to the team signal bindings and workflow runs subscribed to it.
 
 | Command | What it does |
 | --- | --- |
@@ -146,30 +146,22 @@ rimz events emit deploy.finished
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
 ```
 
-`emit` appends one signal record with source `cli`, then fires every loop task subscribed to it in this workspace. It prints the record id, the count of tasks it started, and one indented line per task. Here `smoke` is a task added with `rimz loop add smoke --signal deploy.finished --repeat -- ...`:
-
-```console
-$ rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'
-emitted deploy.finished (evt_01a1dea841f674fb819852ff17c92c3a) · fired 1 task
-  smoke
-```
-
-The part after `·` reads one of these:
+`emit` appends one signal record with source `cli`, then hands it to every signal subscription in this workspace: a team role's [signal binding](../../guide/configuration.md#team-signal-bindings) row, which the receipt names as a task. It prints the record id, the count of tasks it started, and one indented line per task. The part after `·` reads one of these:
 
 | Receipt | When |
 | --- | --- |
 | `fired 1 task`, `fired N tasks` | That many tasks were handed the signal and spawned a detached run. Each is named on its own line. A busy task can still skip the trigger under its [overlap policy](./loop.md#overlapping-triggers). |
-| `fired no task` | Tasks took the signal or were excluded by their `--match`, and none started. |
-| `no task is subscribed to it` | No task took the signal, and no task on this name or its family was excluded by its `--match`. Either no task subscribes to this name or its family, or every subscriber names a sibling in the family (a task on `deploy.failed` declines `deploy.finished` and records it as `skipped`), or names a sibling and its `--match` rejected the payload as well. |
+| `fired no task` | Tasks took the signal or were excluded by their `match`, and none started. |
+| `no task is subscribed to it` | No task took the signal, and no task on this name or its family was excluded by its `match`. Either no task subscribes to this name or its family, or every subscriber names a sibling in the family (a task on `deploy.failed` declines `deploy.finished` and records it as `skipped`), or names a sibling and its `match` rejected the payload as well. |
 
-A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task subscribed to this name or its family whose `--match` rejected the payload gets an indented `<task>: its --match excluded this signal` line after those, and records nothing. A task on a sibling name whose `--match` rejected the payload gets no line. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
+A task that took the signal but did not start gets an indented `<task>: did not start` line after any started task. A task subscribed to this name or its family whose `match` rejected the payload gets an indented `<task>: its --match excluded this signal` line after those, and records nothing. A task on a sibling name whose `match` rejected the payload gets no line. A task does not start when it is disabled, paused, or a project task whose project is not trusted, or when its run fails to launch.
 
 | Argument | Rule |
 | --- | --- |
 | `<NAME>` | Dot-separated segments, at most 64 bytes in total. Each segment starts with a lowercase letter or digit and contains only lowercase letters, digits, `-`, and `_`. The first segment is the signal's family. |
 | `--json <OBJECT>` | One top-level JSON object, at most 64 KiB as typed (whitespace counts). Omitted, the payload is `{}`. |
 
-Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment, so a task added afterwards never sees the signal. A busy task can keep its trigger through its [overlap policy](./loop.md#overlapping-triggers). When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. The receipt does not mention the advance. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
+Firing happens inside the `emit` process, with no daemon. It needs an existing room but no running agent. It spawns one detached run for each live subscription that exists in this workspace at that moment, so a binding armed afterwards never sees the signal. A busy task can keep its trigger through its [overlap policy](./loop.md#overlapping-triggers). When the room has an active [workflow](./workflow.md) run, `emit` also starts one detached workflow advance, which hands the signal to the run's subscribed checks and steps. The receipt does not mention the advance. What a subscription matches, what it delivers, and when a delivery reaches its agent are in [`rimz loop` signals](./loop.md#signals).
 
 `emit` refuses these inputs with exit code 1, before it writes anything:
 

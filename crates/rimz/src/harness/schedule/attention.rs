@@ -608,6 +608,10 @@ pub fn read_catalog(
                 .as_ref()
                 .map(|_| entry.run_dir())
                 .unwrap_or_else(|| root.to_path_buf());
+            let scope = entry
+                .dir
+                .as_ref()
+                .map_or_else(|| root.to_path_buf(), |_| when_scope(entry));
             let key = task.key_for_root(name, root);
             let record = records.live(&key);
             let id = record.map(|(id, _)| id);
@@ -619,7 +623,7 @@ pub fn read_catalog(
                 now,
             );
             let (timing, blocking, unmet) =
-                readings.observe_blocking((&key, name), entry, &run_dir, timing, now.timestamp());
+                readings.observe_blocking((&key, name), entry, &scope, timing, now.timestamp());
             let acting = stats
                 .get(name)
                 .and_then(|stats| stats.acting.as_ref())
@@ -697,4 +701,14 @@ fn parked_summary(run: &RunRecord, now: Timestamp) -> (String, String) {
         since,
         now,
     )
+}
+
+/// The checkout `entry`'s `when` is read at: the one holding its run directory, which a
+/// shell `cwd` can name below the checkout's root; the directory itself outside any checkout.
+pub fn when_scope(entry: &TaskEntry) -> std::path::PathBuf {
+    let dir = entry.run_dir();
+    crate::worktree::discover_checkout(&dir)
+        .ok()
+        .flatten()
+        .unwrap_or(dir)
 }

@@ -36,10 +36,11 @@ on={pass='@done',fail='@failed'}
         trigger: None,
         evidence: Some("Rule `nightly` fired here. deploy.done".into()),
         booked_by: vec![booker],
+        on: Some(crate::config::CheckOn::Fail),
     });
     fs::write(
         deployed.join("checks/env.sh"),
-        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\",\"booked_by\":%s}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\" \"${RIMZ_LOOP_BOOKED_BY:-null}\"\n",
+        "printf '{\"outcome\":\"ok\",\"definition\":\"%s\",\"task\":\"%s\",\"booked_by\":%s,\"on\":%s}' \"$RIMZ_WORKFLOW_DEFINITION\" \"$RIMZ_LOOP_TASK\" \"${RIMZ_LOOP_BOOKED_BY:-null}\" \"${RIMZ_LOOP_ON:-null}\"\n",
     )
     .unwrap();
     let paths = state.workflow(&record.id);
@@ -64,16 +65,19 @@ on={pass='@done',fail='@failed'}
         records::JournalEvent::Evaluation { object, .. }
         if row.node == "run" && object["definition"] == definition && object["task"] == "nightly"))
     );
-    let booked_by = journal.iter().find_map(|row| match &row.event {
+    let booking = journal.iter().find_map(|row| match &row.event {
         records::JournalEvent::Evaluation { object, .. } if row.node == "run" => {
-            Some(object["booked_by"].clone())
+            Some((object["booked_by"].clone(), object["on"].clone()))
         }
         _ => None,
     });
     assert_eq!(
-        booked_by,
-        Some(serde_json::json!([{"kind": "claude", "agent_id": "booker"}])),
-        "a check names the chain of the booking that fired it"
+        booking,
+        Some((
+            serde_json::json!([{"kind": "claude", "agent_id": "booker"}]),
+            serde_json::json!("fail")
+        )),
+        "a check names the chain and `on` of the booking that fired it"
     );
 }
 

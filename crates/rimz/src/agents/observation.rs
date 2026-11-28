@@ -335,6 +335,9 @@ pub struct LaunchParams {
     /// row, which the fire may have consumed or someone may have removed or replaced.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub loop_booked_by: Vec<LaunchedBy>,
+    /// The `on` of the booking whose fire launched this agent, beside `loop_booked_by`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loop_on: Option<crate::config::CheckOn>,
     /// The loop fire this agent was launched under (`harness::loop_task::read_fire_env`), on
     /// every cell of the launch. It is launch identity: restart and molt keep it, a resume
     /// keeps the row's, a fork drops it.

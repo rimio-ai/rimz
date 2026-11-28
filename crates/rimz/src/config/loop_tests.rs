@@ -4,7 +4,7 @@ use super::*;
 fn narrow_loop_matches_full_lenient_config() {
     for contents in [
         Some(
-            "default-timeout = '5m'\n[tasks.nightly]\nargs = ['cargo', 'test']\ntimeout = '1h'\nevery = '1h'\n",
+            "default-timeout = '5m'\n[tasks.nightly]\nargs = ['cargo', 'test']\ntimeout = '1h'\ncron = '0 * * * *'\n",
         ),
         Some("[tasks.nightly\n"),
         Some("[tasks.nightly]\nargs = ['cargo', 'test']\nagent = 'codex'\n"),
@@ -148,7 +148,7 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
         on: Some(CheckOn::Success),
         root: PathBuf::from("/repo"),
         dir: Some(PathBuf::from("/linked")),
-        every: Some("1d".to_owned()),
+        cron: Some("0 0 * * *".to_owned()),
         timeout: Some("45m".to_owned()),
         signal: Some("ci.failed".to_owned()),
         matches: Some(BTreeMap::from([(
@@ -156,6 +156,7 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
             "feature".to_owned(),
         )])),
         repeat: true,
+        team: Some(crate::ids::TeamInstanceId::new("forge", None).expect("team instance")),
         deadline: Some(deadline),
         account: Some("work".parse().expect("login name")),
         ..TaskEntry::default()
@@ -187,12 +188,12 @@ fn task_entry_row_fields_round_trip_toml_and_json() {
             .tasks
             .0
             .get("ci")
-            .and_then(|entry| entry.every.as_deref()),
-        Some("1d")
+            .and_then(|entry| entry.cron.as_deref()),
+        Some("0 0 * * *")
     );
     assert!(
-        toml.contains("every = \"1d\""),
-        "an interval cadence should round-trip through TOML: {toml}"
+        toml.contains("cron = \"0 0 * * *\""),
+        "a cron cadence should round-trip through TOML: {toml}"
     );
     assert!(toml.contains("timeout = \"45m\""), "{toml}");
     assert!(toml.contains("signal = \"ci.failed\""), "{toml}");
@@ -254,8 +255,8 @@ fn default_timeout_rejects_a_zero_duration() {
 fn a_row_with_a_key_outside_the_row_refuses_alone_and_keeps_its_values() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("loop.toml");
-    let text = "[tasks.ok]\nroot = '/repo'\nargs = ['true']\ntimeout = '1m'\nevery = '1h'\n\
-                [tasks.old]\nroot = '/repo'\nagent = 'codex'\nprompt = 'fix'\nevery = '1h'\n";
+    let text = "[tasks.ok]\nroot = '/repo'\nargs = ['true']\ntimeout = '1m'\ncron = '0 * * * *'\n\
+                [tasks.old]\nroot = '/repo'\nagent = 'codex'\nprompt = 'fix'\ncron = '0 * * * *'\n";
     let loaded = super::super::parse_loop_text(&path, text).expect("the file still loads");
     let tasks = &loaded.tasks.0;
     assert_eq!(tasks["ok"].refused, None);
@@ -274,4 +275,45 @@ fn a_row_with_a_key_outside_the_row_refuses_alone_and_keeps_its_values() {
         "a rewrite keeps the refused row as stored: {rewritten}"
     );
     assert_eq!(reread.tasks.0["ok"], tasks["ok"]);
+}
+
+#[test]
+fn only_a_team_bindings_shape_fires_on_a_signal() {
+    let row = |extra: serde_json::Value| {
+        let mut row =
+            serde_json::json!({"root": "/repo", "team": "forge#x", "signal": "ci.failed"});
+        row.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value::<TaskEntry>(row).unwrap()
+    };
+    // A binding's row has `team` and no action of its own, with its `wait` or after losing it.
+    for binding in [
+        serde_json::json!({
+            "wait": {"kind": "claude", "session": "s1", "handle": "@lead"},
+            "prompt": "ci failed",
+        }),
+        serde_json::json!({}),
+    ] {
+        assert_eq!(row(binding.clone()).refused, None, "{binding}");
+    }
+    for action in [
+        serde_json::json!({"args": ["true"], "timeout": "1m"}),
+        serde_json::json!({"kind": "agent", "target": "claude"}),
+        serde_json::json!({
+            "wait": {"kind": "claude", "session": "s1", "handle": "@lead"},
+            "args": ["true"],
+            "timeout": "1m",
+        }),
+    ] {
+        assert_eq!(
+            row(action.clone()).refused.map(|refused| refused.detail),
+            Some(
+                "a task no longer fires on `signal`: fire on a state with `when`, or have a \
+                 workflow `subscribe` to the signal"
+                    .to_owned()
+            ),
+            "a row with `team` and an action of its own is no binding: {action}"
+        );
+    }
 }

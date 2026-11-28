@@ -602,13 +602,13 @@ fn ended_pinned_sessions<'a, 'agents>(
 #[derive(Debug, thiserror::Error)]
 pub enum DeliveryScopeFailure {
     #[error(
-        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Pass --match branch=<name>, --match path=<worktree-path>, or --match branch='*' for every checkout RimZ watches, or watch it with: rimz shell -- gh run watch --exit-status"
+        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Set match = {{ branch = \"<name>\" }}, match = {{ path = \"<worktree-path>\" }}, or match = {{ branch = \"*\" }} for every checkout RimZ watches, launch with -w <worktree>, or watch it with: rimz shell -- gh run watch --exit-status"
     )]
     RootCheckout,
-    #[error("team.* waits need a team member; pass --match instance=<team#channel>")]
+    #[error("a team.* binding needs a team member; set match = {{ instance = \"<team#lane>\" }}")]
     NoTeam,
     #[error(
-        "--wait on an agent.* signal requires --match handle=<other> or --match session=<other> to avoid waking the target from its own lifecycle signal"
+        "an agent.* binding needs match = {{ handle = \"<other>\" }} or match = {{ session = \"<other>\" }}, or its own lifecycle signal would wake its member"
     )]
     SelfSignal,
 }

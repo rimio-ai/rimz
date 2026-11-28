@@ -2189,7 +2189,7 @@ fn setup_pty_quit_and_end_of_input_leave_every_file_byte_identical() {
     );
     write_machine_file(
         &loop_config_path(&env),
-        "[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nlabel = \"keep this task\"\nroot = \"/r\"\nevery = \"15m\"\n",
+        "[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nlabel = \"keep this task\"\nroot = \"/r\"\ncron = \"*/15 * * * *\"\n",
     );
     run_setup_pty(&env, "\n", None, &[]);
     let before = machine_file_bytes(&env);
@@ -2300,7 +2300,7 @@ fn setup_pty_reset_no_changes_nothing_and_yes_rewrites_all_three_files() {
     write_machine_file(&theme_config_path(&env), "[theme]\nmode = \"truecolor\"\n");
     write_machine_file(
         &loop_config_path(&env),
-        "[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nlabel = \"keep this task\"\nroot = \"/r\"\nevery = \"15m\"\n",
+        "[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nlabel = \"keep this task\"\nroot = \"/r\"\ncron = \"*/15 * * * *\"\n",
     );
     let before = machine_file_bytes(&env);
 
@@ -2745,7 +2745,7 @@ root = "/r"
 args = ["gh", "pr", "checks"]
 timeout = "5m"
 root = "/r"
-every = "15m"
+cron = "*/15 * * * *"
 "#,
     );
 
@@ -2775,7 +2775,7 @@ every = "15m"
     );
     assert!(
         text.contains("args = [\"gh\", \"pr\", \"checks\"]")
-            && text.contains("every = \"15m\"")
+            && text.contains("cron = \"*/15 * * * *\"")
             && text.contains("session = \"s1\""),
         "task fields should survive:\n{text}"
     );

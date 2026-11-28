@@ -30,6 +30,7 @@ fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operatio
         trigger: None,
         evidence: Some("Rule `nightly` fired here. deploy.done".into()),
         booked_by: Vec::new(),
+        on: None,
     });
     super::attempts::update(&state, &record);
     let host = FakeHost::new();

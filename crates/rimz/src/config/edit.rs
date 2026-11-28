@@ -1834,6 +1834,13 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if let [root, tasks, _, field, ..] = path
+        && root == "loop"
+        && tasks == "tasks"
+        && let Some(refusal) = super::loop_::removed_task_key(field)
+    {
+        invalid_value!("{}: {refusal}", path.join("."));
+    }
     if matches!(path, [root, leaf] if root == "keys" && leaf == "keymap")
         && !value.as_str().is_some_and(super::keys::is_bundled_keymap)
     {

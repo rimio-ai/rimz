@@ -40,7 +40,7 @@ fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.probe]\nroot = {:?}\nevery = \"1h\"\nargs = [\"true\"]\ntimeout = \"1m\"\n",
+            "[tasks.probe]\nroot = {:?}\ncron = \"0 * * * *\"\nargs = [\"true\"]\ntimeout = \"1m\"\n",
             env.project_root
         ),
     )
@@ -65,7 +65,7 @@ fn loop_read_commands_without_a_room_are_quiet_and_create_nothing() {
 fn machine_loop_edits_without_a_room_create_no_state() {
     let env = Env::new();
     for command in [
-        vec!["loop", "add", "probe", "--every", "1h", "--", "true"],
+        vec!["loop", "add", "probe", "--cron", "0 * * * *", "--", "true"],
         vec!["loop", "rename", "probe", "renamed"],
         vec!["loop", "remove", "renamed"],
     ] {

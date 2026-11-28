@@ -147,6 +147,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
                 kind: AgentKind::new_unchecked("claude"),
                 agent_id: AgentSessionId::from("booker"),
             }],
+            loop_on: Some(crate::config::CheckOn::Fail),
             workflow: None,
             launch_group: Some("launch_group_1".to_owned()),
             launch_ordinal: Some(1),
@@ -214,6 +215,7 @@ fn launch_event_builder_preserves_serialized_state_shapes() {
             launch["loop_booked_by"],
             serde_json::json!([{"kind": "claude", "agent_id": "booker"}])
         );
+        assert_eq!(launch["loop_on"], "fail");
     }
     assert_eq!(
         payloads

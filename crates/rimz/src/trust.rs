@@ -902,6 +902,8 @@ pub struct ProjectTask {
     pub worktree: Option<toml::Value>,
     pub root: Option<PathBuf>,
     pub timeout: Option<toml::Value>,
+    // `at`, `every`, `signal`, and `match` are keys the loader refuses on a project row; they
+    // stay hashed so a row that carries one still changes the hash it was granted under.
     pub at: Option<String>,
     pub every: Option<String>,
     pub cron: Option<String>,

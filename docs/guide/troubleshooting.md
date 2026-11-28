@@ -446,7 +446,7 @@ Stop cancels each live run the task started and keeps the waiting triggers, so t
 
 A clock task whose room is closed says `waits for room` in `rimz loop list` when the loop timer is not active. With the timer active, its row reads as in an open room, and the heading says clocks use the active timer. If the timer is installed but its tick cannot reach your systemd user session, it refuses rather than firing and prints the fix. `rimz loop list` and `rimz loop timer status` report the timer unit's state, active or inactive, not whether its tick succeeds, so an active timer whose tick refuses still shows its clocks as live. [Who keeps time](./loops.md#who-keeps-time) covers both, along with what a timer fire does to your machine.
 
-Signal tasks need no timekeeper: the process that emits the signal fires them. A signal from `rimz events emit` fires with no room open, but the built-in `ci`, `pr`, and `trunk` signals come from the sidebar and arrive only while the room is open ([Your own signals](./loops.md#your-own-signals)).
+A condition task (`--when`) needs a timekeeper as a clock task does, since it is checked on the same tick. The built-in `ci`, `pr`, and `trunk` signals come from the sidebar and arrive only while the room is open, so a condition on `ci` or `pr` reads them only then ([Your own signals](./loops.md#your-own-signals)).
 
 ### A scripted run never finishes
 

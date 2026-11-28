@@ -2057,7 +2057,7 @@ fn dependabot_repair_is_a_command_row_and_loads() {
         ]
     );
     assert_eq!(task.timeout.as_deref(), Some("15m"));
-    assert_eq!(task.every.as_deref(), Some("1h"));
+    assert_eq!(task.cron.as_deref(), Some("0 * * * *"));
 }
 
 #[test]
@@ -2083,7 +2083,7 @@ fn project_tasks_reject_machine_local_fields() {
             "when",
         ),
         (
-            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\nfor = \"30m\"\n",
+            "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\nfor = \"30m\"\n",
             "for",
         ),
         (
@@ -2134,7 +2134,7 @@ fn project_tasks_validate_schedule_shape() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"soon\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"soon\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("invalid schedule");
@@ -2142,7 +2142,7 @@ fn project_tasks_validate_schedule_shape() {
     assert!(matches!(
         err,
         EffectiveConfigErr::Tasks {
-            source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::BadEvery { name, value }),
+            source: ProjectTasksErr::Schedule(crate::harness::schedule::ScheduleErr::BadCron { name, value }),
             ..
         } if name == "wait" && value == "soon"
     ));
@@ -2154,7 +2154,7 @@ fn project_tasks_must_repeat() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"deploy.done\"\n",
+        "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nfire-at = \"2030-01-01T00:00:00Z\"\n",
     );
 
     let err = project_tasks(project.path(), config.path()).expect_err("one-shot project task");
@@ -2169,7 +2169,7 @@ fn project_tasks_must_repeat() {
 }
 
 #[test]
-fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
+fn project_tasks_refuse_signals_and_reject_machine_only_trigger_fields() {
     let project = tempdir().expect("project");
     let config = tempdir().expect("config");
     write_project_config(
@@ -2179,20 +2179,19 @@ fn project_tasks_accept_signals_and_reject_machine_only_trigger_fields() {
 
     let loaded = load_project_tasks(project.path(), config.path()).expect("signal project task");
     let task = &loaded.tasks.0["wait"];
-    assert_eq!(task.signal.as_deref(), Some("ci.failed"));
     assert_eq!(
-        task.matches
-            .as_ref()
-            .and_then(|matches| matches.get("branch"))
-            .map(String::as_str),
-        Some("feature")
+        task.refused.as_ref().map(|refused| refused.detail.as_str()),
+        Some(
+            "a task no longer fires on `signal`: fire on a state with `when`, or have a workflow \
+             `subscribe` to the signal"
+        )
     );
 
     for (field, value) in [("watch", "\"cargo test\""), ("each-worktree", "true")] {
         write_project_config(
             &project,
             &format!(
-                "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\nsignal = \"ci.failed\"\nrepeat = true\n{field} = {value}\n"
+                "[tasks.wait]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n{field} = {value}\n"
             ),
         );
         let err = project_tasks(project.path(), config.path()).expect_err(field);
@@ -2952,8 +2951,8 @@ fn a_project_row_with_a_key_outside_the_row_refuses_alone() {
     let config = tempdir().expect("config");
     write_project_config(
         &project,
-        "[tasks.ok]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
-         [tasks.old]\nagent = \"codex\"\nprompt = \"wait\"\nevery = \"1h\"\n",
+        "[tasks.ok]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n\
+         [tasks.old]\nagent = \"codex\"\nprompt = \"wait\"\ncron = \"0 * * * *\"\n",
     );
     crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
 
