@@ -125,37 +125,36 @@ pub fn handed_answer(
 /// to the run, so a run that ended first withdraws it. A run parked on anything else (its own
 /// shell, its subagents) is woken by that and told nothing. The notice's id is stored before it
 /// is queued, so a later turn end queues a notice the first never queued (a queue error, a stop
-/// between the two writes) under that id, which `queue_message_once` keeps to one. Returns
-/// whether this call queued it.
+/// between the two writes) under that id, which `queue_message_once` keeps to one.
 pub fn queue_answer_notice(
     store: &Store,
     session_name: &str,
     run_id: &RunId,
-) -> crate::store::Result<bool> {
+) -> crate::store::Result<()> {
     let Ok(run) = crate::harness::run::load(store.paths(), run_id) else {
-        return Ok(false);
+        return Ok(());
     };
     let (Some(launch_id), Some(agent_id)) = (run.launch_id.as_ref(), run.agent_id.as_ref()) else {
-        return Ok(false);
+        return Ok(());
     };
     if run.status.is_terminal() || run.parked_at.is_none() {
-        return Ok(false);
+        return Ok(());
     }
     let Some(call) =
         crate::store::call::load(store.paths(), launch_id)?.filter(CallRecord::owes_answer)
     else {
-        return Ok(false);
+        return Ok(());
     };
     if crate::harness::owed::owed_wake(store, &run.kind, agent_id)?
         != Some(crate::harness::owed::OwedWake::Answer)
     {
-        return Ok(false);
+        return Ok(());
     }
     let snapshot = store.snapshot_cached()?;
     let Some(row) =
         crate::store::snapshot::find_agent(&snapshot.agents, run.kind.as_str(), agent_id)
     else {
-        return Ok(false);
+        return Ok(());
     };
     let message_id = match call.asked {
         Some(id) => id,
@@ -168,7 +167,7 @@ pub fn queue_answer_notice(
                 })
             })?;
             let Some((_, id)) = asked else {
-                return Ok(false);
+                return Ok(());
             };
             id
         }
@@ -183,8 +182,7 @@ pub fn queue_answer_notice(
     .with_sender(MessageSender::System)
     .with_about_run(Some(run_id.clone()));
     notice.message_id = message_id;
-    store.queue_message_once(&notice, session_name)?;
-    Ok(true)
+    store.queue_message_once(&notice, session_name)
 }
 
 const ANSWER_OWED: &str = "Your launcher has no answer for this task yet: your turn ended without \
