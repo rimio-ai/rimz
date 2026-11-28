@@ -2438,9 +2438,9 @@ pub enum PreflightCheckout<'a> {
     Cwd,
     /// An existing worktree the agent runs in instead of the launch directory.
     Worktree(&'a Path),
-    /// A checkout the launch creates after its preflight, so a listed name no other root holds
-    /// is left to the re-check a pull-request worktree gets once it exists, else to the exec
-    /// wrapper's compile.
+    /// A checkout the launch settles only after its preflight (one it creates, or the worktree
+    /// a pull request resolves to), so a listed name no other root holds is left to the re-check
+    /// a pull-request worktree gets once the launch settles it, else to the exec wrapper's compile.
     Pending,
 }
 
