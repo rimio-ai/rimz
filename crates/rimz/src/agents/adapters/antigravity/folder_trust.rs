@@ -4,8 +4,8 @@
 //! parent, or for the primary checkout of a linked worktree, still prompts (agy 1.5.16). RimZ
 //! also judges a folder below a trusted entry, and a linked worktree whose primary checkout is
 //! trusted, as trusted, and passes such a launch directory to agy as session-only trust in the
-//! launch's one `--settings` document, never in the saved file. A pull-request worktree takes
-//! trust only from an entry naming it exactly. The same read also unions the login's saved
+//! launch's one `--settings` document, never in the saved file. A pull-request worktree is a
+//! linked worktree like any other. The same read also unions the login's saved
 //! `permissions.allow` rules into that document so any session allow list RimZ emits keeps them.
 
 use std::collections::BTreeMap;
@@ -35,8 +35,8 @@ enum Cover {
     Untrusted,
 }
 
-/// The grant key is the primary checkout for a linked worktree, the folder itself for a
-/// pull-request worktree, and otherwise the repository root the caller names, else `cwd`.
+/// The grant key is the primary checkout for a linked worktree, and otherwise the repository
+/// root the caller names, else `cwd`.
 pub(super) fn folder_trust(
     cwd: &Path,
     repo_root: Option<&Path>,
@@ -44,8 +44,7 @@ pub(super) fn folder_trust(
 ) -> FolderTrust {
     let linked = crate::worktree::linked_worktree(cwd);
     let key = canonical(match &linked {
-        Some(linked) if !pull_request(linked) => &linked.primary,
-        Some(_) => cwd,
+        Some(linked) => &linked.primary,
         None => repo_root.unwrap_or(cwd),
     });
     let (path, saved) = match read(login_env) {
@@ -165,12 +164,6 @@ fn read(login_env: &BTreeMap<String, String>) -> Result<(PathBuf, Saved), (PathB
     }
 }
 
-/// A pull-request worktree, or one whose marker cannot say it is not, takes trust only from an
-/// entry naming it.
-fn pull_request(linked: &LinkedWorktree) -> bool {
-    linked.from_pr.is_some() || linked.marker_unreadable
-}
-
 fn cover(cwd: &Path, linked: Option<&LinkedWorktree>, entries: &[String]) -> Cover {
     let resolved = canonical(cwd);
     let named = |dir: &Path| entries.iter().any(|entry| Path::new(entry) == dir);
@@ -179,16 +172,14 @@ fn cover(cwd: &Path, linked: Option<&LinkedWorktree>, entries: &[String]) -> Cov
     if named(cwd) && named(&resolved) {
         return Cover::Exact;
     }
+    // agy saves absolute paths; a blank entry would prefix every directory, and a relative one
+    // would resolve against RimZ's own cwd.
     let trusted: Vec<PathBuf> = entries
         .iter()
-        .map(|entry| canonical(Path::new(entry)))
+        .map(Path::new)
+        .filter(|entry| entry.is_absolute())
+        .map(canonical)
         .collect();
-    if named(cwd) || trusted.contains(&resolved) {
-        return Cover::Inherited;
-    }
-    if linked.is_some_and(pull_request) {
-        return Cover::Untrusted;
-    }
     let below_trusted = |dir: &Path| trusted.iter().any(|entry| dir.starts_with(entry));
     if below_trusted(&resolved)
         || linked.is_some_and(|linked| below_trusted(&canonical(&linked.primary)))

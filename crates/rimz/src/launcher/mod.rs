@@ -1236,8 +1236,9 @@ fn settle_layout(
         return Ok(SettledLayout::Handled(LaunchOutcome::Declined));
     };
     checkout::stamp_created_tree(&launch, args.launch.loop_fire.as_ref());
-    // A pull-request worktree exists only now, and a provider can trust it apart from the
-    // checkout the cell preflight read: agy takes its trust only from an entry naming it.
+    // The first check runs before the launch settles which worktree it lands in: check each
+    // cell again at the pull-request worktree for the project skills it lists, and for folder
+    // trust at the real tree, which Qoder keys on.
     if args.launch.cohort.from_pr.is_some() {
         let pr_workspace = workspace.at_launch_dir(&launch.cwd)?;
         for cell in layout.agent_cells() {
@@ -1262,7 +1263,7 @@ fn settle_layout(
                 },
                 unattended,
                 None,
-                // The worktree exists now, so a listed name it lacks refuses before any pane.
+                // The worktree is settled now, so a listed name it lacks refuses before any pane.
                 crate::harness::launch::PreflightCheckout::Cwd,
                 interaction,
             )?;

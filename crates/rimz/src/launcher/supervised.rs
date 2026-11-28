@@ -531,8 +531,9 @@ fn prepare(
         return Ok(Preparation::Handled(LaunchOutcome::Declined));
     };
     checkout::stamp_created_tree(&launch, request.loop_fire.as_ref());
-    // A pull-request worktree exists only now, and a provider can trust it apart from the
-    // checkout the companions' preflight read: agy takes its trust only from an entry naming it.
+    // The first check runs before the launch settles which worktree it lands in: check the
+    // companions again at the pull-request worktree for the project skills they list, and for
+    // folder trust at the real tree, which Qoder keys on.
     if request.from_pr.is_some()
         && let Some(unattended) = companion_unattended
     {
