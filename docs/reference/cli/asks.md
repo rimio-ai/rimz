@@ -58,8 +58,8 @@ Omitting `show`, as in `rimz asks @planner`, exits `2` and suggests `rimz asks s
 The human form prints a header line, the agent's context message when present, and each question with its numbered options:
 
 ```console
-$ rimz --tmux asks show ask_3si4haeh
-ask_3si4haeh  @coder#probe (@light-compass)  question · 6s
+$ rimz asks show ask_m40cg6m6
+ask_m40cg6m6  @coder#probe (@brave-yard)  question · 5s
 
 Choose a rollout
   1. safe
