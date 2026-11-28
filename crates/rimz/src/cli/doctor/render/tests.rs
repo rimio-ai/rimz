@@ -3291,6 +3291,7 @@ fn storage_section_distinguishes_uncreated_room_and_unresolved_workspace() {
 
 #[test]
 fn messages_section_renders_stuck_and_failure_rows() {
+    let stuck = rimz::ids::MessageId::new();
     let mut report = report_fixture();
     report.messages = Some(Probe::Ready(Messages {
         open: OpenCounts {
@@ -3299,7 +3300,7 @@ fn messages_section_renders_stuck_and_failure_rows() {
             sent: 1,
         },
         stuck: vec![MessageProblemRow {
-            message_id: "msg_stuck".to_owned(),
+            message_id: stuck.to_string(),
             status: "queued".to_owned(),
             target: "@coder".to_owned(),
             at: Timestamp::UNIX_EPOCH,
@@ -3321,7 +3322,12 @@ fn messages_section_renders_stuck_and_failure_rows() {
     });
     assert!(out.contains("MESSAGES"), "{out}");
     assert!(out.contains("3 open: 2 queued, 1 sent"), "{out}");
-    assert!(out.contains("msg_stuck") && out.contains("@coder"), "{out}");
+    assert!(
+        out.contains(&format!("{} to @coder is stuck", stuck.shown()))
+            && out.contains(&format!("rimz message show {}", stuck.shown()))
+            && !out.contains(stuck.as_str()),
+        "the row names the message by the id an agent types back:\n{out}"
+    );
     assert!(!out.contains("msg_failed"), "{out}");
     assert!(
         out.contains("▸ 1 recent failure: 1 errored — rimz message list --all --system"),

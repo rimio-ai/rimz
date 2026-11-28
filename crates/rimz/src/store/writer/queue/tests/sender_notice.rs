@@ -115,8 +115,9 @@ fn sender_notice_prose_carries_evidence_without_a_blind_resend() {
     record.last_sent_at = Some(Timestamp::now());
     record.text = format!("recognize\nthis {}", "x".repeat(100));
     let text = sender_notice::undelivered(&record, Some("delivery unconfirmed"));
+    assert!(!text.contains(record.message_id.as_str()), "{text}");
     for evidence in [
-        record.message_id.to_string(),
+        format!("Message {} to", record.message_id.shown()),
         "@receiver#docs".into(),
         "timed out".into(),
         "delivery unconfirmed".into(),
@@ -135,7 +136,11 @@ fn sender_notice_prose_carries_evidence_without_a_blind_resend() {
     assert!(queued.contains("20m"));
     assert!(queued.contains("busy in a turn"));
     assert!(queued.contains("stays queued"));
-    assert!(queued.contains(&format!("rimz message cancel {}", record.message_id)));
+    assert!(queued.contains(&format!("Message {} to", record.message_id.shown())));
+    assert!(queued.contains(&format!(
+        "rimz message cancel {}",
+        record.message_id.shown()
+    )));
     let notice = sender_notice::compose(
         q.workspace_id.clone(),
         &agent(),
@@ -218,7 +223,8 @@ fn assert_notice(q: &Queue, original: &MessageRecord, status: &str) -> MessageRe
         serde_json::to_value(&notice.sender).unwrap(),
         serde_json::json!({"origin": "harness", "notice": "message_undelivered"})
     );
-    assert!(notice.text.contains(original.message_id.as_str()));
+    assert!(notice.text.contains(&original.message_id.shown()));
+    assert!(!notice.text.contains(original.message_id.as_str()));
     assert!(notice.text.contains(status));
     assert!(notice.text.contains("next"));
     assert!(notice.text.contains("rimz agents show"));

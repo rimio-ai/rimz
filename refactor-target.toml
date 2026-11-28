@@ -3206,7 +3206,9 @@ path = "crates/rimz/src/ids.rs"
 # and serialize_lane, deserialize_lane and lenient_lane_name decode a record's stored lane
 # without failing it (+7).
 # TaskId and FireId (new, parse, task) name a loop task and its fires (+3).
-surface-budget = 100
+# MessageId::shown, AskId::shown, MessageToken, AskToken (parse, newest) and InvalidIdToken give
+# the CLI the short ids agents read and type back (+9).
+surface-budget = 109
 
 [[module]]
 path = "crates/rimz/src/lane.rs"
@@ -11984,6 +11986,21 @@ reason = "PaneId::creation_ordinal is read by the separate integration crate (te
 kind = "item"
 key = "ids::WorkspaceId::parse"
 reason = "WorkspaceId::parse, MessageId::parse and WorkspaceDirName::parse are all called from the binary crate (cli/sidebar/tests.rs:232, cli/message/list.rs:816, cli/message/show.rs:704, cli/sessions/picker/tests.rs:386) (pass 24c)."
+
+[[verdict]]
+kind = "item"
+key = "ids::MessageToken"
+reason = "The `rimz message` subcommands in the binary crate parse a typed-back message id, stored or shown, as this token."
+
+[[verdict]]
+kind = "item"
+key = "ids::AskToken"
+reason = "`rimz answer` and `rimz asks show` in the binary crate parse a typed-back ask id, stored or shown, as this token."
+
+[[verdict]]
+kind = "item"
+key = "ids::InvalidIdToken"
+reason = "The parse error of MessageToken and AskToken, which clap prints in the binary crate."
 
 [[verdict]]
 kind = "item"

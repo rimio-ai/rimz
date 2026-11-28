@@ -572,7 +572,7 @@ fn render_message_rows(
             render::paint(render::palette::meta().bold(), &target),
             render::paint(render::status::message(message.status), &status),
             render::rel_age(message.enqueued_at, now),
-            render::paint(render::palette::faint(), message.message_id.as_str())
+            render::paint(render::palette::faint(), &message.message_id.shown())
         )?;
         let span = (row.count > 1)
             .then(|| render::folded_span(row.oldest, message.enqueued_at))

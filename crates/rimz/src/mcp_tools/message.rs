@@ -213,7 +213,7 @@ fn row(
 ) -> Row {
     Row {
         to,
-        message_id: message_id.to_string(),
+        message_id: message_id.shown(),
         status,
         detail,
     }
@@ -257,7 +257,7 @@ fn park_detail(label: &str, reason: &ParkReason, message_id: &crate::ids::Messag
             status.as_str(),
             crate::store::message::format_dwell(*dwell_secs)
         ),
-        ParkReason::Behind(blocker) => format!("behind {blocker}"),
+        ParkReason::Behind(blocker) => format!("behind {}", blocker.shown()),
         ParkReason::NoPane => format!("{label} has no live pane"),
         ParkReason::NotHosted { blocker } => blocker
             .strip_prefix("stuck: ")
@@ -372,13 +372,14 @@ mod tests {
 
     #[test]
     fn a_withheld_interrupt_says_whether_its_key_went() {
-        let id = crate::ids::MessageId::new();
+        let stored = crate::ids::MessageId::new();
+        let id = stored.shown();
         let detail = |pressed| {
             let reason = ParkReason::InterruptWithheld {
                 cause: "the receiver left its pane",
                 pressed,
             };
-            park_detail("@coder", &reason, &id)
+            park_detail("@coder", &reason, &stored)
         };
         assert_eq!(
             detail(false),

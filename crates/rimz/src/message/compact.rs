@@ -22,7 +22,10 @@ type Result<T> = std::result::Result<T, CompactErr>;
 pub enum CompactErr {
     #[error("already compacting; wait for compaction to finish and take another turn")]
     Compacting,
-    #[error("compaction {message_id} is still {status}; a compaction never follows a compaction")]
+    #[error(
+        "compaction {} is still {status}; a compaction never follows a compaction",
+        .message_id.shown()
+    )]
     Pending {
         message_id: MessageId,
         status: MessageStatus,
@@ -31,7 +34,7 @@ pub enum CompactErr {
         "already compacted and has not taken a turn since; a compaction never follows a compaction"
     )]
     Repeated { at: Timestamp },
-    #[error("compaction {message_id}: {reason}")]
+    #[error("compaction {}: {reason}", .message_id.shown())]
     Settled {
         message_id: MessageId,
         reason: String,
@@ -121,11 +124,20 @@ pub fn refuse_repeat(store: &Store, agent: &AgentState, now: Timestamp) -> Resul
 /// request to end the turn now waits for its boundary instead.
 #[derive(Debug, serde::Serialize)]
 pub struct CompactReceipt {
+    /// Serialized only as the `self_compact` answer, so in the shown form an agent types back.
+    #[serde(serialize_with = "serialize_shown")]
     pub message_id: MessageId,
     #[serde(flatten)]
     pub outcome: ReceiptOutcome,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub soft_because: Option<SoftBecause>,
+}
+
+fn serialize_shown<S: serde::Serializer>(
+    id: &MessageId,
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error> {
+    serializer.serialize_str(&id.shown())
 }
 
 /// What a request to compact an agent asks for.
@@ -274,7 +286,8 @@ pub fn compact_agent(
         }) => {
             if instruction.is_some() {
                 bail!(
-                    "{handle}: compaction {message_id} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it"
+                    "{handle}: compaction {} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it",
+                    message_id.shown()
                 );
             }
             if let Some(outcome) = join(

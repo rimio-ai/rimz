@@ -3210,12 +3210,16 @@ fn doctor_json_surfaces_stuck_and_failed_messages() {
         .unwrap();
     assert!(listed.status.success(), "{listed:?}");
     let listed = String::from_utf8(listed.stdout).unwrap();
-    assert!(listed.contains(&failed_id), "{listed}");
+    assert!(listed.contains(&failed.message_id.shown()), "{listed}");
     for (args, show_failure) in [(vec!["doctor"], false), (vec!["doctor", "--audit"], true)] {
         let output = env.rimz().args(args).output().unwrap();
         assert!(output.status.success(), "{output:?}");
         let text = String::from_utf8(output.stdout).unwrap();
-        assert_eq!(text.contains(&failed_id), show_failure, "{text}");
+        assert_eq!(
+            text.contains(&failed.message_id.shown()),
+            show_failure,
+            "{text}"
+        );
         assert!(text.contains("1 recent failure: 1 errored"), "{text}");
     }
     for _ in 0..11 {

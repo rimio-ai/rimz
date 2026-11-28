@@ -498,7 +498,7 @@ fn a_hard_request_steers_the_command_into_a_busy_agent_and_continues_it_after() 
         format!(
             "compacting {} now ({}), then continues it if nothing else is waiting",
             fixture.named(),
-            command.message_id
+            command.message_id.shown()
         )
     );
     assert_eq!(
@@ -560,7 +560,7 @@ fn a_hard_request_steers_a_next_prompt_kind_the_command_and_continue_as_one_line
         format!(
             "compacting {} now ({}) with its continue on the same line",
             fixture.named(),
-            command.message_id
+            command.message_id.shown()
         )
     );
     assert_eq!(
@@ -851,7 +851,7 @@ fn a_hard_request_never_stops_an_agent_for_a_queued_compaction_with_premises() {
             format!(
                 "compaction {} is already queued for {named}; delivers at its next turn boundary, \
                  with no continue after",
-                hand_off.message_id
+                hand_off.message_id.shown()
             ),
             format!(
                 "--hard did not end {named}'s turn: the compaction already queued for it can be \
@@ -920,7 +920,7 @@ fn a_hard_request_falls_back_to_the_turn_end_and_names_why() {
         format!(
             "compacting {} ({})",
             resting_own.named(),
-            records[0].message_id
+            records[0].message_id.shown()
         ),
         "a resting agent's own request names no reason"
     );
@@ -967,7 +967,11 @@ fn a_hard_request_falls_back_to_the_turn_end_and_names_why() {
     assert_eq!(records.len(), 1, "{records:?}");
     assert_eq!(
         String::from_utf8_lossy(&output.stdout).trim_end(),
-        format!("compacting {} ({})", resting.named(), records[0].message_id)
+        format!(
+            "compacting {} ({})",
+            resting.named(),
+            records[0].message_id.shown()
+        )
     );
     assert_eq!(records[0].status, MessageStatus::Sent);
 }
@@ -996,7 +1000,7 @@ fn a_hard_request_joins_a_queued_compaction_and_types_it_now() {
             format!(
                 "compacting {} now ({}), then continues it if nothing else is waiting",
                 fixture.named(),
-                command.message_id
+                command.message_id.shown()
             )
         );
         let records = fixture.records();
@@ -1306,7 +1310,7 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
             receipt.trim_end(),
             format!(
                 "compaction {} is already queued for {}; delivers at its next turn boundary, then continues it if nothing else is waiting",
-                command.message_id,
+                command.message_id.shown(),
                 rimz::address::handle_with_name("@claude", command.agent_name.as_deref())
             )
         );
@@ -1348,7 +1352,7 @@ fn a_request_behind_a_waiting_compaction_joins_it_and_one_compaction_runs_before
         stderr.contains(&format!(
             "{}: compaction {} is already queued and has not been typed; an instruction cannot change its text — rerun without the instruction to join it",
             rimz::address::handle_with_name("@claude", fixture.agent().name.as_deref()),
-            command.message_id
+            command.message_id.shown()
         )) && !stderr.contains("never follows a compaction"),
         "{stderr}"
     );
@@ -2630,7 +2634,7 @@ fn waiting_compaction_is_typed_ahead_of_older_queued_prompt_and_message_settles_
             assert!(
                 shown["delivery"]["verdict"]
                     .as_str()
-                    .is_some_and(|v| v.contains(command.message_id.as_str())),
+                    .is_some_and(|v| v.contains(&command.message_id.shown())),
                 "verdict must name the compaction command: {shown}"
             );
             // Cancel the second notice so the rest of the test checks a single digest.
@@ -2863,7 +2867,7 @@ fn prompts_around_a_queued_continue_batch_ahead_of_it_and_fresh_send_is_not_park
         stdout.starts_with("sent to "),
         "fresh send must deliver live instead of parking behind a queued continue: {stdout}"
     );
-    let fresh_id = MessageId::parse(&sent_id_from_stdout(&send_out.stdout)).unwrap();
+    let fresh_id = MessageId::parse(&sent_id_from_stdout(&fixture.env, &send_out.stdout)).unwrap();
     assert_eq!(fixture.status_of(&fresh_id), MessageStatus::Sent);
     assert_eq!(
         fixture.status_of(&continuation.message_id),
@@ -2902,7 +2906,7 @@ fn prompts_around_a_queued_continue_batch_ahead_of_it_and_fresh_send_is_not_park
     );
     let parked_stdout = String::from_utf8_lossy(&parked_out.stdout);
     assert!(
-        parked_stdout.contains(&format!("behind {}", continuation.message_id)),
+        parked_stdout.contains(&format!("behind {}", continuation.message_id.shown())),
         "fresh send must park behind an in-flight continue: {parked_stdout}"
     );
 }

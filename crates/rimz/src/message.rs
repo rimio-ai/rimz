@@ -93,6 +93,7 @@ pub fn interrupt_withheld_detail(
     pressed: bool,
     message_id: &crate::ids::MessageId,
 ) -> String {
+    let message_id = message_id.shown();
     if pressed {
         format!("interrupted, text not sent: {cause}; send it: rimz message steer {message_id}")
     } else {

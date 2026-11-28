@@ -43,12 +43,16 @@ pub(super) fn edit_from_flags(flags: EditFlags) -> Result<MessageEdit> {
 }
 
 pub(super) fn edit_message(
-    message_id: MessageId,
+    token: MessageToken,
     flags: EditFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let Some(message_id) = named_message(store, &token)? else {
+        bail!("message {token} not found");
+    };
+    let shown = message_id.shown();
     let edit = edit_from_flags(flags)?;
     let fields = edit.changed_fields();
     if fields.is_empty() {
@@ -58,30 +62,34 @@ pub(super) fn edit_message(
         EditOutcome::Edited(_) => {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("edited {message_id} ({})", fields.join(", "));
+                println!("edited {shown} ({})", fields.join(", "));
             }
             Ok(())
         }
         EditOutcome::NotOpen(MessageStatus::Claimed) => {
-            bail!("{message_id} delivery in progress; retry in a moment")
+            bail!("{shown} delivery in progress; retry in a moment")
         }
         EditOutcome::NotOpen(status) if status.is_terminal() => {
-            bail!("{message_id} is {status}; use `rimz message requeue {message_id}`")
+            bail!("{shown} is {status}; use `rimz message requeue {shown}`")
         }
         EditOutcome::NotOpen(status) => {
-            bail!("{message_id} is {status}; only queued messages can be edited")
+            bail!("{shown} is {status}; only queued messages can be edited")
         }
-        EditOutcome::NotFound => bail!("message {message_id} not found"),
+        EditOutcome::NotFound => bail!("message {token} not found"),
     }
 }
 
 pub(super) fn push_queued_message(
-    message_id: MessageId,
+    token: MessageToken,
     policy: deliver::DeliveryPolicy,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let Some(message_id) = named_message(store, &token)? else {
+        bail!("message {token} not found");
+    };
+    let shown = message_id.shown();
     let messages = store.list_messages()?;
     let Some(record) = messages
         .iter()
@@ -93,19 +101,19 @@ pub(super) fn push_queued_message(
             .find(|record| record.message_id == message_id)
         {
             bail!(
-                "{message_id} is {}; use `rimz message requeue {message_id}`",
+                "{shown} is {}; use `rimz message requeue {shown}`",
                 history.status
             );
         }
-        bail!("message {message_id} not found");
+        bail!("message {token} not found");
     };
     match record.status {
         MessageStatus::Queued => {}
-        MessageStatus::Claimed => bail!("{message_id} delivery in progress; retry in a moment"),
+        MessageStatus::Claimed => bail!("{shown} delivery in progress; retry in a moment"),
         status if status.is_terminal() => {
-            bail!("{message_id} is {status}; use `rimz message requeue {message_id}`")
+            bail!("{shown} is {status}; use `rimz message requeue {shown}`")
         }
-        status => bail!("{message_id} is {status}; only queued messages can be steered"),
+        status => bail!("{shown} is {status}; only queued messages can be steered"),
     }
     let snapshot = ctx.fold_agent_context(ctx.resolution_snapshot()?);
     let label = message_target_for_record(record, &snapshot);
@@ -115,7 +123,7 @@ pub(super) fn push_queued_message(
         let named = rimz::address::handle_with_name(&label, record.agent_name.as_deref());
         #[expect(clippy::print_stdout, reason = "command result")]
         {
-            println!("sent to {named} ({message_id})");
+            println!("sent to {named} ({shown})");
         }
         send::report_interrupt_confirmation(&label, &named, interrupt);
         return Ok(());
@@ -153,7 +161,7 @@ pub(super) fn push_queued_message(
     {
         bail!(
             "{}",
-            render_verdict(verdict, &label, None, Timestamp::now())
+            render_verdict(verdict, &label, None, Timestamp::now(), false)
         );
     }
     let messages = store.list_messages()?;
@@ -161,7 +169,7 @@ pub(super) fn push_queued_message(
         .iter()
         .find(|record| record.message_id == message_id)
     else {
-        bail!("message {message_id} is no longer queued");
+        bail!("message {shown} is no longer queued");
     };
     let check = deliver::explain(
         record,
@@ -174,12 +182,16 @@ pub(super) fn push_queued_message(
 }
 
 pub(super) fn requeue_message(
-    message_id: MessageId,
+    token: MessageToken,
     flags: EditFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
+    let Some(message_id) = named_message(store, &token)? else {
+        bail!("message {token} not found");
+    };
+    let shown = message_id.shown();
     let record = if let Some(record) = store
         .list_message_history()?
         .into_iter()
@@ -196,39 +208,39 @@ pub(super) fn requeue_message(
         .into_iter()
         .any(|row| row.message_id == message_id)
     {
-        bail!("message {message_id} content is not retained; send a new message instead");
+        bail!("message {shown} content is not retained; send a new message instead");
     } else {
-        bail!("message {message_id} not found");
+        bail!("message {token} not found");
     };
     if record.soft_compact == Some(rimz::store::message::SoftCompactStep::WrapUp) {
-        bail!("{message_id} is a steer-only smart-compaction reminder and is never requeued");
+        bail!("{shown} is a steer-only smart-compaction reminder and is never requeued");
     }
     if !record.status.is_terminal() {
         if matches!(
             record.status,
             MessageStatus::Queued | MessageStatus::Claimed
         ) {
-            bail!("{message_id} is still queued; use `rimz message edit` or `rimz message steer`");
+            bail!("{shown} is still queued; use `rimz message edit` or `rimz message steer`");
         }
         bail!(
-            "{message_id} is {}; wait for it to finish before requeueing",
+            "{shown} is {}; wait for it to finish before requeueing",
             record.status
         );
     }
     if record.text.is_empty() {
-        bail!("message {message_id} content is not retained; send a new message instead");
+        bail!("message {shown} content is not retained; send a new message instead");
     }
     let edit = edit_from_flags(flags)?;
     let mut copy = MessageRecord::requeue_from(&record);
     edit.apply(&mut copy);
-    let new_id = copy.message_id.clone();
+    let new_id = copy.message_id.shown();
     store.queue_message(&copy, &workspace.session_name)?;
     let snapshot = store.snapshot_cached().context("reading agent snapshot")?;
     let label = message_target_for_record(&copy, &snapshot);
     #[expect(clippy::print_stdout, reason = "command result")]
     {
         println!(
-            "queued for {} ({new_id})  (from {message_id})",
+            "queued for {} ({new_id})  (from {shown})",
             rimz::address::handle_with_name(&label, copy.agent_name.as_deref())
         );
     }
@@ -245,21 +257,24 @@ pub(super) fn message_target_for_record(
     scoped_handle(message_target(&row, &agents), lane)
 }
 
-pub(super) fn cancel_messages(message_ids: Vec<MessageId>, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn cancel_messages(tokens: Vec<MessageToken>, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let (workspace, store) = (&ctx.workspace, &ctx.store);
     let mut failed = false;
-    for message_id in message_ids {
-        if store.cancel_message(&message_id, &workspace.session_name, "cancel")? {
+    for token in tokens {
+        let message_id = named_message(store, &token)?;
+        if let Some(message_id) = message_id
+            && store.cancel_message(&message_id, &workspace.session_name, "cancel")?
+        {
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("canceled {message_id}");
+                println!("canceled {}", message_id.shown());
             }
         } else {
             failed = true;
             #[expect(clippy::print_stdout, reason = "command result")]
             {
-                println!("{message_id} cannot be canceled");
+                println!("{token} cannot be canceled");
             }
         }
     }
@@ -317,7 +332,7 @@ pub(super) fn clear_messages(
 pub(super) fn print_canceled_summary(scope: &str, canceled: &[MessageRecord]) {
     let ids: Vec<String> = canceled
         .iter()
-        .map(|message| message.message_id.to_string())
+        .map(|message| message.message_id.shown())
         .collect();
     #[expect(clippy::print_stdout, reason = "final user-facing message")]
     {

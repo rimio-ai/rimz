@@ -354,6 +354,7 @@ fn human_table_routes_all_ask_kinds_and_child_to_root() {
         .unwrap()["ask_id"]
         .as_str()
         .unwrap();
+    let child_id = &format!("ask_{}", &child_id[child_id.len() - 8..]);
     let output = env.rimz().args(["asks"]).bounded_output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.starts_with("AGENT"), "{stdout}");
@@ -385,7 +386,7 @@ fn not_asking_and_unknown_id_share_wording_but_keep_exit_codes() {
         .status
         .success()
     );
-    for target in ["@claude", "ask_0000000000000000"] {
+    for target in ["@claude", "ask_0000000000000000", "ask_00000000"] {
         let shown = env
             .rimz()
             .args(["asks", "show", target])
@@ -536,9 +537,15 @@ fn asks_lists_and_shows_structured_question_json() {
     assert_eq!(ask["questions"][0]["options"][0]["mutates_trust"], false);
 
     let ask_id = ask["ask_id"].as_str().expect("ask id");
+    assert_eq!(
+        ask_id.len(),
+        "ask_".len() + 16,
+        "--json keeps the stored id: {ask}"
+    );
+    let token = format!("ask_{}", &ask_id[ask_id.len() - 8..]);
     let output = env
         .rimz()
-        .args(["asks", "show", ask_id, "--json"])
+        .args(["asks", "show", &token, "--json"])
         .bounded_output()
         .expect("show ask");
     assert!(
@@ -562,6 +569,8 @@ fn asks_lists_and_shows_structured_question_json() {
         String::from_utf8_lossy(&output.stderr)
     );
     let shown = String::from_utf8(output.stdout).expect("human ask");
+    assert!(shown.starts_with(&token), "{shown}");
+    assert!(!shown.contains(ask_id), "{shown}");
     assert!(
         shown.contains("▌ A staged rollout limits the blast radius."),
         "{shown}"
@@ -1478,6 +1487,26 @@ fn subagent_ask_lists_with_parent_and_answers_through_parent_pane() {
         stdout.contains(&format!("Explore (via {parent}): allow")),
         "{stdout}"
     );
+    let token = format!("ask_{}", &ask_id[ask_id.len() - 8..]);
+    assert!(
+        stdout.trim_end().ends_with(&format!("  {token}")),
+        "{stdout}"
+    );
+    let output = env
+        .rimz()
+        .args(["answer", &token, "allow", "--no-wait", "--mux", "tmux"])
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .env("RIMZ_TEST_MUX_LOG", &log)
+        .env("PATH", path_with_front(&bin))
+        .bounded_output()
+        .expect("answer child ask by its shown id");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let sent = std::fs::read_to_string(&log).expect("tmux trace");
+    assert_eq!(sent.matches("send-keys -l -t %7 -- 1").count(), 2, "{sent}");
 }
 
 #[test]

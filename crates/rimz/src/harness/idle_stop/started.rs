@@ -429,7 +429,7 @@ impl<'a> List<'a> {
         for message in conversation {
             self.started.holding.push(StartedRow {
                 kind: RowKind::Message,
-                name: message.message_id.to_string(),
+                name: message.message_id.shown(),
                 status: message.status.as_str().to_owned(),
                 tone: AgentStatus::Sleeping,
                 phase: TurnPhase::Idle,
@@ -439,10 +439,13 @@ impl<'a> List<'a> {
                 detail: Vec::new(),
                 // A message on its way into the pane is past canceling.
                 key: None,
-                command: message
-                    .status
-                    .is_open()
-                    .then(|| format!("{} message cancel {}", self.seat.rimz, message.message_id)),
+                command: message.status.is_open().then(|| {
+                    format!(
+                        "{} message cancel {}",
+                        self.seat.rimz,
+                        message.message_id.shown()
+                    )
+                }),
             });
         }
         // RimZ's own text stays behind one count, as `agents show` lists it.

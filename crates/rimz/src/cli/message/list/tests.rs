@@ -18,8 +18,8 @@ fn machine_repeats_keep_the_newest_id_age_and_snippet() {
 
     assert_eq!(output.matches(" → ").count(), 1, "{output}");
     assert!(output.contains("delivered ×2  3m ago"), "{output}");
-    assert!(output.contains(newest.message_id.as_str()), "{output}");
-    assert!(!output.contains(oldest.message_id.as_str()), "{output}");
+    assert!(output.contains(&newest.message_id.shown()), "{output}");
+    assert!(!output.contains(&oldest.message_id.shown()), "{output}");
     assert!(output.contains("over 14m · newest keepalive"), "{output}");
     assert!(!output.contains("older keepalive"), "{output}");
 }

@@ -191,7 +191,7 @@ fn printed_raised_answer_targets_its_ask_even_with_a_native_prompt() {
             String::from_utf8_lossy(&output.stderr).contains("asks \"Which option?\""),
             "the printed command must resolve the raised question, not the native prompt: {output:?}"
         );
-        assert_eq!(target, id.as_str());
+        assert_eq!(target, id.shown());
     }
 }
 
@@ -239,7 +239,7 @@ fn show_prints_a_single_raised_question_once() {
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert_eq!(stdout.matches("Which option?").count(), 1, "{stdout}");
     assert!(
-        stdout.contains(&format!("rimz answer {id} --text")),
+        stdout.contains(&format!("rimz answer {} --text", id.shown())),
         "{stdout}"
     );
 }
@@ -372,7 +372,10 @@ fn outside_raise_lists_its_text_as_brief_and_context_and_withdrawal_audit() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("full context"), "{stdout}");
     assert!(
-        stdout.contains(&format!("rimz answer {id} --text")),
+        stdout.contains(&format!(
+            "rimz answer {} --text",
+            rimz::ids::AskId::parse(id).unwrap().shown()
+        )),
         "{stdout}"
     );
     let snapshot = env.store().snapshot_cached().unwrap();
@@ -591,7 +594,7 @@ fn raised_answer_enqueues_the_text_from_the_caller_then_closes_with_one_audit() 
                 rimz::store::message::MessageSender::Human
             ));
         }
-        assert!(String::from_utf8_lossy(&output.stdout).contains(messages[0].message_id.as_str()));
+        assert!(String::from_utf8_lossy(&output.stdout).contains(&messages[0].message_id.shown()));
         assert!(
             rimz::store::raised::read(env.store().paths())
                 .asks

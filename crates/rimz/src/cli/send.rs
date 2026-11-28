@@ -156,92 +156,105 @@ pub(crate) fn render_dispatch_outcome(
                 ..
             },
         ) => {
+            let message_id = message_id.shown();
             return Some(format!(
                 "queued for {named} ({message_id}): delivery deferred; send now: rimz message interrupt {message_id}"
             ));
         }
         (DeliveryKind::Steer, DispatchOutcome::CompactionPending { message_id, .. }) => {
             return Some(format!(
-                "queued for {named} ({message_id}; waiting for compaction)"
+                "queued for {named} ({}; waiting for compaction)",
+                message_id.shown()
             ));
         }
         _ => {}
     }
     match outcome {
-        DispatchOutcome::Sent { message_id, .. } => Some(format!("sent to {named} ({message_id})")),
+        DispatchOutcome::Sent { message_id, .. } => {
+            Some(format!("sent to {named} ({})", message_id.shown()))
+        }
         DispatchOutcome::Queued {
             label,
-            message_id,
+            message_id: id,
             reason,
             ..
-        } => Some(match reason {
-            Some(ParkReason::TypingHeld { until }) => format!(
-                "held for {named} ({message_id}) — {}",
-                typing_hold_detail(*until)
-            ),
-            Some(ParkReason::Status(status)) => format!(
-                "queued for {named} ({message_id}) — {named} is {}; send now: rimz message steer {message_id}",
-                status.as_str()
-            ),
-            Some(ParkReason::WaitingOnPrompt) => format!(
-                "queued for {named} ({message_id}) — {named} has a prompt open and will not read this until it is answered\n  see it: rimz asks show {label}      answer it: rimz answer {label} <choice>"
-            ),
-            Some(ParkReason::PaneHeld) => format!(
-                "queued for {named} ({message_id}) — {named} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture {label}      send now: rimz message steer {message_id} --force"
-            ),
-            Some(ParkReason::Scheduled(time)) => format!(
-                "queued for {named} ({message_id}) — opens {} ({})",
-                super::render::rel_until(*time, jiff::Timestamp::now()),
-                time.strftime("%Y-%m-%dT%H:%M:%SZ")
-            ),
-            Some(ParkReason::After(address)) => {
-                format!("queued for {named} ({message_id}) — after {address}")
+        } => Some({
+            let message_id = id.shown();
+            match reason {
+                Some(ParkReason::TypingHeld { until }) => format!(
+                    "held for {named} ({message_id}) — {}",
+                    typing_hold_detail(*until)
+                ),
+                Some(ParkReason::Status(status)) => format!(
+                    "queued for {named} ({message_id}) — {named} is {}; send now: rimz message steer {message_id}",
+                    status.as_str()
+                ),
+                Some(ParkReason::WaitingOnPrompt) => format!(
+                    "queued for {named} ({message_id}) — {named} has a prompt open and will not read this until it is answered\n  see it: rimz asks show {label}      answer it: rimz answer {label} <choice>"
+                ),
+                Some(ParkReason::PaneHeld) => format!(
+                    "queued for {named} ({message_id}) — {named} ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture {label}      send now: rimz message steer {message_id} --force"
+                ),
+                Some(ParkReason::Scheduled(time)) => format!(
+                    "queued for {named} ({message_id}) — opens {} ({})",
+                    super::render::rel_until(*time, jiff::Timestamp::now()),
+                    time.strftime("%Y-%m-%dT%H:%M:%SZ")
+                ),
+                Some(ParkReason::After(address)) => {
+                    format!("queued for {named} ({message_id}) — after {address}")
+                }
+                Some(ParkReason::When {
+                    address,
+                    status,
+                    dwell_secs,
+                }) => format!(
+                    "queued for {named} ({message_id}) — when {address} {} {}",
+                    status.as_str(),
+                    rimz::store::message::format_dwell(*dwell_secs)
+                ),
+                Some(ParkReason::Behind(blocker)) => {
+                    format!(
+                        "queued for {named} ({message_id}) — behind {}",
+                        blocker.shown()
+                    )
+                }
+                Some(ParkReason::ModelHeld(hold)) => {
+                    format!("queued for {named} ({message_id}) — {hold}")
+                }
+                Some(ParkReason::NoPane) => {
+                    format!("queued for {named} ({message_id}) — no live pane")
+                }
+                Some(ParkReason::InterruptWithheld { cause, pressed }) => format!(
+                    "queued for {named} ({message_id}) — {}",
+                    rimz::message::interrupt_withheld_detail(cause, *pressed, id)
+                ),
+                Some(ParkReason::NotHosted { blocker }) => format!(
+                    "queued for {named} ({message_id}) — {}",
+                    blocker.strip_prefix("stuck: ").unwrap_or(blocker)
+                ),
+                None => format!("queued for {named} ({message_id})"),
+                Some(ParkReason::ProviderStarting) => format!(
+                    "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer {message_id}"
+                ),
+                Some(ParkReason::Resuming {
+                    register_by,
+                    start: ResumeStart::Reported,
+                    ..
+                }) => format!(
+                    "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts a session; fails if none has started by {register_by}"
+                ),
+                Some(ParkReason::Resuming {
+                    register_by,
+                    start: ResumeStart::Timed,
+                    ..
+                }) => format!(
+                    "queued for {named} ({message_id}) — {named} is resuming; delivers one delivery window after its pane comes up; fails if it has not come up by {register_by}"
+                ),
             }
-            Some(ParkReason::When {
-                address,
-                status,
-                dwell_secs,
-            }) => format!(
-                "queued for {named} ({message_id}) — when {address} {} {}",
-                status.as_str(),
-                rimz::store::message::format_dwell(*dwell_secs)
-            ),
-            Some(ParkReason::Behind(blocker)) => {
-                format!("queued for {named} ({message_id}) — behind {blocker}")
-            }
-            Some(ParkReason::ModelHeld(hold)) => {
-                format!("queued for {named} ({message_id}) — {hold}")
-            }
-            Some(ParkReason::NoPane) => format!("queued for {named} ({message_id}) — no live pane"),
-            Some(ParkReason::InterruptWithheld { cause, pressed }) => format!(
-                "queued for {named} ({message_id}) — {}",
-                rimz::message::interrupt_withheld_detail(cause, *pressed, message_id)
-            ),
-            Some(ParkReason::NotHosted { blocker }) => format!(
-                "queued for {named} ({message_id}) — {}",
-                blocker.strip_prefix("stuck: ").unwrap_or(blocker)
-            ),
-            None => format!("queued for {named} ({message_id})"),
-            Some(ParkReason::ProviderStarting) => format!(
-                "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer {message_id}"
-            ),
-            Some(ParkReason::Resuming {
-                register_by,
-                start: ResumeStart::Reported,
-                ..
-            }) => format!(
-                "queued for {named} ({message_id}) — {named} is resuming; delivers once its provider starts a session; fails if none has started by {register_by}"
-            ),
-            Some(ParkReason::Resuming {
-                register_by,
-                start: ResumeStart::Timed,
-                ..
-            }) => format!(
-                "queued for {named} ({message_id}) — {named} is resuming; delivers one delivery window after its pane comes up; fails if it has not come up by {register_by}"
-            ),
         }),
         DispatchOutcome::CompactionPending { message_id, .. } => Some(format!(
-            "compacting {named}; queued {message_id} (delivers when compaction completes)"
+            "compacting {named}; queued {} (delivers when compaction completes)",
+            message_id.shown()
         )),
         DispatchOutcome::SkippedWaiting { .. } => None,
     }
@@ -353,12 +366,13 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
             DispatchOutcome::Sent {
                 label, message_id, ..
             } => {
-                sent.push(format!("{named} ({message_id})"));
+                sent.push(format!("{named} ({})", message_id.shown()));
                 sent_labels.push(label.as_str());
             }
             DispatchOutcome::Queued {
                 message_id, reason, ..
             } => {
+                let message_id = message_id.shown();
                 queued.push(match reason {
                     Some(ParkReason::TypingHeld { until }) => format!(
                         "{named} ({message_id}; held: {})",
@@ -368,10 +382,13 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
                 });
             }
             DispatchOutcome::CompactionPending { message_id, .. } => {
-                queued.push(format!("{named} ({message_id}; waiting for compaction)"));
+                queued.push(format!(
+                    "{named} ({}; waiting for compaction)",
+                    message_id.shown()
+                ));
             }
             DispatchOutcome::SkippedWaiting { message_id, .. } => {
-                pending.push(format!("{named} ({message_id})"));
+                pending.push(format!("{named} ({})", message_id.shown()));
             }
         }
     }
@@ -405,7 +422,11 @@ fn report_steer(target: &str, outcomes: &[DispatchOutcome], compacted: &[String]
                     message_id, reason, ..
                 },
             ) => {
-                bail!("{} ({message_id}) {reason}", named_target(outcome))
+                bail!(
+                    "{} ({}) {reason}",
+                    named_target(outcome),
+                    message_id.shown()
+                )
             }
             Some(DispatchOutcome::CompactionPending { .. }) => {
                 unreachable!("compaction-pending outcomes are included in queued summary")
@@ -628,7 +649,7 @@ mod tests {
                 }
             )
             .as_deref(),
-            Some("sent to @coder (msg_0123456789abcdef)")
+            Some("sent to @coder (msg_89abcdef)")
         );
         assert_eq!(
             render_dispatch_outcome(
@@ -639,7 +660,7 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder is running; send now: rimz message steer msg_0123456789abcdef"
+                "queued for @coder (msg_89abcdef) — @coder is running; send now: rimz message steer msg_89abcdef"
             )
         );
         assert_eq!(
@@ -649,19 +670,19 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>"
+                "queued for @coder (msg_89abcdef) — @coder has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder      answer it: rimz answer @coder <choice>"
             )
         );
         assert_eq!(
             render_dispatch_outcome(DeliveryKind::Boundary, &outcome(Some(ParkReason::PaneHeld)))
                 .as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture @coder      send now: rimz message steer msg_0123456789abcdef --force"
+                "queued for @coder (msg_89abcdef) — @coder ended its turn on a provider error; its pane is held until its next activity in case a background approval is still open\n  check it: rimz pane capture @coder      send now: rimz message steer msg_89abcdef --force"
             )
         );
         assert_eq!(
             render_dispatch_outcome(DeliveryKind::Boundary, &outcome(None)).as_deref(),
-            Some("queued for @coder (msg_0123456789abcdef)")
+            Some("queued for @coder (msg_89abcdef)")
         );
         assert_eq!(
             render_dispatch_outcome(
@@ -670,7 +691,7 @@ mod tests {
             )
             .as_deref(),
             Some(
-                "queued for @coder (msg_0123456789abcdef) — @coder is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_0123456789abcdef"
+                "queued for @coder (msg_89abcdef) — @coder is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_89abcdef"
             )
         );
     }
@@ -689,7 +710,7 @@ mod tests {
         };
         assert_eq!(
             render(&outcome("coder", None)),
-            "queued for @coder#auth (msg_0123456789abcdef)"
+            "queued for @coder#auth (msg_89abcdef)"
         );
         assert_eq!(
             render(&DispatchOutcome::Sent {
@@ -698,15 +719,15 @@ mod tests {
                 message_id: message_id.clone(),
                 interrupt: InterruptConfirmation::NotChecked,
             }),
-            "sent to @coder#auth (@round-binder) (msg_0123456789abcdef)"
+            "sent to @coder#auth (@round-binder) (msg_89abcdef)"
         );
         assert_eq!(
             render(&outcome("round-binder", Some(ParkReason::WaitingOnPrompt))),
-            "queued for @coder#auth (@round-binder) (msg_0123456789abcdef) — @coder#auth (@round-binder) has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder#auth      answer it: rimz answer @coder#auth <choice>"
+            "queued for @coder#auth (@round-binder) (msg_89abcdef) — @coder#auth (@round-binder) has a prompt open and will not read this until it is answered\n  see it: rimz asks show @coder#auth      answer it: rimz answer @coder#auth <choice>"
         );
         assert_eq!(
             render(&outcome("round-binder", Some(ParkReason::ProviderStarting))),
-            "queued for @coder#auth (@round-binder) (msg_0123456789abcdef) — @coder#auth (@round-binder) is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_0123456789abcdef"
+            "queued for @coder#auth (@round-binder) (msg_89abcdef) — @coder#auth (@round-binder) is resuming; delivers once its provider starts or the provider-start hold ends; send now: rimz message steer msg_89abcdef"
         );
         assert_eq!(
             render(&DispatchOutcome::CompactionPending {
@@ -714,7 +735,7 @@ mod tests {
                 name: Some("round-binder".to_owned()),
                 message_id: message_id.clone(),
             }),
-            "compacting @coder#auth (@round-binder); queued msg_0123456789abcdef (delivers when compaction completes)"
+            "compacting @coder#auth (@round-binder); queued msg_89abcdef (delivers when compaction completes)"
         );
         let outcomes = [outcome("round-binder", None)];
         assert_eq!(
@@ -737,9 +758,8 @@ mod tests {
                 start,
             }),
         };
-        let receipt = |cause: &str| {
-            format!("queued for @otter (msg_0123456789abcdef) — @otter is resuming; {cause}")
-        };
+        let receipt =
+            |cause: &str| format!("queued for @otter (msg_89abcdef) — @otter is resuming; {cause}");
         let pane_deadline = "fails if it has not come up by 2026-01-01T00:02:00Z";
         for kind in [
             DeliveryKind::Boundary,
@@ -792,10 +812,10 @@ mod tests {
             "opens due (1970-01-01T00:00:00Z)",
             "after @planner",
             "when @coder idle 58m",
-            "behind msg_0000000000000001",
+            "behind msg_00000001",
             "no live pane",
         ]
-        .map(|cause| format!("queued for @coder (msg_0123456789abcdef) — {cause}"));
+        .map(|cause| format!("queued for @coder (msg_89abcdef) — {cause}"));
         assert_eq!(actual, expected);
     }
 

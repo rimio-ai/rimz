@@ -452,8 +452,11 @@ fn messages_and_runs_on_their_way_hold_as_their_own_rows() {
         // Listing them ends nothing, so their row offers no command.
         let (name, command) = if message.sender.is_conversation() {
             (
-                message.message_id.to_string(),
-                Some(format!("rimz message cancel {}", message.message_id)),
+                message.message_id.shown(),
+                Some(format!(
+                    "rimz message cancel {}",
+                    message.message_id.shown()
+                )),
             )
         } else {
             ("1 system message".to_owned(), None)
@@ -485,7 +488,7 @@ fn messages_and_runs_on_their_way_hold_as_their_own_rows() {
     assert!(matches!(verdict, Verdict::Hold(_)), "{verdict:?}");
     assert_eq!(
         rows(&read.holding),
-        [(RowKind::Message, sent.message_id.as_str())]
+        [(RowKind::Message, sent.message_id.shown().as_str())]
     );
     assert_eq!(read.holding[0].command, None);
     drop(dir);

@@ -341,7 +341,7 @@ fn show_ask_next_step(
             crate::cli::ask_commands::AskCommands {
                 detail: &detail,
                 pane: handle,
-                target: handle,
+                target: handle.to_owned(),
             }
             .next_step()
         }),

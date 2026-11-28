@@ -18,7 +18,9 @@ use super::usage::{UsageError, shell_command};
 use crate::cli::render;
 use rimz::address::LaneSelector;
 use rimz::agents::AgentState;
-use rimz::ids::{AgentKind, AgentSessionId, LaneName, MessageId, PaneId, WorkspaceId};
+use rimz::ids::{
+    AgentKind, AgentSessionId, LaneName, MessageId, MessageToken, PaneId, WorkspaceId,
+};
 use rimz::message::deliver;
 use rimz::message::dispatch::WhenRequest;
 use rimz::message::parse_schedule_at;
@@ -112,7 +114,7 @@ enum MessageSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::all_message_ids
         ))]
-        message_id: MessageId,
+        message_id: MessageToken,
         /// Emit JSON.
         #[arg(long)]
         json: bool,
@@ -122,7 +124,7 @@ enum MessageSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids
         ))]
-        message_id: MessageId,
+        message_id: MessageToken,
         #[command(flatten)]
         edit: EditFlags,
     },
@@ -131,7 +133,7 @@ enum MessageSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids
         ))]
-        message_id: MessageId,
+        message_id: MessageToken,
         /// Type the text into the pane even while a prompt is open there. The prompt receives the keystrokes.
         #[arg(long)]
         force: bool,
@@ -141,7 +143,7 @@ enum MessageSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::queued_message_ids
         ))]
-        message_id: MessageId,
+        message_id: MessageToken,
         /// Also cancel a native prompt waiting for input.
         #[arg(long)]
         force: bool,
@@ -151,7 +153,7 @@ enum MessageSubcmd {
         #[arg(add = clap_complete::ArgValueCandidates::new(
             crate::cli::complete::all_message_ids
         ))]
-        message_id: MessageId,
+        message_id: MessageToken,
         #[command(flatten)]
         edit: EditFlags,
     },
@@ -164,7 +166,7 @@ enum MessageSubcmd {
             required = true,
             add = clap_complete::ArgValueCandidates::new(crate::cli::complete::queued_message_ids)
         )]
-        message_ids: Vec<MessageId>,
+        message_ids: Vec<MessageToken>,
     },
     /// Cancel open messages for an agent, or in the scoped channel.
     Clear {
@@ -521,6 +523,22 @@ use dispatch::*;
 use edit::*;
 use list::*;
 use show::*;
+
+/// The message a typed id names: a stored id as typed, read nowhere, which each command then
+/// looks up as it always has; else the newest record `rimz message list` projects whose shown
+/// form matches.
+fn named_message(store: &rimz::Store, token: &MessageToken) -> Result<Option<MessageId>> {
+    if let Ok(id) = MessageId::parse(&token.to_string()) {
+        return Ok(Some(id));
+    }
+    Ok(token
+        .newest(
+            projected_messages(store)?
+                .iter()
+                .map(|message| &message.message_id),
+        )
+        .cloned())
+}
 
 pub(crate) fn parse_gate(raw: &str) -> std::result::Result<DeliveryGate, String> {
     match raw {

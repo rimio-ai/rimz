@@ -2259,7 +2259,7 @@ fn ask_arms_with_the_brief_and_a_clean_end_opens_it_with_the_final_reply() {
     assert_ne!(first["id"], second["id"]);
     let asks = raised::read(env.store().paths()).asks;
     assert_eq!(asks.len(), 1, "the second call replaces the first");
-    assert_eq!(json!(asks[0].value.ask_id.as_str()), second["id"]);
+    assert_eq!(json!(asks[0].value.ask_id.shown()), second["id"]);
     assert_eq!(asks[0].value.state, RaisedAskState::Armed);
     assert_eq!(asks[0].value.raised_by.as_deref(), Some("@planner#main"));
     feed(
@@ -2271,7 +2271,7 @@ fn ask_arms_with_the_brief_and_a_clean_end_opens_it_with_the_final_reply() {
         .raised_ask
         .as_ref()
         .expect("a clean end opens the armed ask");
-    assert_eq!(json!(ask.ask_id.as_str()), second["id"]);
+    assert_eq!(json!(ask.ask_id.shown()), second["id"]);
     assert_eq!(ask.state, RaisedAskState::Open);
     assert_eq!(
         ask.text.as_deref(),
@@ -2411,7 +2411,15 @@ fn self_compact_owes_a_continue_by_default_and_honors_no_continue() {
             expected_len,
             "no_continue={no_continue}: {messages:?}"
         );
-        assert!(messages.iter().any(|m| m.body == MessageBody::Command));
+        let command = messages
+            .iter()
+            .find(|m| m.body == MessageBody::Command)
+            .expect("the compaction command");
+        assert_eq!(
+            receipt["message_id"],
+            json!(command.message_id.shown()),
+            "{receipt}"
+        );
         assert_eq!(
             messages
                 .iter()
@@ -4795,7 +4803,7 @@ fn message_parks_for_a_live_agent_and_reaches_an_ended_childs_resume() {
     let [record] = pending.as_slice() else {
         panic!("one queued record: {pending:?}");
     };
-    assert_eq!(rows[0]["message_id"], json!(record.message_id.as_str()));
+    assert_eq!(rows[0]["message_id"], json!(record.message_id.shown()));
     assert!(record.reply_wanted, "{record:?}");
     let bounces = || {
         env.read_events()

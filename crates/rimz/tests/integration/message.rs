@@ -955,7 +955,7 @@ fn a_forced_steer_retry_waits_for_the_open_prompt() {
                 ),
                 &case,
             );
-            let id = queued_id_from_stdout(&queued.stdout);
+            let id = queued_id_from_stdout(&env, &queued.stdout);
             open_permission_prompt(&env, kind);
             let mut command = rimz("first.log", &["message", "steer", &id]);
             if first == "queued failed" {
@@ -1296,24 +1296,53 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     let first = queue_add(&env, "@claude", "first task");
     let second = queue_add(&env, "@claude", "second task");
     let third = queue_add(&env, "@claude", "third task");
+    let shown = |id: &str| MessageId::parse(id).unwrap().shown();
     let missing = "msg_0000000000009999";
+    let missing_shown = "msg_00009999";
     let canceled = env
         .rimz()
-        .args(["message", "cancel", &first, missing, &second])
+        .args([
+            "message",
+            "cancel",
+            &shown(&first),
+            missing,
+            missing_shown,
+            &second,
+        ])
         .output()
         .expect("mixed cancel");
     assert!(!canceled.status.success(), "missing ID reports failure");
     let stdout = String::from_utf8_lossy(&canceled.stdout);
-    assert!(stdout.contains(&format!("canceled {first}")));
-    assert!(stdout.contains(&format!("{missing} cannot be canceled")));
-    assert!(stdout.contains(&format!("canceled {second}")));
+    assert!(
+        stdout.contains(&format!("canceled {}\n", shown(&first))),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("{missing} cannot be canceled")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("{missing_shown} cannot be canceled")),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains(&format!("canceled {}\n", shown(&second))),
+        "{stdout}"
+    );
+    assert!(
+        !stdout.contains(&first) && !stdout.contains(&second),
+        "{stdout}"
+    );
 
     let alias = queue_add(&env, "@claude", "alias task");
     let alias_output = run_success(
         env.rimz().args(["message", "remove", &alias]),
         "remove alias",
     );
-    assert!(String::from_utf8_lossy(&alias_output.stdout).contains(&format!("canceled {alias}")));
+    assert!(
+        String::from_utf8_lossy(&alias_output.stdout)
+            .contains(&format!("canceled {}", shown(&alias)))
+    );
 
     let cleared = run_success(
         env.rimz().args(["message", "clear", "@claude"]),
@@ -1321,7 +1350,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     );
     let cleared_stdout = String::from_utf8_lossy(&cleared.stdout);
     assert!(cleared_stdout.contains("canceled 1 message(s) for @claude"));
-    assert!(cleared_stdout.contains(&third));
+    assert!(cleared_stdout.contains(&shown(&third)), "{cleared_stdout}");
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     let canceled_ids = list_message_ids(
         &env,
@@ -1350,14 +1379,58 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
     );
     let stdout = String::from_utf8_lossy(&cleared.stdout);
     assert!(stdout.contains("canceled 1 message(s) in #docs"));
-    assert!(stdout.contains(&docs));
-    assert!(!stdout.contains(&docs_team));
+    assert!(stdout.contains(&shown(&docs)), "{stdout}");
+    assert!(!stdout.contains(&shown(&docs_team)), "{stdout}");
     let pending = env.store().list_pending_messages().unwrap();
     let pending_ids: Vec<&str> = pending
         .iter()
         .map(|message| message.message_id.as_str())
         .collect();
     assert_eq!(pending_ids, vec![docs_team.as_str(), ops.as_str()]);
+}
+
+#[test]
+fn a_shown_message_id_two_records_share_names_the_newer() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(&env, "sess-queue", "feature-q", &[]);
+    let snapshot = env.store().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.parent_agent_id.is_none())
+        .expect("agent");
+    let [older, newer] = [1, 2].map(|clock| {
+        let mut message = MessageRecord::new(
+            env.workspace_id.clone(),
+            agent,
+            format!("task {clock}"),
+            DeliveryGate::Done,
+        );
+        message.message_id = fixed_message_id(clock * 100_000_000 + 42);
+        env.store()
+            .queue_message(&message, "rimz-test")
+            .expect("queue message");
+        message.message_id
+    });
+    assert_eq!(older.shown(), newer.shown());
+    let canceled = run_success(
+        env.rimz().args(["message", "cancel", &newer.shown()]),
+        "cancel by shown id",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&canceled.stdout),
+        format!("canceled {}\n", newer.shown())
+    );
+    let history = env.store().list_message_history().expect("message history");
+    assert!(
+        history
+            .iter()
+            .any(|message| message.message_id == newer && message.status == MessageStatus::Canceled),
+        "{history:?}"
+    );
+    assert_eq!(message_by_id(&env, &older).status, MessageStatus::Queued);
 }
 
 #[test]
@@ -1898,7 +1971,7 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
         env.store().queue_message(&message, "rimz-test").unwrap();
         machine_ids.push(message.message_id.to_string());
     }
-    let newest = machine_ids.last().unwrap();
+    let newest = &short_id(machine_ids.last().unwrap());
     for (limit, expected_rows) in [("0", 2), ("1", 1)] {
         let shown = run_success(
             env.rimz().args([
@@ -1922,7 +1995,7 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
             assert!(text.contains("... 1 older messages hidden"), "{text}");
             assert!(!text.contains(&human), "{text}");
         } else {
-            assert!(text.contains(&human), "{text}");
+            assert!(text.contains(&short_id(&human)), "{text}");
         }
     }
     let all = list_message_ids(
@@ -1943,7 +2016,8 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
             &["message", "list", "--system", "--limit", "1", "--json"],
             Some("docs"),
         ),
-        vec![newest.clone()]
+        vec![machine_ids.last().unwrap().clone()],
+        "--json keeps the stored id"
     );
 
     let mut separate_ids = Vec::new();
@@ -1981,7 +2055,10 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
     let text = String::from_utf8_lossy(&shown.stdout);
     assert_eq!(text.matches(" → ").count(), 6, "{text}");
     assert!(text.contains("queued ×3"), "{text}");
-    assert!(separate_ids.iter().all(|id| text.contains(id)), "{text}");
+    assert!(
+        separate_ids.iter().all(|id| text.contains(&short_id(id))),
+        "{text}"
+    );
     let all = list_message_ids(
         &env,
         &["message", "list", "--system", "--limit", "0", "--json"],
@@ -2167,7 +2244,7 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
             .args(["message", "--schedule", "60m", "@claude", "--", "old text"]),
         "scheduled message",
     );
-    let message_id = queued_id_from_stdout(&queued.stdout);
+    let message_id = queued_id_from_stdout(&env, &queued.stdout);
 
     let edited = run_success(
         env.rimz().args([
@@ -2183,7 +2260,7 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
         "message edit",
     );
     let stdout = String::from_utf8_lossy(&edited.stdout);
-    assert!(stdout.contains(&format!("edited {message_id}")));
+    assert!(stdout.contains(&format!("edited {}", short_id(&message_id))));
     assert!(stdout.contains("text, gate, schedule"));
 
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -2242,7 +2319,10 @@ fn message_edit_and_requeue_enforce_record_lifecycle() {
             .args(["message", "requeue", &message_id, "--text", "try again"]),
         "requeue terminal record",
     );
-    assert!(String::from_utf8_lossy(&requeued.stdout).contains(&format!("(from {message_id})")));
+    assert!(
+        String::from_utf8_lossy(&requeued.stdout)
+            .contains(&format!("(from {})", short_id(&message_id)))
+    );
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_ne!(pending[0].message_id.as_str(), message_id);
@@ -2365,7 +2445,7 @@ fn receiver_end_tells_the_agent_sender_and_arms_the_wake_stamp() {
         "message_undelivered"
     );
     assert_eq!(notice.agent_id, sender.agent_id);
-    assert!(notice.text.contains(sent.message_id.as_str()));
+    assert!(notice.text.contains(&sent.message_id.shown()));
     assert!(notice.text.contains("receiver ended"));
     let stamp: Option<jiff::Timestamp> =
         serde_json::from_slice(&std::fs::read(wake_stamp_path(&env)).unwrap()).unwrap();
@@ -2393,7 +2473,7 @@ fn watched_agent_end_archives_unmet_when_message() {
         ]),
         "queue when message",
     );
-    let message_id = queued_id_from_stdout(&queued.stdout);
+    let message_id = queued_id_from_stdout(&env, &queued.stdout);
 
     run_hook(
         &env,
@@ -3099,16 +3179,20 @@ fn sweep_notifies_agent_senders_once_at_idle_and_busy_thresholds() {
         for record in [&first, &second] {
             let notice = queued
                 .iter()
-                .find(|notice| notice.text.contains(record.message_id.as_str()))
+                .find(|notice| notice.text.contains(&record.message_id.shown()))
                 .unwrap();
+            assert!(
+                !notice.text.contains(record.message_id.as_str()),
+                "{}",
+                notice.text
+            );
             assert_eq!(notice.agent_id, sender.agent_id);
             assert_eq!(notice.channel, sender.lane_name());
             assert!(notice.text.contains("stays queued"));
-            assert!(
-                notice
-                    .text
-                    .contains(&format!("rimz message cancel {}", record.message_id))
-            );
+            assert!(notice.text.contains(&format!(
+                "rimz message cancel {}",
+                record.message_id.shown()
+            )));
             assert!(notice.text.contains(if busy {
                 "busy in a turn"
             } else {
@@ -3607,11 +3691,12 @@ fn scheduled_message_parks_and_sweep_delivers_due_work() {
         ]),
         "scheduled message",
     );
-    let scheduled_id = queued_id_from_stdout(&scheduled.stdout);
+    let scheduled_id = queued_id_from_stdout(&env, &scheduled.stdout);
     let receipt = String::from_utf8_lossy(&scheduled.stdout);
     assert!(receipt.starts_with(&format!(
-        "queued for {} ({scheduled_id}) — opens in ",
-        named(&env, "sess-scheduled", "@claude#feature-scheduled")
+        "queued for {} ({}) — opens in ",
+        named(&env, "sess-scheduled", "@claude#feature-scheduled"),
+        short_id(&scheduled_id)
     )));
 
     let pending = env.store().list_pending_messages().expect("pending queue");
@@ -3787,7 +3872,7 @@ fn message_after_rejects_cycles_then_delivers_cross_agent_relay() {
             .args(["message", "@coder", "--after", "@planner", "read plan.md"]),
         "queue relay",
     );
-    let message_id = queued_id_from_stdout(&add.stdout);
+    let message_id = queued_id_from_stdout(&env, &add.stdout);
     let pending = env.store().list_pending_messages().expect("pending relay");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].after.len(), 1);
@@ -3996,10 +4081,11 @@ fn human_send_to_a_limit_paused_lazy_receiver_parks_on_the_pause() {
             "human send to a paused receiver",
         );
         let receipt = String::from_utf8_lossy(&output.stdout);
-        let message_id = queued_id_from_stdout(&output.stdout);
+        let message_id = queued_id_from_stdout(&env, &output.stdout);
         assert!(
             receipt.contains(&format!(
-                "is paused; send now: rimz message steer {message_id}"
+                "is paused; send now: rimz message steer {}",
+                short_id(&message_id)
             )),
             "{gate}: {receipt}"
         );
@@ -4296,7 +4382,7 @@ fn a_started_command_carries_root_when_the_reader_resolves_another_room() {
     own.arg("--root").arg(&env.project_root);
     assert_eq!(
         command_of(own),
-        format!("rimz message cancel {}", message.message_id),
+        format!("rimz message cancel {}", message.message_id.shown()),
         "the reader's own room needs no --root"
     );
     let mut shown = pinned();
@@ -9326,7 +9412,7 @@ fn assert_silent_resume_outcome(
                 notices
                     .iter()
                     .any(|notice| notice.agent_id.as_str() == "parent"
-                        && notice.text.contains(record.message_id.as_str())
+                        && notice.text.contains(&record.message_id.shown())
                         && notice.text.contains(&format!("Reason: {reason}\n"))),
                 "the parent must be told why {} failed:\n{context}",
                 record.message_id
@@ -9463,8 +9549,9 @@ fn message_steer_queued_record_respects_waiting_force_and_overrides_gate() {
     );
     let stdout = String::from_utf8_lossy(&steered.stdout);
     assert!(stdout.contains(&format!(
-        "sent to {} ({message_id})",
-        named(&env, "sess-steer-queued", "@claude")
+        "sent to {} ({})",
+        named(&env, "sess-steer-queued", "@claude"),
+        short_id(&message_id)
     )));
     assert_text_then_keys(&trace_log, &user_message("push now"), &["24", "19"]);
     assert_eq!(
@@ -9504,7 +9591,7 @@ fn turn_ended_reserved_pane_names_the_provider_error() {
     assert!(!queued.status.success());
     let stderr = String::from_utf8_lossy(&queued.stderr);
     assert!(
-        stderr.contains(&format!("@claude ({message_id}) {REASON}")),
+        stderr.contains(&format!("@claude ({}) {REASON}", short_id(&message_id))),
         "{stderr}"
     );
     assert!(!stderr.contains("waiting on your input"), "{stderr}");
@@ -9613,11 +9700,12 @@ fn a_refused_model_holds_every_message_kind_until_its_record_clears() {
             ),
             "{args:?}: {receipt}"
         );
-        receipt
+        let shown = receipt
             .split(['(', ')'])
             .find(|part| part.starts_with("msg_"))
             .expect("receipt names the message id")
-            .to_owned()
+            .to_owned();
+        stored_message_id(&env, &shown)
     };
     let held = [
         send(&["@claude", "--", "done gate"]),
@@ -9752,7 +9840,7 @@ fn steer_queues_when_durable_agent_has_no_live_pane() {
             .args(["message", "--steer", "@reviewer", "--", "please review"]),
         "steer durable fallback",
     );
-    let message_id = queued_id_from_stdout(&out.stdout);
+    let message_id = queued_id_from_stdout(&env, &out.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
@@ -10453,7 +10541,7 @@ fn reply_wanted_marks_the_header_and_confirms_under_its_sender() {
         ]),
         "marked steer",
     );
-    let message_id = sent_id_from_stdout(&out.stdout);
+    let message_id = sent_id_from_stdout(&env, &out.stdout);
     let payload = format!("{marked}Did it land?");
     assert_text_then_keys(
         &env.project_root.join("zellij-marked-steer.log"),
@@ -10800,7 +10888,7 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
         "send at open gate",
     );
     assert_single_sigil_sent(&sent.stdout);
-    let sent_id = sent_id_from_stdout(&sent.stdout);
+    let sent_id = sent_id_from_stdout(&env, &sent.stdout);
     assert!(env.store().list_pending_messages().unwrap().is_empty());
     assert_text_then_enter(&trace_log, &user_message("go"));
     let fresh = message_by_id(&env, &MessageId::parse(&sent_id).expect("message id"));
@@ -10832,12 +10920,13 @@ fn boundary_dispatch_sends_when_idle_then_parks_and_delivers_when_running() {
             .args(["message", "@claude", "--", "later"]),
         "queue while running",
     );
-    let queued_id = queued_id_from_stdout(&queued.stdout);
+    let queued_id = queued_id_from_stdout(&env, &queued.stdout);
     assert_eq!(
         String::from_utf8_lossy(&queued.stdout).trim(),
         format!(
-            "queued for {named} ({queued_id}) — {named} is running; send now: rimz message steer {queued_id}",
+            "queued for {named} ({id}) — {named} is running; send now: rimz message steer {id}",
             named = named(&env, "sess-boundary", "@claude#feature-boundary"),
+            id = short_id(&queued_id),
         )
     );
     assert_eq!(
@@ -10941,7 +11030,7 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
             .args(["message", "@claude", "--", "go"]),
         "send prompt at open gate",
     );
-    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).expect("message id");
     assert_text_then_enter(&trace_log, &user_message("go"));
     assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
     let writes_after_prompt = trace_lines(&trace_log).len();
@@ -10953,12 +11042,14 @@ fn boundary_slash_prompt_parks_behind_sent_prompt_until_turn_ends() {
             .args(["message", "@claude", "--", "/compact"]),
         "park slash prompt behind unacknowledged prompt",
     );
-    let command_id = queued_id_from_stdout(&parked.stdout);
+    let command_id = queued_id_from_stdout(&env, &parked.stdout);
     assert_eq!(
         String::from_utf8_lossy(&parked.stdout).trim(),
         format!(
-            "queued for {} ({command_id}) — behind {prompt_id}",
-            named(&env, "sess-sent-hold", "@claude#feature-sent-hold")
+            "queued for {} ({}) — behind {}",
+            named(&env, "sess-sent-hold", "@claude#feature-sent-hold"),
+            short_id(&command_id),
+            prompt_id.shown()
         )
     );
     let command_id = MessageId::parse(&command_id).expect("message id");
@@ -11059,12 +11150,13 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
         ]),
         "queue while running",
     );
-    let message_id = queued_id_from_stdout(&queued.stdout);
+    let message_id = queued_id_from_stdout(&env, &queued.stdout);
     assert_eq!(
         String::from_utf8_lossy(&queued.stdout).trim(),
         format!(
-            "queued for {named} ({message_id}) — {named} is running; send now: rimz message steer {message_id}",
+            "queued for {named} ({id}) — {named} is running; send now: rimz message steer {id}",
             named = named(&env, "sess-queue-hint", "@claude#feature-queue-hint"),
+            id = short_id(&message_id),
         )
     );
 
@@ -11078,8 +11170,9 @@ fn busy_queue_confirmation_points_to_the_record_steer_command() {
     assert_eq!(
         String::from_utf8_lossy(&steered.stdout).trim(),
         format!(
-            "sent to {} ({message_id})",
-            named(&env, "sess-queue-hint", "@claude")
+            "sent to {} ({})",
+            named(&env, "sess-queue-hint", "@claude"),
+            short_id(&message_id)
         )
     );
     assert_text_then_keys(
@@ -11115,7 +11208,7 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
             .args(["message", "@claude", "--", "go"]),
         "send prompt at open gate",
     );
-    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).expect("message id");
     assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
 
     let parked = run_success(
@@ -11125,12 +11218,14 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
             .args(["message", "@claude", "--", "second"]),
         "park behind unacknowledged prompt",
     );
-    let queued_id = queued_id_from_stdout(&parked.stdout);
+    let queued_id = queued_id_from_stdout(&env, &parked.stdout);
     assert_eq!(
         String::from_utf8_lossy(&parked.stdout).trim(),
         format!(
-            "queued for {} ({queued_id}) — behind {prompt_id}",
-            named(&env, "sess-steer-fifo", "@claude#feature-steer-fifo")
+            "queued for {} ({}) — behind {}",
+            named(&env, "sess-steer-fifo", "@claude#feature-steer-fifo"),
+            short_id(&queued_id),
+            prompt_id.shown()
         )
     );
     let lines = trace_lines(&trace_log);
@@ -11151,8 +11246,9 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
     assert_eq!(
         String::from_utf8_lossy(&steered.stdout).trim(),
         format!(
-            "sent to {} ({queued_id})",
-            named(&env, "sess-steer-fifo", "@claude")
+            "sent to {} ({})",
+            named(&env, "sess-steer-fifo", "@claude"),
+            short_id(&queued_id)
         )
     );
     let lines = trace_lines(&trace_log);
@@ -11181,7 +11277,8 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
             .args(["message", "--on", "any", "@claude", "--", "recover failed"]),
         "queue --on any prompt while running",
     );
-    let any_id = MessageId::parse(&queued_id_from_stdout(&parked_any.stdout)).expect("message id");
+    let any_id =
+        MessageId::parse(&queued_id_from_stdout(&env, &parked_any.stdout)).expect("message id");
     run_success(
         traced_rimz(&env, "zellij-steer-failed-trace.log")
             .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
@@ -11236,8 +11333,9 @@ fn steer_sends_a_record_queued_behind_an_unacknowledged_prompt() {
     assert_eq!(
         String::from_utf8_lossy(&steered.stdout).trim(),
         format!(
-            "sent to {} ({any_id})",
-            named(&env, "sess-steer-failed", "@claude")
+            "sent to {} ({})",
+            named(&env, "sess-steer-failed", "@claude"),
+            any_id.shown()
         )
     );
     assert!(
@@ -11577,7 +11675,10 @@ fn delivery_rechecks_run_end_between_scan_and_claim() {
         let exit_matches = if matches!(command, "steer" | "interrupt") {
             output.status.code() == Some(1)
                 && String::from_utf8_lossy(&output.stderr).trim()
-                    == format!("error: message {} is no longer queued", message.message_id)
+                    == format!(
+                        "error: message {} is no longer queued",
+                        message.message_id.shown()
+                    )
         } else {
             output.status.success()
         };
@@ -12418,7 +12519,7 @@ fn sweep_requeues_unconfirmed_send_now_message_and_redelivers() {
             .args(["message", "@claude", "--", "recover me"]),
         "send-now message",
     );
-    let message_id = sent_id_from_stdout(&out.stdout);
+    let message_id = sent_id_from_stdout(&env, &out.stdout);
     assert_text_then_enter(&first_trace, &user_message("recover me"));
     let first_last_sent_at =
         message_by_id(&env, &MessageId::parse(&message_id).expect("message id"))
@@ -12512,7 +12613,7 @@ fn sweep_holds_unconfirmed_prompt_while_resumed_codex_starts() {
             .args(["message", "@codex", "--", "start once"]),
         "send to starting Codex",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&output.stdout)).unwrap();
+    let message_id = MessageId::parse(&sent_id_from_stdout(&env, &output.stdout)).unwrap();
     assert_text_then_keys(&trace, &user_message("start once"), &["9"]);
     let sent = message_by_id(&env, &message_id);
     let window = Duration::from_secs(5);
@@ -12594,7 +12695,7 @@ fn sweep_holds_unconfirmed_prompt_while_ingress_is_pending() {
             .args(["message", "@claude", "--", "hold me"]),
         "send message",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&output.stdout)).unwrap();
+    let message_id = MessageId::parse(&sent_id_from_stdout(&env, &output.stdout)).unwrap();
     assert_text_then_enter(&trace, &user_message("hold me"));
     let store = env.store();
     let runtime = store.runtime_paths();
@@ -12727,7 +12828,7 @@ fn sweep_holds_unconfirmed_prompt_while_compaction_bracket_is_open() {
             .args(["message", "@claude", "--", "hold me"]),
         "send-now message",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&env, &out.stdout)).expect("message id");
     assert_text_then_enter(&first_trace, &user_message("hold me"));
 
     let workspace = env.resolve_workspace(&env.project_root);
@@ -12871,7 +12972,8 @@ fn mixed_submit_confirms_record_and_never_resends() {
             .args(["message", "@claude", "--", "report body"]),
         "queue while question is open",
     );
-    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    let message_id =
+        MessageId::parse(&queued_id_from_stdout(&env, &queued.stdout)).expect("message id");
     assert!(trace_lines(&queued_trace).is_empty());
     assert_eq!(
         message_by_id(&env, &message_id).status,
@@ -13013,7 +13115,8 @@ fn script_question_holds_the_seat_through_a_parked_stop_until_answered() {
             .args(["message", "@claude", "--", "team stalled"]),
         "queue while the script's question is open",
     );
-    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    let message_id =
+        MessageId::parse(&queued_id_from_stdout(&env, &queued.stdout)).expect("message id");
     let parked = message_by_id(&env, &message_id);
     assert_eq!(parked.gate, DeliveryGate::Done);
     assert_eq!(parked.status, MessageStatus::Queued);
@@ -13100,7 +13203,8 @@ fn parked_stop_releases_a_question_its_transcript_already_answered() {
             .args(["message", "@claude", "--", "after rejection"]),
         "queue while the question is open",
     );
-    let message_id = MessageId::parse(&queued_id_from_stdout(&queued.stdout)).expect("message id");
+    let message_id =
+        MessageId::parse(&queued_id_from_stdout(&env, &queued.stdout)).expect("message id");
     assert_eq!(message_by_id(&env, &message_id).gate, DeliveryGate::Done);
 
     let rejected = json!({
@@ -13223,7 +13327,7 @@ fn recover_pending_confirmation(recovery_command: &[&str]) {
         &env.project_root.join("ingress-recovery-send-trace.log"),
         &user_message("arrived once"),
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).unwrap();
+    let message_id = MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).unwrap();
     let last_sent_at = message_by_id(&env, &message_id).last_sent_at.unwrap();
     let mut command = env.hook_command("claude");
     scrub_launch_identity(&mut command);
@@ -13320,7 +13424,8 @@ fn late_ack_after_reconcile_window_still_settles_without_resend() {
             .args(["message", "@claude", "--", "arrived once"]),
         "send prompt",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let message_id =
+        MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).expect("message id");
     assert_text_then_enter(&sent_trace, &user_message("arrived once"));
     let last_sent_at = message_by_id(&env, &message_id)
         .last_sent_at
@@ -13412,7 +13517,8 @@ fn shortened_reconcile_window_preserves_prompt_for_late_correlated_ack() {
             .args(["message", "@claude", "--", "arrived once"]),
         "send prompt",
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let message_id =
+        MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).expect("message id");
     let first_live = env.store().list_messages().expect("messages");
     let first_record = first_live
         .iter()
@@ -13499,7 +13605,7 @@ fn send_now_write_failure_leaves_queued_record_for_sweep_retry() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let message_id = queued_id_from_stdout(&out.stdout);
+    let message_id = queued_id_from_stdout(&env, &out.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].message_id.as_str(), message_id);
@@ -13734,7 +13840,7 @@ fn assert_fresh_boundary_send_race(winner_sent: bool) {
     assert_eq!(lines.iter().filter(|line| is_enter_key(line)).count(), 1);
     let receipt = String::from_utf8_lossy(&loser_output.stdout);
     assert!(
-        receipt.contains(&format!("behind {}", held.message_id)),
+        receipt.contains(&format!("behind {}", held.message_id.shown())),
         "{receipt}"
     );
     assert_eq!(
@@ -13742,10 +13848,10 @@ fn assert_fresh_boundary_send_race(winner_sent: bool) {
         format!(
             "sent to {} ({})",
             named(&env, "sess-send-race", "@claude#send-race"),
-            held.message_id
+            held.message_id.shown()
         )
     );
-    let loser_id = MessageId::parse(&queued_id_from_stdout(&loser_output.stdout)).unwrap();
+    let loser_id = MessageId::parse(&queued_id_from_stdout(&env, &loser_output.stdout)).unwrap();
     assert!(loser_id.as_str() > held.message_id.as_str());
     let parked = message_by_id(&env, &loser_id);
     assert_eq!(parked.status, MessageStatus::Queued);
@@ -14061,7 +14167,7 @@ fn send_now_submit_failure_leaves_sent_record() {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    let message_id = MessageId::parse(&sent_id_from_stdout(&out.stdout)).expect("message id");
+    let message_id = MessageId::parse(&sent_id_from_stdout(&env, &out.stdout)).expect("message id");
     assert!(
         trace_lines(&trace_log)
             .iter()
@@ -14102,7 +14208,7 @@ fn queue_deliver_folds_provisional_message_to_registered_card_name() {
         ]),
         "message",
     );
-    let message_id = queued_id_from_stdout(&add.stdout);
+    let message_id = queued_id_from_stdout(&env, &add.stdout);
     let pending = env.store().list_pending_messages().expect("pending queue");
     assert_eq!(pending.len(), 1, "running launch card should park");
     assert_eq!(pending[0].agent_id.as_str(), "launch_deferred_fold");
@@ -15473,7 +15579,7 @@ fn agents_compact_reports_sibling_delivery_and_terminal_reasons() {
                 stderr.contains(&format!(
                     "{}: compaction {}: agent compacted before this compaction was typed",
                     rimz::address::handle_with_name("@claude", command.agent_name.as_deref()),
-                    command.message_id
+                    command.message_id.shown()
                 )) && !stderr.contains("never follows a compaction"),
                 "{stderr}"
             );
@@ -15690,7 +15796,7 @@ fn boundary_dispatch_parks_behind_a_claimed_record() {
         "park behind claim",
     );
     assert!(String::from_utf8_lossy(&output.stdout).starts_with("queued for @claude"));
-    let queued = queued_id_from_stdout(&output.stdout);
+    let queued = queued_id_from_stdout(&env, &output.stdout);
     assert_eq!(
         message_by_id(&env, &MessageId::parse(&queued).unwrap()).status,
         MessageStatus::Queued
@@ -16067,7 +16173,7 @@ fn synthetic_compaction_refusal_records_the_fifo_blocker() {
             .args(["message", "@claude", "--", "go"]),
         "send unacknowledged FIFO head",
     );
-    let prompt_id = MessageId::parse(&sent_id_from_stdout(&sent.stdout)).expect("message id");
+    let prompt_id = MessageId::parse(&sent_id_from_stdout(&env, &sent.stdout)).expect("message id");
     assert_eq!(message_by_id(&env, &prompt_id).status, MessageStatus::Sent);
     let writes_before_compact = trace_lines(&trace).len();
 
@@ -16948,7 +17054,7 @@ fn agents_compact_queues_for_a_running_agent() {
         String::from_utf8_lossy(&joined.stdout).trim_end(),
         format!(
             "compaction {} is already queued for {}; delivers at its next turn boundary, with no continue after",
-            command.message_id,
+            command.message_id.shown(),
             named(&env, "sess-queued-compact", "@claude")
         )
     );
@@ -18649,7 +18755,7 @@ fn append_lifecycle(
 
 fn queue_add(env: &Env, target: &str, text: &str) -> String {
     let out = run_success(env.rimz().args(["message", target, "--", text]), "message");
-    queued_id_from_stdout(&out.stdout)
+    queued_id_from_stdout(env, &out.stdout)
 }
 
 fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> String {
@@ -18658,7 +18764,7 @@ fn queue_add_in_channel(env: &Env, channel: &str, target: &str, text: &str) -> S
             .args(["message", "--channel", channel, target, "--", text]),
         "channel message",
     );
-    queued_id_from_stdout(&out.stdout)
+    queued_id_from_stdout(env, &out.stdout)
 }
 
 fn message_by_id(env: &Env, message_id: &MessageId) -> MessageRecord {
@@ -18841,10 +18947,32 @@ fn wait_with_output_bounded(
     }
 }
 
-fn queued_id_from_stdout(stdout: &[u8]) -> String {
+/// The stored id of the message a receipt names by its shown `msg_` form.
+fn stored_message_id(env: &Env, shown: &str) -> String {
+    assert_eq!(
+        shown.len(),
+        "msg_".len() + 8,
+        "receipts show the short form: {shown}"
+    );
+    let mut messages = env.store().list_messages().expect("messages");
+    messages.extend(env.store().list_message_history().expect("message history"));
+    messages
+        .into_iter()
+        .map(|message| message.message_id)
+        .find(|id| id.shown() == shown)
+        .unwrap_or_else(|| panic!("no message shown as {shown}"))
+        .to_string()
+}
+
+/// The shown form of the stored id `id`, as receipts print it.
+fn short_id(id: &str) -> String {
+    MessageId::parse(id).expect("stored message id").shown()
+}
+
+fn queued_id_from_stdout(env: &Env, stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
-    trimmed
+    let shown = trimmed
         .strip_prefix("queued for ")
         .and_then(|rest| {
             rest.split_whitespace().find_map(|token| {
@@ -18855,7 +18983,8 @@ fn queued_id_from_stdout(stdout: &[u8]) -> String {
             })
         })
         .map(str::to_owned)
-        .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"))
+        .unwrap_or_else(|| panic!("expected `queued for @target (msg_...)`, got `{trimmed}`"));
+    stored_message_id(env, &shown)
 }
 
 fn assert_second_precision_created(shown: &str) {
@@ -18886,15 +19015,16 @@ fn named(env: &Env, session_id: &str, handle: &str) -> String {
     )
 }
 
-fn sent_id_from_stdout(stdout: &[u8]) -> String {
+fn sent_id_from_stdout(env: &Env, stdout: &[u8]) -> String {
     let text = String::from_utf8_lossy(stdout);
     let trimmed = text.trim();
-    trimmed
+    let shown = trimmed
         .strip_prefix("sent to ")
         .and_then(|rest| rest.rsplit_once('('))
         .and_then(|(_, id)| id.strip_suffix(')'))
         .map(str::to_owned)
-        .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"))
+        .unwrap_or_else(|| panic!("expected `sent to @target (msg_...)`, got `{trimmed}`"));
+    stored_message_id(env, &shown)
 }
 
 fn fixed_message_id(value: u64) -> MessageId {
