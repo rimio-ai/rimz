@@ -3288,7 +3288,7 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             pane.cwd = Some(worktree.display().to_string());
             pane
         }));
-        let launch = |prompt: Option<&str>, agent_caller: bool| {
+        let launch = |prompt: Option<&str>, agent_caller: bool, extra: &[&str]| {
             let mut command = traced_rimz(&env, "live-cohort.log");
             command
                 .env("PATH", crate::common::path_with_front(&shim))
@@ -3298,7 +3298,8 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
                     "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
                     format!("{} [Created 1s ago]\n", workspace.session_name),
                 )
-                .args(["--mux", "zellij", scene, "forge", "-w", "topic", "--bg"]);
+                .args(["--mux", "zellij", scene, "forge", "-w", "topic", "--bg"])
+                .args(extra);
             if let Some(prompt) = prompt {
                 command.arg(prompt);
             }
@@ -3310,10 +3311,10 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             }
             command.output().unwrap()
         };
-        let no_prompt = launch(None, false);
+        let no_prompt = launch(None, false, &[]);
         assert!(no_prompt.status.success(), "{no_prompt:?}");
         assert!(env.store().list_messages().unwrap().is_empty());
-        let output = launch(Some("review the design"), false);
+        let output = launch(Some("review the design"), false, &[]);
         assert!(output.status.success(), "{output:?}");
         let messages = env.store().list_messages().unwrap();
         assert_eq!(messages.len(), 1, "{scene}: {output:?}");
@@ -3330,7 +3331,23 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             receipt.contains("already running; prompt sent to its leader"),
             "{receipt}"
         );
-        let from_agent = launch(Some("review the agent design"), true);
+        if scene == "agents" {
+            let timed = launch(Some("review the timed design"), false, &["--timeout", "1h"]);
+            assert_eq!(timed.status.code(), Some(1), "{timed:?}");
+            let error = String::from_utf8_lossy(&timed.stderr);
+            assert!(
+                error.contains(
+                    "already running; a launch that opens no fresh seat cannot carry a stay, schema, or timeout"
+                ),
+                "{error}"
+            );
+            assert_eq!(
+                env.store().list_messages().unwrap().len(),
+                1,
+                "nothing was sent"
+            );
+        }
+        let from_agent = launch(Some("review the agent design"), true, &[]);
         assert!(from_agent.status.success(), "{from_agent:?}");
         let messages = env.store().list_messages().unwrap();
         let senders: Vec<_> = messages
@@ -3358,7 +3375,7 @@ fn live_cohort_prompt_reaches_only_its_leader_from_both_scenes() {
             LifecycleSignal::Ended,
             |_| {},
         );
-        let refused = launch(Some("try again"), false);
+        let refused = launch(Some("try again"), false, &[]);
         assert_eq!(refused.status.code(), Some(1), "{refused:?}");
         let error = String::from_utf8_lossy(&refused.stderr);
         assert!(error.contains("leader is not live"), "{error}");

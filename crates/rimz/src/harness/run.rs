@@ -220,6 +220,9 @@ pub struct SupervisedRunRequest {
     pub throttle_turn: Option<crate::harness::throttle::Turn>,
     /// What an `agent` call asks of the launch beyond opening it.
     pub call: Option<crate::harness::call::CallSpec>,
+    /// Run a team seat alone, outside any team run, as `rimz agents <team.role> --stay false`
+    /// does; an `agent` call's `stay: false` refuses one.
+    pub team_seat_alone: bool,
 }
 
 impl SupervisedRunRequest {
@@ -277,6 +280,7 @@ impl SupervisedRunRequest {
             login: crate::store::writer::LaunchLogin::RoomDefault,
             throttle_turn: None,
             call: None,
+            team_seat_alone: false,
         }
     }
 

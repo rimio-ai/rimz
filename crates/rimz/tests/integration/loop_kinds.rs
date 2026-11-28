@@ -252,17 +252,8 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
             "loop task `t`: --workflow `whole`: whole has scope = project, so it runs at the project root; remove -w from the tail",
         ),
         (
-            &[
-                "--agent",
-                "worker",
-                "--",
-                "-p",
-                "go",
-                "--bg",
-                "--output-format",
-                "stream-json",
-            ],
-            "loop task `t`: --agent `worker`: --output-format stream-json cannot be combined with --bg",
+            &["--agent", "worker", "--", "-p", "go", "--bg"],
+            "loop task `t`: --agent `worker`: `-p --bg` is retired: `--stay false` starts the run that closes at its turn end",
         ),
         (
             &["--workflow", "smoke", "--", "--bogus"],

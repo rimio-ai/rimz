@@ -32,8 +32,13 @@ impl CallSpec {
             .map(crate::harness::launch_reminders::answer_section)
     }
 
+    /// Whether the call asks anything a call record keeps: a schema, a timeout, or a rest.
+    pub(crate) fn asks(&self) -> bool {
+        self.schema.is_some() || self.timeout.is_some() || self.stay.rest().is_some()
+    }
+
     /// Publish the call record of the launch that opened `seats`, its leader first, when the call
-    /// was given a schema, a timeout, or a rest; a call given none of them keeps none.
+    /// `asks` anything; a call that asks nothing keeps none.
     pub fn publish(
         &self,
         paths: &StatePaths,
@@ -41,7 +46,7 @@ impl CallSpec {
         now: Timestamp,
     ) -> Result<(), CallStoreErr> {
         let rest = self.stay.rest();
-        if self.schema.is_none() && self.timeout.is_none() && rest.is_none() {
+        if !self.asks() {
             return Ok(());
         }
         let Some(leader) = seats.first() else {
@@ -64,6 +69,25 @@ impl CallSpec {
             },
         )
     }
+}
+
+/// Why a launch cannot open the one agent seat its call needs, in the `agent` tool's terms;
+/// `rimz agents` words each in its own flag's.
+#[derive(Debug, thiserror::Error)]
+pub enum SeatRefusal {
+    #[error("`{spec}` is a layout of several seats; `agent` launches one")]
+    Layout { spec: String },
+    #[error("`{spec}` runs no agent; `agent` launches one")]
+    NoAgent { spec: String },
+    #[error(
+        "`{spec}` is not an agent profile; `rimz agents profiles` lists the launchable profiles"
+    )]
+    NotAgentProfile { spec: String },
+    #[error(
+        "`{spec}` is a seat of team `{team}`; with `stay: false` `agent` runs one agent outside \
+         any team, so launch it with `stay: true` or launch the team with `team`"
+    )]
+    TeamSeat { spec: String, team: String },
 }
 
 #[derive(Debug, thiserror::Error)]

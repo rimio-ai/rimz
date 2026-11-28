@@ -1330,7 +1330,9 @@ fn supervised_birth_records_warnings_but_live_runs_leave_them_untouched() {
     .expect("machine config");
     let untrusted = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "--stay", "false",
+        ])
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
@@ -1352,7 +1354,9 @@ fn supervised_birth_records_warnings_but_live_runs_leave_them_untouched() {
 
     let output = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "--stay", "false",
+        ])
         .env("SHELL", shell)
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -1431,7 +1435,9 @@ fn supervised_birth_records_warnings_but_live_runs_leave_them_untouched() {
     std::fs::write(env.rimz_home().join("config.toml"), "").unwrap();
     let live = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "--stay", "false",
+        ])
         .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -2971,7 +2977,9 @@ fn supervised_codex_saved_untrusted_refuses_before_launch() {
     let trace_path = env.project_root.join("restricted-supervised.log");
     let output = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "--stay", "false",
+        ])
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_CODEX_CONFIG", &config)
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
@@ -3098,7 +3106,7 @@ fn assert_unattended_home_refusal(kind: &str, subagent: bool, explicit_cwd: bool
     } else {
         command
             .current_dir(&env.home_root)
-            .args(["agents", kind, "fix it", "-p", "--bg"]);
+            .args(["agents", kind, "fix it", "--stay", "false"]);
     }
     if explicit_cwd {
         command.arg("--cwd").arg(&env.home_root);
@@ -3143,7 +3151,9 @@ fn supervised_codex_without_project_trust_refuses_before_launch() {
     let trace_path = env.project_root.join("untrusted-supervised.log");
     let output = env
         .rimz()
-        .args(["--mux", "zellij", "agents", "codex", "fix it", "-p", "--bg"])
+        .args([
+            "--mux", "zellij", "agents", "codex", "fix it", "--stay", "false",
+        ])
         .env("PATH", path_with_front(&agent_bin))
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_path)
@@ -3405,8 +3415,8 @@ fn supervised_launch_refuses_its_own_unusable_named_account() {
             "agents",
             "codex",
             "fix it",
-            "-p",
-            "--bg",
+            "--stay",
+            "false",
             "-w",
             "account-refusal",
         ])
@@ -3494,7 +3504,7 @@ fn supervised_claude_refuses_before_records_or_panes_until_the_user_trusts() {
     let mut command = env.rimz();
     command
         .args([
-            "--mux", "zellij", "agents", "claude", "fix it", "-p", "--bg",
+            "--mux", "zellij", "agents", "claude", "fix it", "--stay", "false",
         ])
         .env("PATH", path_with_front(&shim))
         .env("SHELL", write_fake_login_shell(&env, "rimz-test-sh", &[]))
@@ -5098,6 +5108,38 @@ fn a_print_deadline_caps_its_verify_check_and_times_the_run_out() {
     assert!(verify.timed_out && !verify.passed, "{verify:?}");
 }
 
+/// A deadline that passed before the check starts runs no check: a fast passing check never turns
+/// the launch's 124 into a 0.
+#[cfg(unix)]
+#[test]
+fn a_print_deadline_passed_before_its_verify_check_exits_124() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = verifying_print_command(
+        &env,
+        "verify-passed-deadline",
+        2,
+        &pane_fixture,
+        Some("1h"),
+        "true",
+    )
+    .spawn()
+    .expect("spawn verifying print");
+    let mut completed = wait_for_run_count(&store, &mut child, 1)
+        .pop()
+        .expect("initial run");
+    move_call_deadline(&store, &completed, Timestamp::now());
+    completed.status = RunStatus::Completed;
+    completed.last_message = Some("claimed done".to_owned());
+    finish_run(&store, &mut completed);
+
+    let out = child.wait_with_output().expect("wait verify");
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert_eq!(stored.status, RunStatus::TimedOut);
+}
+
 /// Move the deadline of `run`'s launch to `deadline`.
 #[cfg(unix)]
 fn move_call_deadline(store: &rimz::Store, run: &RunRecord, deadline: Timestamp) {
@@ -6673,7 +6715,7 @@ fn scenes_without_a_verb_or_launch_target_refuse_with_their_list_command() {
         assert_eq!(
             stderr.lines().next(),
             Some(
-                "error: --detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`"
+                "error: --detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" --stay false --detach`"
             ),
             "{argv:?}: {stderr}"
         );
@@ -8133,7 +8175,7 @@ fn assert_launch_wait_defers(output: &std::process::Output, env: &Env, children:
     }
 }
 
-/// A launcher's join on a settled `-p --bg` run that reports to it, after the run's session
+/// A launcher's join on a settled `--stay false` run that reports to it, after the run's session
 /// ended and its row left the live snapshot, prints the report row and claims the answer, as
 /// the join did while the run ran.
 #[test]

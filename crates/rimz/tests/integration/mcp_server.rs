@@ -790,6 +790,35 @@ impl LayoutRoom {
         server
     }
 
+    /// `rimz <args>` run as the parent agent from the room, through the same fake room the
+    /// server launches into.
+    fn cli(&self, args: &[&str]) -> std::process::Output {
+        use crate::common::room::MATERIALIZED_ROOM_PANES;
+
+        self.env
+            .rimz()
+            .current_dir(&self.env.project_root)
+            .args(["--mux", "zellij"])
+            .args(args)
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+            .env("SHELL", &self.shell)
+            .env("PATH", crate::common::path_with_front(&self.agent_bin))
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace)
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+            .env("RIMZ_PRESENCE_PLUGIN", &self.presence)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env("ZELLIJ_SESSION_NAME", &self.session)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", self.session),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES)
+            .output()
+            .expect("run rimz")
+    }
+
     fn agents(&self) -> Vec<rimz::agents::AgentState> {
         self.store
             .runtime_projection(rimz::RuntimeScope::Audit)
@@ -842,6 +871,64 @@ impl LayoutRoom {
             .expect("the seat goes live");
         process
     }
+}
+
+/// `rimz agents P "..." --timeout` without `-p` gives the staying launch its call deadline, the
+/// launch plus the timeout, and `--stay` a rest; a launch that opens no fresh seat refuses them.
+#[cfg(unix)]
+#[test]
+fn a_cli_launch_with_a_timeout_records_its_deadline_from_the_launch() {
+    let room = LayoutRoom::new();
+    let before = jiff::Timestamp::now();
+    let out = room.cli(&[
+        "agents",
+        "worker",
+        "audit the parser",
+        "-n",
+        "timed",
+        "--bg",
+        "--new-tab",
+        "--timeout",
+        "1h",
+        "--stay",
+        "10m",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("timed"))
+        .expect("the launch row");
+    let launch_id = seat.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(record.stay, "{record:?}");
+    assert_eq!(record.rest_secs, Some(600), "{record:?}");
+    assert!(record.created_at >= before, "{record:?}");
+    assert_eq!(
+        record.deadline,
+        Some(record.created_at + std::time::Duration::from_secs(3600)),
+        "{record:?}"
+    );
+
+    let rows = room.agents().len();
+    let out = room.cli(&[
+        "agents",
+        "worker,worker",
+        "audit the parser",
+        "--stay",
+        "10m",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        stderr
+            .contains("`worker,worker` is a layout of several seats; `--stay` launches one agent"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("`agent` launches one"), "{stderr}");
+    assert_eq!(room.agents().len(), rows, "a refused launch opens nothing");
 }
 
 /// An `agent` call opens a persistent peer started by the caller in a new tab, from a server

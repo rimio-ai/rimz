@@ -217,7 +217,7 @@ rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-for
 cat build-error.txt | rimz agents claude -p --stdin 'explain the root cause'
 
 # Fire in the background; it returns now and prints the run's name
-rimz agents claude "Run the migration audit." -p --bg
+rimz agents claude "Run the migration audit." --stay false
 
 # Block on that run later and tail the answer
 rimz agents wait swift-otter --stream

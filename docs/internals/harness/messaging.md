@@ -622,7 +622,7 @@ Content:
 | --- | --- | --- |
 | `AGENT_MESSAGE` | A send from an identified agent caller | Stable reply address, followed by the profile (else kind) in parentheses unless it repeats the handle base, then `, wants a reply` when the record's `reply_wanted` is set |
 | `SUBAGENT_REPORT` | The status-only fleet digest when every row is a `rimz subagents` run | `@rimz` |
-| `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `-p --bg` runs and launcher-opened interactive peer turns | `@rimz` |
+| `AGENT_REPORT` | The status-only fleet digest containing any solo agent row, including `--stay false` runs and launcher-opened interactive peer turns | `@rimz` |
 | `TEAM_REPORT` | An agent-launched team's leader, reported when the board flips to `Done` or the cohort ends before `Done`, followed by `Memory: <absolute board path>` as seen by the launcher | `@rimz` |
 | `WORKFLOW_REPORT` | A workflow run's ending, checkout, notes folder and history command, queued once for the live agent that started it without `--detach` ([workflow.md](./workflow.md#loop-tasks)) | `@rimz` |
 | `SUBAGENT_RESTARTED` | A launched child `rimz agents restart` handed to a replacement pane with its run open, queued for its parent once per handover (none when the parent ran the restart) and withdrawn if its run ends before delivery | `@rimz` |

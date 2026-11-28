@@ -1,6 +1,6 @@
 # Subagents
 
-`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch uses the supervised background runner of `rimz agents <PROFILE> <PROMPT> -p --bg`, with a child-specific deadline ladder. The [subagents guide](../../guide/subagents.md) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
+`rimz subagents` lets an agent hand one bounded prompt to a supervised child agent and collect the result. The child is a full RimZ agent: its own pane, provider process, durable run record, petname address, and a card nested under its parent in the sidebar. A launch uses the supervised background runner of `rimz agents <PROFILE> <PROMPT> --stay false`, with a child-specific deadline ladder. The [subagents guide](../../guide/subagents.md) teaches the workflow, and [subagents.md](../../internals/harness/subagents.md) describes the mechanics.
 
 Launching, joining, and stopping need a calling agent that RimZ can identify, through its launch environment or its live process ancestry. The read-only verbs work from any shell:
 
@@ -92,7 +92,7 @@ A launch refuses before it writes a run record or opens a pane when:
 | `123`, `124`, `130` | With `--wait` only: the run's status ([exit codes](./agents.md#supervised-runs--p)). |
 | `75` | With `--wait` only: the child is still running, and its answer comes in the fleet report, or a prompt for the calling agent was queued ([the message stop](./agents.md#wait)). |
 
-`rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. `--detach` on `launch` or `fanout` is refused with exit 2, because a subagent ends with its parent; for a run that outlives the caller, launch a peer with `rimz agents <spec> "<prompt>" -p --bg --detach`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
+`rimz subagents` has no `--ask`, `--budget`, `--worktree`, `--from-pr`, `--channel`, `--stdin`, `--continue`, placement flags, output or input formats, `--retries`, or `--verify`. `--detach` on `launch` or `fanout` is refused with exit 2, because a subagent ends with its parent; for a run that outlives the caller, launch a peer with `rimz agents <spec> "<prompt>" --stay false --detach`. Use `rimz agents` when a launch needs one of those; from an agent, that starts an independent peer that counts against `[agents] max-chain-length`. Use `rimz teams` when the workers are peers rather than children.
 
 ## Fan out a task list
 
@@ -142,7 +142,7 @@ A launch that fails partway stops the remaining launches. The error names the ch
 
 ## The fleet report
 
-A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled or is [held on a provider limit](#a-child-paused-on-a-provider-limit). A background run it launched with [`rimz agents <kind> -p --bg`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
+A parent that does not join its children gets one `SUBAGENT_REPORT` message from `@rimz` once every child it launched has settled or is [held on a provider limit](#a-child-paused-on-a-provider-limit). A background run it launched with [`rimz agents <kind> --stay false`](./agents.md#supervised-runs--p) belongs to the same fleet; a fleet containing any solo agent run gets `AGENT_REPORT` instead. The message is parked and delivered at the parent's next turn boundary:
 
 ```text
 Type: SUBAGENT_REPORT
@@ -158,7 +158,7 @@ The report lists status and where each answer is, and asks for nothing: reading 
 
 | Part | Format |
 | --- | --- |
-| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; with a held line, `{rows} of {rows + held lines} subagents settled:`, extended the same way; `background agent` replaces `subagent` when any row is a `-p --bg` run or a peer turn |
+| Heading | `Your subagent settled:` for one child, `All {n} subagents settled:` for more, extended to `All {n} subagents settled, responses total {size}:` when two or more rows carry a response; with a held line, `{rows} of {rows + held lines} subagents settled:`, extended the same way; `background agent` replaces `subagent` when any row is a `--stay false` run or a peer turn |
 | Row | `- @{name}: {status} {in\|after} {elapsed}[; {reason}][, task: "{task}"], response: {path} ({size})`; `partial response:` for a timed-out child with text, or ending `, no response` |
 | Status | `completed`, `failed`, `verify failed`, `timed out`, `budget exceeded`, or `canceled`. Except for configuration refusals (exit 78), a freshly launched child whose CLI exited nonzero before opening a session is relaunched first (a resumed child is not), three times by default (`[agents] startup-relaunches`), so `failed` then means the last launch died too, and the reason is its output. An interrupted turn (Escape in the child's pane) reads `canceled` only once 60 seconds pass with no new turn: until then the child counts as running and holds the report, and a turn started inside that window continues the same run, on the same deadline, with no follow-up row. After the child's deadline stop has gone out, an interrupted turn instead waits for the kill and reads `timed out`. A Claude child's interrupt reaches RimZ at the RimZ mod's report of the turn's end; without the mod it waits for the sidebar's next read of the child's transcript or Claude's next statusline run (the account's `statusLine.refreshInterval` when one is set, else Claude's next render trigger) |
 | `in` / `after` | `after` for a timed-out answer, `in` for every other status; elapsed time is compact (`4m12s`) and starts at that answer's turn, not the child's launch |
@@ -179,8 +179,8 @@ A supervised parent can end its turn while children run without ending its own r
 An answer drops out of a report that has not been composed yet when:
 
 - a join (`subagents wait`, `fanout --wait`, or `--wait` on a launch) printed its row while the parent's turn was open;
-- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell, or its row to its launcher while the launcher's turn was open, which is how a `-p --bg` run is joined;
-- it is a `-p` run the parent launched without `--bg`, which prints its own result;
+- a [`rimz agents wait`](./agents.md#wait) printed its result from a user shell, or its row to its launcher while the launcher's turn was open, which is how a `--stay false` run is joined;
+- it is a `-p` run the parent launched, which prints its own result;
 - the parent stopped it with `rimz subagents stop`.
 
 A join claims only the answer its row names, leaving earlier unread answers for the report, and a still-running line claims nothing. Stopping a child dismisses all its answers. A join that finishes after the parent's turn has ended still prints, but its rows stay in the report, so the parent is woken with them at its next boundary. A report already queued is canceled only when every answer it lists has been read or stopped, even if a listed child has since answered again; a delivered report cannot be recalled. A child stopped by someone else with `rimz agents stop @child` still appears as `canceled`. A child canceled because its parent agent ended reads `canceled …; its parent agent ended`, here and in the run status line `rimz subagents wait` prints, whose `--json` entry carries `cancel_reason: "parent_ended"`. If the normal report is missed, the room's sidebar producer rebuilds it from the run records within about a minute ([backstops](../../internals/harness/subagents.md#backstops)).

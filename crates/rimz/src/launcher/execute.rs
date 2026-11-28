@@ -521,11 +521,15 @@ fn open_fresh(
     }
     let channel = fresh.lane.pin_name();
     let channel = channel.as_ref().map(LaneName::as_str);
-    // A `stay: false` call's run is the `agent` tool's launch, so its tab is titled as a peer's.
+    // A `stay: false` call's background run is a peer's launch, so its tab is titled as a peer's;
+    // a blocking `-p` run keeps a run's title.
     let call_run = fresh
         .call
         .as_ref()
-        .is_some_and(|call| call.stay == crate::harness::block::Stay::TurnEnd);
+        .is_some_and(|call| call.stay == crate::harness::block::Stay::TurnEnd)
+        && leader
+            .as_ref()
+            .is_some_and(|leader| matches!(leader.completion, RunCompletion::Detached));
     let title = if let Some(leader) = leader.as_ref().filter(|_| !call_run) {
         leader.loop_task.as_ref().map_or_else(
             || {

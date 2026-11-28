@@ -2750,9 +2750,12 @@ path = "crates/rimz/src/harness"
 # `Stay` and `Stay::rest`, the `stay` value the block, the call spec, and `rimz agents --stay`
 # share, and `call::book_rest` with its error, which the lifecycle hook calls at a rest stay's
 # turn end (+4).
+# `call::SeatRefusal`, the one-seat refusal `rimz agents` rewords in its flag's terms,
+# `CallSpec::asks`, which the launcher reads to refuse a call no fresh seat carries, and
+# `block::schema_refusal`, the schema check `--schema` shares with the `agent` block (+3).
 # `block::timeout`, the one launch `timeout` grammar, which each CLI `--timeout` of a launch
 # option parses with (+1).
-surface-budget = 1495
+surface-budget = 1498
 
 [[verdict]]
 kind = "item"
@@ -5959,6 +5962,8 @@ allowed-dependencies = [
     "disk::paths",
     "harness::ancestry",
     "harness::budget",
+    # A call's run refuses a seat it cannot open with the call's typed refusal.
+    "harness::call",
     # The resume launch identity copies a row's stored channel through the lane reader.
     "harness::lanes",
     "harness::launch",
@@ -6594,9 +6599,10 @@ allowed-dependencies = [
 # (+7).
 # `Stay`, the one `stay` value the `agent` block, the call spec, and `rimz agents --stay` read,
 # and `Stay::rest`, the rest the call record stores (+2).
+# `schema_refusal`, the one schema check, which `rimz agents --schema` shares (+1).
 # `timeout`, the one launch `timeout` grammar, which each CLI `--timeout` of a launch option
 # parses with (+1).
-surface-budget = 44
+surface-budget = 45
 
 [[module]]
 path = "crates/rimz/src/mcp"

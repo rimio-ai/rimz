@@ -10350,16 +10350,6 @@ fn team_worktree_launch_doorways_cut_from_the_remote_tip() {
         vec!["teams", "launch", "solo", "-w", "demo"],
         vec!["agents", "solo", "-w", "demo"],
         vec!["agents", "solo.lead", "-w", "demo"],
-        vec![
-            "agents",
-            "solo.lead",
-            "-p",
-            "complete the work",
-            "--bg",
-            "--detach",
-            "-w",
-            "demo",
-        ],
     ] {
         let env = team_worktree_launch_env();
         let origin = env.home_root.join("origin.git");
@@ -10417,9 +10407,9 @@ fn solo_worktree_launch_cuts_from_the_remote_tip_only_with_from_trunk() {
             vec![
                 "agents",
                 "worker",
-                "-p",
                 "complete the work",
-                "--bg",
+                "--stay",
+                "false",
                 "--detach",
                 "-w",
                 "demo",
@@ -11412,7 +11402,7 @@ fn unsupported_profile_skills_refuse_before_launch_and_run_records() {
         let mut command = env.rimz();
         command.args(["agents", "worker", "hello"]);
         if supervised {
-            command.args(["-p", "--bg"]);
+            command.args(["--stay", "false"]);
         }
         command.assert().failure().stderr(contains(
             "provider amp cannot mark skills user-only; remove the profile skills list",
@@ -11444,7 +11434,7 @@ fn oversized_prompt_refuses_before_launch_and_run_records() {
         let mut command = env.rimz();
         command.args(["agents", "codex", &prompt]);
         if supervised {
-            command.args(["-p", "--bg"]);
+            command.args(["--stay", "false"]);
         }
         command
             .assert()
