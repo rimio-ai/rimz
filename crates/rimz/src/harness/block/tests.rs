@@ -565,28 +565,6 @@ fn the_tool_refusals_hold_for_both_callers() {
         ),
         (
             BlockName::Schedule,
-            booking(json!({ "arguments": { "profile": "p", "prompt": "x", "stay": false } })),
-            "`arguments.stay`",
-        ),
-        (
-            BlockName::Schedule,
-            booking(json!({ "arguments": { "profile": "p", "prompt": "x",
-                                           "schema": { "type": "string" } } })),
-            "`arguments.schema`",
-        ),
-        (
-            BlockName::Schedule,
-            booking(json!({ "arguments": { "profile": "p", "prompt": "x", "timeout": "1h" } })),
-            "`arguments.timeout`",
-        ),
-        (
-            BlockName::Schedule,
-            booking(json!({ "tool": "team", "worktree": "w",
-                            "arguments": { "team": "t", "prompt": "x", "timeout": "1h" } })),
-            "`arguments.timeout`",
-        ),
-        (
-            BlockName::Schedule,
             booking(json!({ "tool": "team", "worktree": "w",
                             "arguments": { "team": "t#fix", "prompt": "x" } })),
             "`arguments.team` cannot include `#lane`; pass top-level `worktree` instead",

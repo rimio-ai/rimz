@@ -1123,6 +1123,13 @@ pub struct SupervisedLaunch {
     pub yolo_sandbox: bool,
 }
 
+/// Whether launch `spec` names its resolved team `team` whole, with or without a `#lane`, rather
+/// than one of the team's seats.
+pub(crate) fn names_team(spec: &str, team: Option<&str>) -> bool {
+    let spec = spec.split_once('#').map_or(spec, |(team, _)| team);
+    team.is_some_and(|team| team == spec)
+}
+
 /// Plan a supervised run's one-cell launch over the caller's one effective
 /// config load. `lane` is the launch channel and the team it belongs to;
 /// `parent_isolation` is the isolation the launching process runs under;
@@ -1200,7 +1207,8 @@ pub fn plan_supervised_launch(
         commands,
         &effective.teams,
     )?;
-    // An `agent` call's run refuses as the call's peer launch does, in the tool's terms.
+    // An `agent` call's run refuses as the call's peer launch does, in the tool's terms; the CLI's
+    // `--stay false` runs a team seat alone, as `-p --bg` did.
     let cells: usize = resolved
         .layout
         .columns
@@ -1208,19 +1216,28 @@ pub fn plan_supervised_launch(
         .map(|column| column.rows.len())
         .sum();
     let agents = resolved.layout.agent_cells().count();
-    if request.call.is_some() {
+    let one_agent = request
+        .call
+        .as_ref()
+        .is_some_and(|call| request.background || call.schema.is_some());
+    if one_agent && names_team(&spec, resolved.team_name.as_deref()) {
+        let spec = spec.clone().into_owned();
+        return Err(crate::harness::call::SeatRefusal::Team { spec }.into());
+    }
+    if request.call.is_some() && request.background {
+        use crate::harness::call::SeatRefusal;
+        let spec = spec.clone().into_owned();
         if cells > 1 {
-            bail!("`{spec}` is a layout of several seats; `agent` launches one");
+            return Err(SeatRefusal::Layout { spec }.into());
         }
         if agents == 0 {
-            bail!("`{spec}` runs no agent; `agent` launches one");
+            return Err(SeatRefusal::NoAgent { spec }.into());
         }
         // A seat run alone would take the team's lane with no team run behind it.
-        if let Some(team) = &resolved.team_name {
-            bail!(
-                "`{spec}` is a seat of team `{team}`; with `stay: false` `agent` runs one agent \
-                 outside any team, so launch it with `stay: true` or launch the team with `team`"
-            );
+        if !request.team_seat_alone
+            && let Some(team) = resolved.team_name.clone()
+        {
+            return Err(SeatRefusal::TeamSeat { spec, team }.into());
         }
     }
     if agents != 1 {

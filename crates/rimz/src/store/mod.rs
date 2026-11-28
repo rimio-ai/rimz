@@ -289,6 +289,9 @@ impl Store {
     /// snapshots also attach cache-class agent context so every address
     /// resolver sees the same rest certificates as pane ownership.
     /// Reads that need only selected context use [`Self::snapshot_with_context`].
+    /// Attaching it reads every agent's sidecar, so the cost grows with the
+    /// fleet: a per-hook path (Stop, prompt) reads its rows through
+    /// `snapshot_with_context(|_, _| false)`.
     pub fn snapshot_cached(&self) -> Result<SidebarSnapshot> {
         self.snapshot_with_context(|_, _| true)
     }

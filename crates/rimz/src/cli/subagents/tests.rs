@@ -99,7 +99,7 @@ fn detach_refuses_every_launch_form_with_a_peer_run_pointer() {
         assert!(error.downcast_ref::<UsageError>().is_some(), "{argv:?}");
         assert_eq!(
             error.to_string(),
-            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`",
+            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" --stay false --detach`",
             "{argv:?}"
         );
     }

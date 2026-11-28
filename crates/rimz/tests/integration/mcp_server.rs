@@ -790,6 +790,35 @@ impl LayoutRoom {
         server
     }
 
+    /// `rimz <args>` run as the parent agent from the room, through the same fake room the
+    /// server launches into.
+    fn cli(&self, args: &[&str]) -> std::process::Output {
+        use crate::common::room::MATERIALIZED_ROOM_PANES;
+
+        self.env
+            .rimz()
+            .current_dir(&self.env.project_root)
+            .args(["--mux", "zellij"])
+            .args(args)
+            .env(rimz::harness::launch::ENV_AGENT_KIND, "claude")
+            .env(rimz::harness::launch::ENV_AGENT_ID, "parent-launch")
+            .env("SHELL", &self.shell)
+            .env("PATH", crate::common::path_with_front(&self.agent_bin))
+            .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+            .env("RIMZ_TEST_ZELLIJ_LOG", &self.trace)
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+            .env("RIMZ_PRESENCE_PLUGIN", &self.presence)
+            .env("ZELLIJ_PANE_ID", "2")
+            .env("ZELLIJ_SESSION_NAME", &self.session)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", self.session),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LIST_PANES", MATERIALIZED_ROOM_PANES)
+            .output()
+            .expect("run rimz")
+    }
+
     fn agents(&self) -> Vec<rimz::agents::AgentState> {
         self.store
             .runtime_projection(rimz::RuntimeScope::Audit)
@@ -842,6 +871,139 @@ impl LayoutRoom {
             .expect("the seat goes live");
         process
     }
+}
+
+/// `rimz agents P "..." --timeout` without `-p` gives the staying launch its call deadline, the
+/// launch plus the timeout, and `--stay` a rest; a launch that opens no fresh seat refuses them.
+#[cfg(unix)]
+#[test]
+fn a_cli_launch_with_a_timeout_records_its_deadline_from_the_launch() {
+    let room = LayoutRoom::new();
+    let before = jiff::Timestamp::now();
+    let out = room.cli(&[
+        "agents",
+        "worker",
+        "audit the parser",
+        "-n",
+        "timed",
+        "--bg",
+        "--new-tab",
+        "--timeout",
+        "1h",
+        "--stay",
+        "10m",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.name.as_deref() == Some("timed"))
+        .expect("the launch row");
+    let launch_id = seat.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(record.stay, "{record:?}");
+    assert_eq!(record.rest_secs, Some(600), "{record:?}");
+    assert!(record.created_at >= before, "{record:?}");
+    assert_eq!(
+        record.deadline,
+        Some(record.created_at + std::time::Duration::from_secs(3600)),
+        "{record:?}"
+    );
+
+    let rows = room.agents().len();
+    let out = room.cli(&[
+        "agents",
+        "worker,worker",
+        "audit the parser",
+        "--stay",
+        "10m",
+    ]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{out:?}");
+    assert!(
+        stderr
+            .contains("`worker,worker` is a layout of several seats; `--stay` launches one agent"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("`agent` launches one"), "{stderr}");
+    assert_eq!(room.agents().len(), rows, "a refused launch opens nothing");
+
+    let config = room.env.rimz_home().join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("\n[agents.commands]\ntailer = 'true'\n");
+    std::fs::write(&config, text).unwrap();
+    for (argv, refusal) in [
+        (
+            &["agents", "solo", "build it", "--stay", "10m"][..],
+            "`solo` is a team; `--stay` launches one agent",
+        ),
+        (
+            &["agents", "solo", "build it", "--stay", "false"],
+            "`solo` is a team; `--stay false` launches one agent",
+        ),
+        (
+            &[
+                "agents",
+                "solo",
+                "build it",
+                "--schema",
+                r#"{"type": "object"}"#,
+            ],
+            "`solo` is a team; `--schema` launches one agent",
+        ),
+        (
+            &["agents", "tailer", "--timeout", "1m"],
+            "`tailer` runs no agent; `--timeout` needs one",
+        ),
+    ] {
+        let out = room.cli(argv);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{argv:?}: {out:?}");
+        assert!(stderr.contains(refusal), "{argv:?}: {stderr}");
+        assert_eq!(
+            room.agents().len(),
+            rows,
+            "{argv:?}: a refused launch opens nothing"
+        );
+    }
+}
+
+/// `rimz teams <team> --timeout` records the team launch's deadline on its call record, counted
+/// from the launch, as the `team` tool's `timeout` does.
+#[cfg(unix)]
+#[test]
+fn a_cli_team_launch_with_a_timeout_records_its_deadline_from_the_launch() {
+    let room = LayoutRoom::new();
+    let before = jiff::Timestamp::now();
+    let out = room.cli(&[
+        "teams",
+        "solo",
+        "build it",
+        "-w",
+        "demo",
+        "--bg",
+        "--new-tab",
+        "--timeout",
+        "8h",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.team.as_deref() == Some("solo"))
+        .expect("the seat's launch row");
+    let launch_id = seat.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(record.created_at >= before, "{record:?}");
+    assert_eq!(
+        record.deadline,
+        Some(record.created_at + std::time::Duration::from_secs(8 * 3600)),
+        "{record:?}"
+    );
 }
 
 /// An `agent` call opens a persistent peer started by the caller in a new tab, from a server
@@ -1001,6 +1163,45 @@ fn an_agent_call_for_one_task_records_its_schema_and_deadline() {
         Some(jiff::SignedDuration::from_mins(30)),
     );
     assert!(record.owes_answer());
+}
+
+/// An `agent` call with a rest stays: it opens a staying peer and records the rest on its call,
+/// which books no close before the launch's first turn ends.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_with_a_rest_stays_and_records_its_rest() {
+    let room = LayoutRoom::new();
+    let mut server = room.serve("parent-launch");
+    let (answer, is_error) = server.answer(
+        1,
+        "agent",
+        json!({"profile": "worker", "prompt": "audit the parser", "stay": "10m"}),
+    );
+    assert!(!is_error, "{answer}");
+    assert_eq!(answer["status"], json!("running"), "{answer}");
+    let agents = room.agents();
+    let peer = agents
+        .iter()
+        .find(|agent| agent.profile.as_deref() == Some("worker"))
+        .expect("the peer's launch row");
+    let trace = std::fs::read_to_string(&room.trace).unwrap();
+    assert!(
+        !trace.contains("run claude"),
+        "a staying peer, not a run: {trace}"
+    );
+    let launch_id = peer.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(
+        record.stay && record.rest_secs == Some(600) && record.rest_booked_at.is_none(),
+        "{record:?}"
+    );
+    assert!(
+        !record.owes_answer() && record.deadline.is_none(),
+        "{record:?}"
+    );
+    assert!(rimz::store::idle_stop::read(room.store.paths()).is_empty());
 }
 
 /// A `team` call opens the team's cohort in the named worktree, through a real launch: the
@@ -4179,6 +4380,128 @@ fn a_watch_past_its_timeout_wakes_once_naming_it() {
     );
 }
 
+/// `rimz shell --input --timeout` arms the shell the tool's `input` and `timeout` arm: its
+/// command reads the input from `$RIMZ_WORKFLOW_DIR/context.json`, and the timeout kills it whole
+/// and wakes the agent once. A value that is no JSON object, or a file that cannot be read, is
+/// refused before anything arms.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cli_shell_takes_input_and_a_timeout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let listed = env.home_root.join("input-list.json");
+    std::fs::write(&listed, "[1]").unwrap();
+    let listed_refusal = format!(
+        "--input `{}` is not a JSON object: invalid type: sequence, expected a map",
+        listed.display()
+    );
+    for (input, error) in [
+        (
+            r#"{"pr": "#,
+            "--input is not a JSON object: EOF while parsing",
+        ),
+        (listed.to_str().unwrap(), listed_refusal.as_str()),
+        (
+            "/nonexistent/input.json",
+            "--input `/nonexistent/input.json` cannot be read: No such file or directory (os error 2)",
+        ),
+    ] {
+        let refused = crate::common::wait::agent_wait(&env)
+            .args(["shell", "--input", input, "--", "true"])
+            .output()
+            .unwrap();
+        assert!(!refused.status.success(), "{refused:?}");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains(error), "{stderr}");
+    }
+    let pids = env.home_root.join("cli-timed-out.pids");
+    let seen = env.home_root.join("cli-context.json");
+    let command = format!(
+        "cat \"$RIMZ_WORKFLOW_DIR/context.json\" > {}; sleep 300 & printf '%s %s' $$ $! > {}; wait",
+        seen.display(),
+        pids.display()
+    );
+    let armed = crate::common::wait::agent_wait(&env)
+        .args([
+            "shell",
+            "--input",
+            r#"{"pr": 1}"#,
+            "--timeout",
+            "1s",
+            "--json",
+            "--",
+        ])
+        .arg(&command)
+        .output()
+        .unwrap();
+    assert!(armed.status.success(), "{armed:?}");
+    let receipt: Value = serde_json::from_slice(&armed.stdout).expect("the receipt");
+    let name = receipt["name"]
+        .as_str()
+        .expect("the shell's name")
+        .to_owned();
+    wait_for_row_gone(&env, &name);
+    assert_processes_gone(&pids);
+    let context: Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).expect("context.json");
+    assert_eq!(context, json!({"input": {"pr": 1}}));
+    let messages = all_messages(&env);
+    let [wake] = messages.as_slice() else {
+        panic!("one wake: {messages:?}");
+    };
+    let verdict = wake.text.lines().nth(1).unwrap_or_default();
+    assert!(verdict.starts_with("timed out after "), "{}", wake.text);
+}
+
+/// `rimz watch --timeout` arms the watch the tool's `timeout` arms: still unmet when it passes,
+/// it wakes its agent once, naming the timeout.
+#[test]
+fn a_cli_watch_past_its_timeout_wakes_once_naming_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    crate::common::wait::publish_claude_5h(&env, 90);
+    let armed = crate::common::wait::agent_wait(&env)
+        .args(["watch", "--timeout", "1s", "--json", "window.5h.left >= 40"])
+        .output()
+        .unwrap();
+    assert!(armed.status.success(), "{armed:?}");
+    let receipt: Value = serde_json::from_slice(&armed.stdout).expect("the receipt");
+    let name = receipt["name"]
+        .as_str()
+        .expect("the watch's name")
+        .to_owned();
+    let tick = || {
+        let output = crate::common::wait::agent_wait(&env)
+            .args(["loop", "tick"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    tick();
+    std::thread::sleep(Duration::from_millis(1100));
+    tick();
+    wait_for_row_gone(&env, &name);
+    tick();
+    let messages = all_messages(&env);
+    let [wake] = messages.as_slice() else {
+        panic!("one wake: {messages:?}");
+    };
+    let timed_out = wake.text.lines().nth(1).unwrap_or_default();
+    assert!(
+        timed_out.starts_with("timed out after ") && timed_out.ends_with(&format!(" [{name}]")),
+        "{}",
+        wake.text
+    );
+}
+
 /// A shell canceled while a join holds its claim ends that join at once as `ended`, saying it
 /// was canceled, and `rimz loop logs` shows the cancel.
 #[test]
@@ -5812,6 +6135,30 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
             }),
             None,
         ),
+        (
+            9,
+            "to-resting",
+            "cron",
+            "0 9 * * mon",
+            "agent",
+            json!({
+                "profile": "worker",
+                "prompt": "go",
+                "stay": "10m",
+                "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+                "timeout": "4h",
+            }),
+            None,
+        ),
+        (
+            10,
+            "to-timed-crew",
+            "cron",
+            "0 9 * * mon",
+            "team",
+            json!({"team": "forge", "prompt": "ship", "timeout": "4h"}),
+            Some("timed-crew"),
+        ),
     ] {
         let mut arguments = json!({
             "name": name,
@@ -5844,6 +6191,16 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
             vec!["--fresh", "--description=- daily crew", "- ship it"],
         ),
         ("to-pr-agent", vec!["--from-pr=42", "watch pr"]),
+        (
+            "to-resting",
+            vec![
+                "--stay=10m",
+                r#"--schema={"properties":{"ok":{"type":"boolean"}},"type":"object"}"#,
+                "--timeout=4h",
+                "go",
+            ],
+        ),
+        ("to-timed-crew", vec!["--fresh", "--timeout=4h", "ship"]),
     ] {
         assert_eq!(
             rows[name]["args"],
@@ -5888,6 +6245,8 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
         ("to-crew", "--team"),
         ("to-pr-agent", "--agent"),
         ("to-workflow", "--workflow"),
+        ("to-resting", "--agent"),
+        ("to-timed-crew", "--team"),
     ] {
         let row = rows[name].as_table().unwrap();
         let tail: Vec<&str> = row
@@ -5974,6 +6333,27 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
             .iter()
             .any(|line| line.as_str().unwrap_or("").contains("`arguments.prompt`")),
         "{repeating}"
+    );
+    // A `stay: false` agent closes itself, so no idle agent holds a later fire.
+    let (one_task, is_error) = server.answer(
+        3,
+        "schedule",
+        json!({
+            "name": "one-task",
+            "trigger": "every",
+            "value": "1h",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "check once", "stay": false},
+        }),
+    );
+    assert!(!is_error, "{one_task}");
+    assert!(
+        one_task["warnings"]
+            .as_array()
+            .is_none_or(|warnings| warnings
+                .iter()
+                .all(|line| !line.as_str().unwrap_or("").contains("left idle"))),
+        "{one_task}"
     );
     server.close();
 
@@ -6385,6 +6765,14 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
             json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "go", "name": "bad name"}}),
             "`arguments.name`: invalid agent name `bad name`; use ASCII letters, numbers, and `-`"
+                .to_owned(),
+        ),
+        (
+            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+                   "arguments": {"profile": "forge.coder", "prompt": "go", "stay": false}}),
+            "`arguments.profile` `forge.coder` is a seat of team `forge`; with `stay: false` a \
+             fire runs one agent outside any team, so book it with `stay: true` or book the team \
+             with `tool` `team`"
                 .to_owned(),
         ),
     ];

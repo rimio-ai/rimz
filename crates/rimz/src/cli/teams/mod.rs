@@ -37,6 +37,15 @@ pub struct TeamsArgs {
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
     #[arg(long, value_name = "host|scoped|sandbox", requires = "name")]
     isolation: Option<rimz::config::Isolation>,
+    /// Stop the team once this long has passed since it launched.
+    #[arg(
+        long,
+        value_name = "DURATION",
+        value_parser = rimz::harness::block::timeout,
+        requires = "name",
+        conflicts_with = "continue_cohort"
+    )]
+    timeout: Option<std::time::Duration>,
     /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
     #[arg(long, hide = true)]
     json: bool,
@@ -118,6 +127,14 @@ struct TeamLaunchArgs {
     /// Run the cohort under this isolation instead of machine `agents.isolation`.
     #[arg(long, value_name = "host|scoped|sandbox")]
     isolation: Option<rimz::config::Isolation>,
+    /// Stop the team once this long has passed since it launched.
+    #[arg(
+        long,
+        value_name = "DURATION",
+        value_parser = rimz::harness::block::timeout,
+        conflicts_with = "continue_cohort"
+    )]
+    timeout: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Args)]
@@ -396,7 +413,14 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
                         "--json is only supported with `rimz teams list`; use `rimz teams show {name} --json` for one team"
                     );
                 }
-                launch_team(name, args.prompt, args.launch, args.isolation, globals)
+                launch_team(
+                    name,
+                    args.prompt,
+                    args.launch,
+                    args.isolation,
+                    args.timeout,
+                    globals,
+                )
             }
             None => {
                 let flags: &[&str] = if args.json { &["--json"] } else { &[] };
@@ -418,9 +442,14 @@ pub fn run(args: TeamsArgs, globals: &GlobalFlags) -> Result<()> {
         }
         Some(TeamsSubcmd::List { json }) => list::run(json, globals),
         Some(TeamsSubcmd::Profiles { json, path }) => list_profiles(json, path),
-        Some(TeamsSubcmd::Launch(args)) => {
-            launch_team(args.name, args.prompt, args.launch, args.isolation, globals)
-        }
+        Some(TeamsSubcmd::Launch(args)) => launch_team(
+            args.name,
+            args.prompt,
+            args.launch,
+            args.isolation,
+            args.timeout,
+            globals,
+        ),
         Some(TeamsSubcmd::Resume(mut args)) => {
             (args.name, args.worktree) = team_lane(args.name, args.worktree)?;
             ensure_defined(&args.name, globals)?;
@@ -440,6 +469,7 @@ fn launch_team(
     prompt: Option<String>,
     mut launch: agents_cmd::CohortLaunchArgs,
     isolation: Option<rimz::config::Isolation>,
+    timeout: Option<std::time::Duration>,
     globals: &GlobalFlags,
 ) -> Result<()> {
     let (name, worktree) = launch_place(name, &launch)?;
@@ -455,6 +485,7 @@ fn launch_team(
                 isolation,
                 ..Default::default()
             },
+            timeout,
             ..Default::default()
         }),
         globals,
@@ -597,6 +628,7 @@ pub(super) fn check_loop_launch(
             .prompt
             .as_deref()
             .is_some_and(|prompt| !prompt.trim().is_empty()),
+        timeout: launch.timeout,
         ..Default::default()
     })
 }

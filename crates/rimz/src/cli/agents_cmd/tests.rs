@@ -1413,10 +1413,6 @@ mod parse {
                 MissingRequiredArgument,
             ),
             (
-                &["rimz", "claude", "hi", "--max-turns", "3"],
-                MissingRequiredArgument,
-            ),
-            (
                 &["rimz", "claude", "hi", "--retries", "1"],
                 MissingRequiredArgument,
             ),
@@ -1465,12 +1461,7 @@ mod parse {
     fn invalid_supervised_output_combinations_fail_fast() {
         for (argv, output, fragment) in [
             (
-                &["rimz", "claude", "hi", "-p", "--bg"][..],
-                OutputFormat::StreamJson,
-                "cannot be combined with --bg",
-            ),
-            (
-                &["rimz", "claude", "hi", "-p", "--retries", "1"],
+                &["rimz", "claude", "hi", "-p", "--retries", "1"][..],
                 OutputFormat::StreamJson,
                 "choose text or json",
             ),
@@ -1505,7 +1496,11 @@ mod parse {
         for (argv, error) in [
             (
                 &["rimz", "claude", "hi", "-p", "--detach"][..],
-                "--detach on `-p` requires --bg: a foreground run prints its answer inline; add --bg, or drop --detach",
+                "--detach on `-p` drops the answer a foreground run prints inline; start the run with `--stay false` in place of `-p`, or drop --detach",
+            ),
+            (
+                &["rimz", "claude", "hi", "-p", "--bg", "--detach"],
+                "--detach on `-p` drops the answer a foreground run prints inline; start the run with `--stay false` in place of `-p`, or drop --detach",
             ),
             (
                 &["rimz", "claude", "--continue", "--detach"],
@@ -1526,13 +1521,262 @@ mod parse {
         }
         for argv in [
             &["rimz", "claude", "hi", "--detach"][..],
-            &["rimz", "claude", "hi", "-p", "--bg", "--detach"],
+            &["rimz", "claude", "hi", "--stay", "false", "--detach"],
             &["rimz", "claude", "--continue"],
             &["rimz", "claude", "-p"],
         ] {
             let args = parse_agents(argv);
             validate_detach(&args.launch).unwrap_or_else(|err| panic!("{argv:?}: {err:#}"));
         }
+    }
+
+    #[test]
+    fn call_options_take_their_forms_and_refuse_what_cannot_carry_them() {
+        use clap::error::ErrorKind::{ArgumentConflict, ValueValidation};
+        use rimz::harness::block::Stay;
+
+        for (argv, kind) in [
+            (
+                &["rimz", "claude", "hi", "-p", "--stay", "false"][..],
+                ArgumentConflict,
+            ),
+            (
+                &["rimz", "claude", "--resume", "sess", "--stay", "10m"],
+                ArgumentConflict,
+            ),
+            (
+                &["rimz", "claude", "--continue", "--schema", "{}"],
+                ArgumentConflict,
+            ),
+            (
+                &["rimz", "claude", "--continue", "--timeout", "1h"],
+                ArgumentConflict,
+            ),
+            (
+                &["rimz", "claude", "--resume", "sess", "--timeout", "1h"],
+                ArgumentConflict,
+            ),
+            (&["rimz", "claude", "hi", "--stay", "soon"], ValueValidation),
+        ] {
+            assert_clap_error(argv, kind);
+        }
+        let soon = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "--stay", "soon"])
+            .expect_err("a stay no form spells");
+        assert!(
+            soon.to_string().contains(
+                "expected `true`, `false`, or a rest such as `10m`: unknown duration unit `soon`; use s/m/h/d"
+            ),
+            "{soon}"
+        );
+        let schema_file = tempfile::NamedTempFile::new().unwrap();
+        std::fs::write(
+            schema_file.path(),
+            r#"{"type": "object", "required": ["verdict"]}"#,
+        )
+        .unwrap();
+        let schema_path = schema_file.path().to_str().unwrap();
+        for (argv, error) in [
+            (
+                &["rimz", "claude", "hi", "-p", "--bg"][..],
+                "`-p --bg` is retired: `--stay false` starts the run that closes at its turn end",
+            ),
+            (
+                &["rimz", "claude", "--schema", r#"{"type": "object"}"#],
+                "--schema needs a prompt: the answer it asks for is the prompt's",
+            ),
+            (
+                &[
+                    "rimz",
+                    "claude",
+                    "hi",
+                    "--schema",
+                    "/nonexistent/answer.json",
+                ],
+                "--schema `/nonexistent/answer.json` cannot be read: No such file or directory (os error 2)",
+            ),
+            (
+                &["rimz", "claude", "hi", "--schema", "{not json"],
+                "--schema is not a JSON object: key must be a string at line 1 column 2",
+            ),
+            (
+                &["rimz", "claude", "hi", "--schema", r#"{"oneOf": []}"#],
+                "`--schema` uses `oneOf`; a schema takes only `type`, `required`, `properties`, `enum`, and `items`",
+            ),
+        ] {
+            let args = parse_agents(argv);
+            let err = call_options(&args.launch).expect_err("refuse the call");
+            assert_eq!(err.to_string(), error, "{argv:?}");
+            assert!(
+                err.downcast_ref::<crate::cli::usage::UsageError>()
+                    .is_some(),
+                "{argv:?}: a usage error exits 2"
+            );
+        }
+        let args = parse_agents(&["rimz", "claude", "hi", "--schema", schema_path]);
+        let call = call_options(&args.launch).unwrap().expect("a call");
+        assert_eq!(
+            call.schema.map(serde_json::Value::Object),
+            Some(serde_json::json!({"type": "object", "required": ["verdict"]}))
+        );
+        let args = parse_agents(&["rimz", "claude", "hi", "--stay", "10m", "--timeout", "1h"]);
+        let call = call_options(&args.launch).unwrap().expect("a call");
+        assert_eq!(
+            (call.stay, call.timeout),
+            (
+                Stay::Rest(Duration::from_secs(600)),
+                Some(Duration::from_secs(3600))
+            )
+        );
+        for argv in [
+            &["rimz", "claude", "hi"][..],
+            &["rimz", "claude", "hi", "--stay", "true"],
+        ] {
+            assert!(
+                call_options(&parse_agents(argv).launch).unwrap().is_none(),
+                "{argv:?}"
+            );
+        }
+
+        let args = parse_agents(&[
+            "rimz",
+            "claude",
+            "hi",
+            "--stay",
+            "false",
+            "--schema",
+            r#"{"type": "object"}"#,
+            "--timeout",
+            "1h",
+            "--detach",
+            "--keep",
+        ]);
+        validate_detach(&args.launch).expect("a background run reports, so it can detach");
+        let (request, _) = into_supervised_request(args).expect("build the run");
+        assert!(request.background && request.self_cleanup_on_completion && request.keep);
+        assert_eq!(request.report_to, rimz::store::run::ReportTo::Nobody);
+        let call = request.call.expect("the run's call");
+        assert_eq!(
+            (
+                call.stay,
+                call.schema.map(serde_json::Value::Object),
+                call.timeout
+            ),
+            (
+                Stay::TurnEnd,
+                Some(serde_json::json!({"type": "object"})),
+                Some(Duration::from_secs(3600))
+            )
+        );
+    }
+
+    /// `--stay false` starts the run `-p --bg` started, so it takes the flags that run took; each
+    /// refusal on the new spellings names the spelling given, and a value it cannot read is a usage
+    /// error.
+    #[test]
+    fn stay_false_takes_a_one_task_runs_flags_and_refuses_in_its_own_terms() {
+        use clap::error::ErrorKind::ArgumentConflict;
+
+        for argv in [
+            &["rimz", "claude", "hi", "--stay", "false", "--stdin"][..],
+            &[
+                "rimz",
+                "claude",
+                "--stay",
+                "false",
+                "--input-format",
+                "stream-json",
+            ],
+            &[
+                "rimz",
+                "claude",
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--schema",
+                r#"{"type": "object"}"#,
+            ],
+        ] {
+            call_options(&parse_agents(argv).launch)
+                .unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+        }
+        let args = parse_agents(&[
+            "rimz",
+            "claude",
+            "hi",
+            "--stay",
+            "false",
+            "--max-turns",
+            "3",
+        ]);
+        let (request, _) = into_supervised_request(args).expect("build the run");
+        assert_eq!(request.max_turns, Some(3));
+
+        for argv in [
+            &["rimz", "claude", "--resume", "sess", "--keep"][..],
+            &["rimz", "claude", "--continue", "--keep"],
+            &["rimz", "claude", "--resume=sess", "--stdin"],
+            &["rimz", "claude", "--continue", "--stdin"],
+            &[
+                "rimz",
+                "claude",
+                "--resume=sess",
+                "--input-format",
+                "stream-json",
+            ],
+            &[
+                "rimz",
+                "claude",
+                "--continue",
+                "--input-format",
+                "stream-json",
+            ],
+            &["rimz", "claude", "--resume=sess", "--max-turns", "3"],
+            &["rimz", "claude", "--continue", "--max-turns", "3"],
+        ] {
+            assert_clap_error(argv, ArgumentConflict);
+        }
+
+        for (argv, error) in [
+            (
+                &["rimz", "claude", "hi", "--stdin"][..],
+                "--stdin reads the prompt of a run that closes at its turn end; add `-p` or \
+                 `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "hi", "--stay", "10m", "--max-turns", "3"],
+                "--max-turns caps a run that closes at its turn end; add `-p` or `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "--input-format", "stream-json"],
+                "--input-format reads the prompt of a run that closes at its turn end; add `-p` or \
+                 `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "--stay", "false"],
+                "--stay false needs a prompt: the run it starts closes at the end of the turn the \
+                 prompt opens",
+            ),
+        ] {
+            let refused = call_options(&parse_agents(argv).launch).expect_err("refuse the call");
+            assert_eq!(refused.to_string(), error, "{argv:?}");
+            assert!(
+                refused
+                    .downcast_ref::<crate::cli::usage::UsageError>()
+                    .is_some(),
+                "{argv:?}: a usage error exits 2"
+            );
+        }
+
+        let mut args = parse_agents(&["rimz", "claude", "hi", "--stay", "false"]);
+        args.json = true;
+        let Err(error) = into_supervised_request(args) else {
+            panic!("--json is for list");
+        };
+        assert_eq!(
+            error.to_string(),
+            "--json is only supported with `rimz agents list`; a `--stay false` run prints its \
+             agent's name on stdout"
+        );
     }
 
     pub(super) fn fire_env(trigger: Option<&str>) -> rimz::harness::loop_task::FireEnv {
@@ -1791,8 +2035,8 @@ mod launch_options {
 
     #[test]
     fn a_print_run_under_a_fire_is_an_ordinary_run_with_the_fire_stamp() {
-        for (flags, background) in [(vec![], false), (vec!["--bg"], true)] {
-            let mut argv = vec!["rimz", "claude", "check", "-p"];
+        for (flags, background) in [(vec!["-p"], false), (vec!["--stay", "false"], true)] {
+            let mut argv = vec!["rimz", "claude", "check"];
             argv.extend(flags);
             let (plain, _) = into_supervised_request(parse_agents(&argv)).unwrap();
             let (mut request, _) = into_supervised_request(parse_agents(&argv)).unwrap();
@@ -1845,11 +2089,8 @@ mod launch_options {
             let args = AgentsArgs::from_launch(AgentLaunchArgs {
                 spec: Some("codex".to_owned()),
                 prompt: Some("fix-it".to_owned()),
-                cohort: CohortLaunchArgs {
-                    bg: background,
-                    ..Default::default()
-                },
-                print: true,
+                print: !background,
+                stay: background.then_some(rimz::harness::block::Stay::TurnEnd),
                 self_cleanup_on_completion: caller_owned,
                 subagent,
                 ..Default::default()

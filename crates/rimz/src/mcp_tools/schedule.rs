@@ -17,7 +17,7 @@ use crate::config::{LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
 use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
-use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
+use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger, Stay};
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
 use crate::harness::schedule::{self, ScheduleErr, TaskShape};
@@ -234,6 +234,15 @@ fn launch(
                     )));
                 }
             }
+            if agent.stay == Stay::TurnEnd
+                && let Some(team) = &finalized.resolved.team_name
+            {
+                return Err(Failure::new(format!(
+                    "`arguments.profile` `{profile}` is a seat of team `{team}`; with `stay: false` \
+                     a fire runs one agent outside any team, so book it with `stay: true` or book \
+                     the team with `tool` `team`"
+                )));
+            }
             if let Some(name) = agent.name.as_deref() {
                 crate::harness::plan::validate_agent_name(name)
                     .map_err(|err| Failure::new(format!("`arguments.name`: {err}")))?;
@@ -290,6 +299,23 @@ fn launch(
             if let Some(cwd) = &cwd {
                 tail.push(format!("--cwd={cwd}"));
             }
+            match agent.stay {
+                Stay::UntilStopped => {}
+                Stay::TurnEnd => tail.push("--stay=false".to_owned()),
+                Stay::Rest(rest) => tail.push(format!(
+                    "--stay={}",
+                    crate::utils::time::format_duration_compact(rest)
+                )),
+            }
+            if let Some(schema) = &agent.schema {
+                tail.push(format!(
+                    "--schema={}",
+                    serde_json::Value::Object(schema.clone())
+                ));
+            }
+            if let Some(timeout) = &agent.timeout {
+                tail.push(format!("--timeout={timeout}"));
+            }
             tail.push(agent.prompt.clone());
             Ok(Launch {
                 kind: LaunchKind::Agent,
@@ -326,6 +352,9 @@ fn launch(
             }
             if let Some(from_pr) = &from_pr {
                 tail.push(format!("--from-pr={from_pr}"));
+            }
+            if let Some(timeout) = &team.timeout {
+                tail.push(format!("--timeout={timeout}"));
             }
             tail.push(team.prompt.clone());
             Ok(Launch {
@@ -460,13 +489,15 @@ fn window_account(kinds: &[String], entry: &TaskEntry) -> anyhow::Result<WindowA
     })
 }
 
-/// The note `rimz loop add` owes a repeating agent or team booking with no overlap policy.
+/// The note `rimz loop add` owes a repeating agent or team booking with no overlap policy; a
+/// `stay: false` agent closes itself, so it owes none.
 fn idle_warning(booking: &Booking) -> Option<String> {
     if !booking.schedule.repeats() || booking.schedule.overlap.is_some() {
         return None;
     }
-    let choices = match booking.target {
+    let choices = match &booking.target {
         ScheduleTarget::Team(_) => "`replace`",
+        ScheduleTarget::Agent(agent) if agent.stay == Stay::TurnEnd => return None,
         ScheduleTarget::Agent(_) => "`replace` or `allow`",
         ScheduleTarget::Workflow(_) => return None,
     };

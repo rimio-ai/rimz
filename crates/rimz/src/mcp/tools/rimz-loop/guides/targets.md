@@ -1,6 +1,6 @@
 # What differs at a fire
 
-Every fire runs its target through the `rimz` CLI rather than in-process, so NUL in any string and values that would parse as a flag or a verb (such as a prompt starting with `-` other than a `- ` bullet, or a `rimz agents` verb as `profile`) are refused at booking. So are an agent's `stay: false`, `schema`, and `timeout` and a team's `timeout`: a fire's `rimz agents` or `rimz teams` launch carries none of them.
+Every fire runs its target through the `rimz` CLI rather than in-process, so NUL in any string and values that would parse as a flag or a verb (such as a prompt starting with `-` other than a `- ` bullet, or a `rimz agents` verb as `profile`) are refused at booking. An agent's `stay`, `schema`, and `timeout` and a team's `timeout` reach each fire's `rimz agents` or `rimz teams` launch as its `--stay`, `--schema`, and `--timeout` flags.
 
 A missing worktree is created in the project root's repository rather than your checkout.
 

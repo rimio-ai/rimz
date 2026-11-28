@@ -66,7 +66,7 @@ fn only_the_run_bearing_recipe_leaves_a_checkout_after_hook_refusal() {
             "host",
         ]);
         if supervised {
-            command.args(["-p", "--bg"]);
+            command.args(["--stay", "false"]);
         }
         let output = command.bounded_output().unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -114,7 +114,7 @@ fn launching_starts_no_agent_shell_outside_the_pane() {
             "host",
         ];
         if supervised {
-            args.extend(["-p", "--bg"]);
+            args.extend(["--stay", "false"]);
         }
         let mut command = env.rimz();
         let output = command
@@ -154,7 +154,7 @@ fn launching_starts_no_agent_shell_outside_the_pane() {
 fn retry_reuses_preflight_even_when_the_login_shell_disappears() {
     let env = Env::new();
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "preflight-retry", false, "fix it");
+    let mut child = spawn_retrying_print(&env, "preflight-retry", false, "fix it", &[]);
     let mut first = wait_for_run_count(&store, &mut child, 1).pop().unwrap();
     std::fs::remove_file(env.home_root.join("shell-bin/rimz-test-sh")).unwrap();
     first.status = RunStatus::Failed;

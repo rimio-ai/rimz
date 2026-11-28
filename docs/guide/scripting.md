@@ -107,13 +107,13 @@ An exit code tells you the turn ended. These two flags let the run prove the wor
 rimz agents codex -p --verify "cargo xtask test auth" --max-attempts 3 "Fix the failing auth test."
 ```
 
-**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's failure reason (the launch error, launch-step refusal, or captured pane tail) to the original prompt inside a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's failure reason (the launch error, launch-step refusal, or captured pane tail) to the original prompt inside a `<previous-attempt-failure>` block. The budget cap applies to each attempt, while `--timeout` counts from the first launch, and a retry it has passed never starts (exit `124`). Timeouts, budget stops, and cancels stay terminal, and otherwise the last attempt decides the command's exit code.
 
 ```sh
 rimz agents codex -p --retries 1 --timeout 30m "Fix the failing checks."
 ```
 
-The two compose. A verification repair stays in the same session after a completed turn, while a turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both need a blocking run, so both refuse `--bg` and `--output-format stream-json`; use `text` or `json` output. To verify work you started in the background, join it first and run the check on the result.
+The two compose. A verification repair stays in the same session after a completed turn, while a turn that fails with exit `1` starts a fresh-session retry and resets the verify attempt count. Both need a blocking run, so both refuse `--stay false` and `--output-format stream-json`; use `text` or `json` output. To verify work you started in the background, join it first and run the check on the result.
 
 ## Answer and steer a run in flight
 
@@ -129,10 +129,10 @@ The permission mode decides how often the run stops to ask, and it is a per-run 
 
 ## Fire now, collect later
 
-For orchestration, split starting a run from waiting on it. `--bg` launches the run, prints its agent name on stdout, and returns immediately; `rimz agents wait` blocks on one or several names whenever you are ready.
+For orchestration, split starting a run from waiting on it. `--stay false` in place of `-p` launches the run, prints its agent name on stdout, and returns immediately; `rimz agents wait` blocks on one or several names whenever you are ready.
 
 ```sh
-name=$(rimz agents claude -p --bg "Run the migration audit.")   # returns now, prints e.g. swift-otter
+name=$(rimz agents claude --stay false "Run the migration audit.")   # returns now, prints e.g. swift-otter
 # ... kick off other work ...
 rimz agents wait "$name" --stream                               # block on it, tailing the transcript
 ```
@@ -171,7 +171,7 @@ esac
 
 ```sh
 for pkg in api web worker; do
-  rimz agents codex -p --bg --worktree="audit-$pkg" "Audit $pkg for the CVE and reply with the fix." >> runs.txt
+  rimz agents codex --stay false --worktree="audit-$pkg" "Audit $pkg for the CVE and reply with the fix." >> runs.txt
 done
 rimz agents wait $(cat runs.txt)
 ```
@@ -179,8 +179,8 @@ rimz agents wait $(cat runs.txt)
 **Race two providers.** Give each one its own worktree and let whichever finishes first win. `--any` prints the winner's answer under its header and leaves the loser running, so read the name from the JSON map, which holds only the run that won.
 
 ```sh
-a=$(rimz agents claude -p --bg --worktree=race-claude "Fix the failing parser test.")
-b=$(rimz agents codex  -p --bg --worktree=race-codex  "Fix the failing parser test.")
+a=$(rimz agents claude --stay false --worktree=race-claude "Fix the failing parser test.")
+b=$(rimz agents codex  --stay false --worktree=race-codex  "Fix the failing parser test.")
 winner=$(rimz agents wait "$a" "$b" --any --json | jq -r 'keys[0]')
 if [ "$winner" = "$a" ]; then rimz agents stop "$b"; else rimz agents stop "$a"; fi
 ```

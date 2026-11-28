@@ -12,7 +12,7 @@ use super::room::Room;
 use super::start::{Start, TaskKind};
 use crate::config::MachineConfig;
 use crate::config::effective::LaunchAgents;
-use crate::harness::block::{Agent, Team};
+use crate::harness::block::{Agent, Stay, Team};
 use crate::harness::call::CallSpec;
 use crate::harness::run::SupervisedRunRequest;
 use crate::launcher::context::resolve_caller;
@@ -64,7 +64,7 @@ pub(super) fn launch_agent(tools: &Tools, args: &Agent) -> Result<Answer, Failur
         timeout: timeout(args.timeout.as_deref())?,
     };
     let timed = call.timeout.is_some();
-    if !args.stay {
+    if args.stay == Stay::TurnEnd {
         let mut request = SupervisedRunRequest::new(
             spec.to_owned(),
             args.prompt.clone(),
@@ -137,7 +137,7 @@ pub(super) fn launch_team(tools: &Tools, args: &Team) -> Result<Answer, Failure>
             fresh: false,
             teams_scene: true,
             call: CallSpec {
-                stay: true,
+                stay: Stay::UntilStopped,
                 schema: None,
                 timeout: timeout(args.timeout.as_deref())?,
             },
@@ -153,7 +153,7 @@ pub(super) fn launch_team(tools: &Tools, args: &Team) -> Result<Answer, Failure>
     }))
 }
 
-/// A `stay: false` agent: the background run `rimz agents <profile> -p --bg` starts, which
+/// A `stay: false` agent: the background run `rimz agents <profile> --stay false` starts, which
 /// reports to the caller and closes once its turn ends.
 fn launch_worker(
     room: &Room,

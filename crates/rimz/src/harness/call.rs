@@ -1,7 +1,7 @@
 //! What an `agent` or `team` call asks of its launch beyond opening it: the answer an agent's
-//! `schema` asks for, handed in with `rimz submit`, and the stop at the call's `timeout`. The
-//! record is `store::call`'s, keyed by the launch, so a workflow run's step reads and writes
-//! the same record as a tool call's launch.
+//! `schema` asks for, handed in with `rimz submit`, the stop at the call's `timeout`, and the
+//! close a rest stay books at its first turn end. The record is `store::call`'s, keyed by the
+//! launch, so a workflow run's step reads and writes the same record as a tool call's launch.
 
 use std::time::Duration;
 
@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 
 use crate::Store;
 use crate::disk::paths::StatePaths;
+use crate::harness::block::Stay;
 use crate::harness::launch::ReminderSection;
 use crate::ids::{AgentSessionId, MessageId, RunId};
 use crate::store::call::{CallRecord, CallStoreErr, HandedAnswer, Seat};
@@ -18,7 +19,7 @@ use crate::store::message::{DeliveryGate, MessageRecord, MessageSender};
 /// What a call asks of its launch beyond the launch itself.
 #[derive(Clone, Debug)]
 pub struct CallSpec {
-    pub stay: bool,
+    pub stay: Stay,
     pub schema: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
 }
@@ -31,15 +32,21 @@ impl CallSpec {
             .map(crate::harness::launch_reminders::answer_section)
     }
 
+    /// Whether the call asks anything a call record keeps: a schema, a timeout, or a rest.
+    pub(crate) fn asks(&self) -> bool {
+        self.schema.is_some() || self.timeout.is_some() || self.stay.rest().is_some()
+    }
+
     /// Publish the call record of the launch that opened `seats`, its leader first, when the call
-    /// was given a schema or a timeout; a call given neither keeps none.
+    /// `asks` anything; a call that asks nothing keeps none.
     pub fn publish(
         &self,
         paths: &StatePaths,
         seats: Vec<Seat>,
         now: Timestamp,
     ) -> Result<(), CallStoreErr> {
-        if self.schema.is_none() && self.timeout.is_none() {
+        let rest = self.stay.rest();
+        if !self.asks() {
             return Ok(());
         }
         let Some(leader) = seats.first() else {
@@ -50,7 +57,9 @@ impl CallSpec {
             &CallRecord {
                 launch_id: leader.launch_id.clone(),
                 seats,
-                stay: self.stay,
+                stay: self.stay != Stay::TurnEnd,
+                rest_secs: rest.map(|rest| rest.as_secs()),
+                rest_booked_at: None,
                 schema: self.schema.clone(),
                 created_at: now,
                 deadline: self.timeout.map(|timeout| now + timeout),
@@ -60,6 +69,78 @@ impl CallSpec {
             },
         )
     }
+}
+
+/// Why a launch cannot open the one agent seat its call needs, in the `agent` tool's terms;
+/// `rimz agents` words each in its own flag's.
+#[derive(Debug, thiserror::Error)]
+pub enum SeatRefusal {
+    #[error("`{spec}` is a layout of several seats; `agent` launches one")]
+    Layout { spec: String },
+    #[error("`{spec}` runs no agent; `agent` launches one")]
+    NoAgent { spec: String },
+    #[error("`{spec}` is a team; launch it with `team`")]
+    Team { spec: String },
+    #[error(
+        "`{spec}` is not an agent profile; `rimz agents profiles` lists the launchable profiles"
+    )]
+    NotAgentProfile { spec: String },
+    #[error(
+        "`{spec}` is a seat of team `{team}`; with `stay: false` `agent` runs one agent outside \
+         any team, so launch it with `stay: true` or launch the team with `team`"
+    )]
+    TeamSeat { spec: String, team: String },
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BookRestErr {
+    #[error(transparent)]
+    Call(#[from] CallStoreErr),
+    #[error(transparent)]
+    IdleStop(#[from] crate::store::idle_stop::IdleStopErr),
+}
+
+/// Book the close of `agent`'s rest stay at the end of its turn at `turn_ended_at`: the first
+/// turn end claims the rest once on the launch's call record, then books the stop `rimz agents
+/// stop --when-idle` books, requested at that turn end, unless a close the user or the agent
+/// booked during that turn stands. Returns the rest it booked, in seconds; none for a launch with
+/// no rest, whose rest an earlier turn end claimed, so a close a typed prompt withdrew is never
+/// booked again, or whose own booked close stands.
+pub fn book_rest(
+    paths: &StatePaths,
+    agent: &crate::agents::AgentState,
+    turn_ended_at: Timestamp,
+) -> Result<Option<u64>, BookRestErr> {
+    let launch_id = agent.launch_key();
+    let unbooked = |call: &CallRecord| call.rest_secs.filter(|_| call.rest_booked_at.is_none());
+    if crate::store::call::load(paths, launch_id)?
+        .as_ref()
+        .and_then(unbooked)
+        .is_none()
+    {
+        return Ok(None);
+    }
+    let claimed = crate::store::call::update(paths, launch_id, |call| {
+        let rest = unbooked(call)?;
+        call.rest_booked_at = Some(turn_ended_at);
+        Some(rest)
+    })?;
+    let Some((_, after_secs)) = claimed else {
+        return Ok(None);
+    };
+    let armed = crate::store::idle_stop::arm_unless_pending(
+        paths,
+        crate::store::idle_stop::IdleStopRequest {
+            kind: agent.kind.clone(),
+            agent_id: agent.agent_id.clone(),
+            stop: crate::agents::IdleStop {
+                after_secs,
+                requested_at: turn_ended_at,
+                requested_by: None,
+            },
+        },
+    )?;
+    Ok(armed.then_some(after_secs))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -257,6 +338,8 @@ mod tests {
             answer: None,
             asked: None,
             timed_out_at: None,
+            rest_secs: None,
+            rest_booked_at: None,
         }
     }
 
@@ -332,6 +415,47 @@ mod tests {
             !crate::store::call::owes_answer(&paths, &launch).unwrap(),
             "a stopped launch owes nothing"
         );
+    }
+
+    #[test]
+    fn a_rest_stay_records_its_rest_and_a_record_without_one_still_parses() {
+        let (_dir, paths) = room();
+        let now = Timestamp::now();
+        let seat = |launch_id: &str| Seat {
+            kind: crate::ids::AgentKind::new_unchecked("claude"),
+            launch_id: launch_id.into(),
+        };
+        let rest = CallSpec {
+            stay: Stay::Rest(Duration::from_secs(600)),
+            schema: None,
+            timeout: None,
+        };
+        rest.publish(&paths, vec![seat("launch-rest")], now)
+            .unwrap();
+        let record = crate::store::call::load(&paths, &"launch-rest".into())
+            .unwrap()
+            .expect("a rest is published");
+        assert!(record.stay && record.rest_secs == Some(600) && record.rest_booked_at.is_none());
+        let bare = CallSpec {
+            stay: Stay::TurnEnd,
+            ..rest
+        };
+        bare.publish(&paths, vec![seat("launch-bare")], now)
+            .unwrap();
+        assert!(
+            crate::store::call::load(&paths, &"launch-bare".into())
+                .unwrap()
+                .is_none()
+        );
+        std::fs::write(
+            paths.calls_dir.join("launch-old.json"),
+            br#"{"launch_id":"launch-old","seats":[],"stay":false,"created_at":"2026-11-28T00:00:00Z"}"#,
+        )
+        .unwrap();
+        let old = crate::store::call::load(&paths, &"launch-old".into())
+            .unwrap()
+            .expect("a record from before rests");
+        assert!(!old.stay && old.rest_secs.is_none() && old.rest_booked_at.is_none());
     }
 
     #[test]

@@ -6628,6 +6628,7 @@ fn an_agent_calls_run_refuses_a_command_or_a_team_seat_in_the_tools_terms() {
     );
     for (spec, refusal) in [
         ("logs", "`logs` runs no agent; `agent` launches one"),
+        ("pair", "`pair` is a team; launch it with `team`"),
         (
             "pair.reviewer",
             "`pair.reviewer` is a seat of team `pair`; with `stay: false` `agent` runs one agent \
@@ -6635,8 +6636,9 @@ fn an_agent_calls_run_refuses_a_command_or_a_team_seat_in_the_tools_terms() {
         ),
     ] {
         let mut request = supervised_request(spec, "work");
+        request.background = true;
         request.call = Some(crate::harness::call::CallSpec {
-            stay: false,
+            stay: crate::harness::block::Stay::TurnEnd,
             schema: None,
             timeout: None,
         });
@@ -6650,6 +6652,25 @@ fn an_agent_calls_run_refuses_a_command_or_a_team_seat_in_the_tools_terms() {
         .run(dir.path());
         assert_eq!(planned.expect_err(spec).to_string(), refusal);
     }
+    // `rimz agents <team.role> --stay false` runs the seat alone, as `-p --bg` did.
+    let mut request = supervised_request("pair.reviewer", "work");
+    request.background = true;
+    request.team_seat_alone = true;
+    request.call = Some(crate::harness::call::CallSpec {
+        stay: crate::harness::block::Stay::TurnEnd,
+        schema: None,
+        timeout: Some(std::time::Duration::from_secs(60)),
+    });
+    let (planned, _warnings) = SupervisedPlan {
+        request: &request,
+        caller: None,
+        lane: None,
+        parent_isolation: None,
+        machine: &machine,
+    }
+    .run(dir.path());
+    let planned = planned.expect("the CLI runs a team seat alone");
+    assert_eq!(planned.team_name.as_deref(), Some("pair"));
 }
 
 #[test]

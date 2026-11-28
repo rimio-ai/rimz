@@ -1041,7 +1041,7 @@ fn agent_file_adapters_keep_subagent_reminder_out_of_user_prompt_only_with_promp
         crate::harness::launch_reminders::wrap_hook_context(&format!("### Answer\n\n{body}"))
     );
     let call = crate::harness::call::CallSpec {
-        stay: false,
+        stay: crate::harness::block::Stay::TurnEnd,
         schema: schema.as_object().cloned(),
         timeout: None,
     };
@@ -1049,6 +1049,12 @@ fn agent_file_adapters_keep_subagent_reminder_out_of_user_prompt_only_with_promp
         resolve::call_prompt("agy".to_owned(), &call, adapter, &cell),
         in_prompt,
         "a launch with no channel for its reminder carries its section in the prompt"
+    );
+    let retry = crate::harness::prompt_compose::retry_prompt(&in_prompt, Some("compiler failure"));
+    assert_eq!(
+        resolve::call_prompt(retry.clone(), &call, adapter, &cell),
+        retry,
+        "a retry's prompt, built on the first, carries the section once"
     );
 
     cell.system_prompt_file = Some(crate::config::PromptSource::Text {
@@ -1076,6 +1082,7 @@ fn supervised_request(prompt: &str, subagent: bool) -> SupervisedRunRequest {
         spec: "codex".to_owned(),
         throttle_turn: None,
         call: None,
+        team_seat_alone: false,
         prompt: prompt.to_owned(),
         description: None,
         worktree: None,

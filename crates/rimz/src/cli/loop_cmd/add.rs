@@ -688,7 +688,7 @@ fn window_source_line(source: &WindowSource) -> Option<String> {
 }
 
 /// The receipt line reading a launch's parsed arguments back: the worktree they name, and for
-/// an agent or team its prompt and an agent's `-p` time limit.
+/// an agent or team its prompt and its time limit (`none` for a `-p` run without one).
 fn launch_line(kind: rimz::config::LaunchKind, launch: &LoopLaunch) -> Option<String> {
     use rimz::config::LaunchKind;
     let worktree = launch.worktree.as_deref().map(|name| match name {
@@ -704,8 +704,8 @@ fn launch_line(kind: rimz::config::LaunchKind, launch: &LoopLaunch) -> Option<St
             } else {
                 "no prompt"
             };
-            let limit = launch.print.map(|limit| {
-                limit.map_or_else(
+            let limit = (launch.print || launch.timeout.is_some()).then(|| {
+                launch.timeout.map_or_else(
                     || "time limit none".to_owned(),
                     |limit| {
                         format!(
@@ -725,20 +725,22 @@ fn launch_line(kind: rimz::config::LaunchKind, launch: &LoopLaunch) -> Option<St
     (!parts.is_empty()).then(|| format!("launch: {}", parts.join(" · ")))
 }
 
-const AGENT_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` for a run \
-                               that ends itself, `--overlap replace` to stop the old agent at \
-                               each fire, or `--overlap allow` to launch beside it";
-const TEAM_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` for a run \
-                              that ends itself, or `--overlap replace` to stop the old agent at \
-                              each fire";
+const AGENT_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` or \
+                               `--stay false` for a run that ends itself, `--overlap replace` to \
+                               stop the old agent at each fire, or `--overlap allow` to launch \
+                               beside it";
+const TEAM_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-p` or \
+                              `--stay false` for a run that ends itself, or `--overlap replace` \
+                              to stop the old agent at each fire";
 
-/// The note owed by a repeating agent or team task whose launch is no `-p` run and that chose no
-/// overlap policy, since an idle agent holds its later fires; a team task refuses `allow`, so
-/// only an agent task's note names it. A `--once-per-checkout` task owes none: its launch
-/// memory, not the idle agent, holds the later fires.
+/// The note owed by a repeating agent or team task whose launch is no `-p` or `--stay false` run
+/// and that chose no overlap policy, since an idle agent holds its later fires; a team task
+/// refuses `allow`, so only an agent task's note names it. A `--once-per-checkout` task owes
+/// none: its launch memory, not the idle agent, holds the later fires.
 fn idle_note(args: &AddArgs, launch: &LoopLaunch) -> Option<&'static str> {
     let repeats = args.every.is_some() || args.cron.is_some() || args.repeat;
-    if !repeats || launch.print.is_some() || args.overlap.is_some() || args.once_per_checkout {
+    let ends_itself = launch.print || launch.stay == rimz::harness::block::Stay::TurnEnd;
+    if !repeats || ends_itself || args.overlap.is_some() || args.once_per_checkout {
         return None;
     }
     match launch_kind(args).0 {

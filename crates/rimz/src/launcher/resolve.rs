@@ -356,20 +356,22 @@ pub fn supervised_prompt<'a>(
 }
 
 /// A call's launch prompt `prompt` for leader `cell`: with no channel for the launch text, it
-/// carries the call's reminder section (its Answer), which would otherwise reach no one.
+/// carries the call's reminder section (its Answer), which would otherwise reach no one. A retry's
+/// prompt, built on the first attempt's, already carries it, so it carries it once.
 pub(super) fn call_prompt(
     prompt: String,
     call: &crate::harness::call::CallSpec,
     adapter: &crate::agents::AgentDefinition,
     cell: &crate::harness::spec::AgentCell,
 ) -> String {
-    match call.reminder() {
-        Some(section) if !launch_text_delivered(adapter, cell) => format!(
-            "{prompt}\n\n{}",
-            crate::harness::launch_reminders::section_reminder(&section)
-        ),
-        _ => prompt,
+    let Some(section) = call.reminder() else {
+        return prompt;
+    };
+    let reminder = crate::harness::launch_reminders::section_reminder(&section);
+    if launch_text_delivered(adapter, cell) || prompt.contains(&reminder) {
+        return prompt;
     }
+    format!("{prompt}\n\n{reminder}")
 }
 
 pub fn check_supervised_subagent_allowed(

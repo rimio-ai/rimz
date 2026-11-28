@@ -108,6 +108,14 @@ struct ShellArgs {
     /// or none while cache keepalive pings the agent.
     #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     check_in: Option<Duration>,
+    /// Kill the command, every process of it, once this long has passed; its outcome reads timed
+    /// out.
+    #[arg(long, value_name = "DURATION", value_parser = rimz::harness::block::timeout)]
+    timeout: Option<Duration>,
+    /// What the command reads as `input` from the `context.json` that `RIMZ_WORKFLOW_DIR`
+    /// names: a JSON object, inline (`{...}`) or a file path.
+    #[arg(long, value_name = "JSON|PATH")]
+    input: Option<String>,
     /// The command, run once through `sh -c` at the checkout's root: one word as written,
     /// several as that argv, each quoted for sh.
     #[arg(last = true, value_name = "COMMAND")]
@@ -122,6 +130,10 @@ struct WatchArgs {
     /// none while cache keepalive pings the agent.
     #[arg(long = "check-in", value_name = "DURATION", value_parser = super::supervised::parse_timeout)]
     check_in: Option<Duration>,
+    /// Stop watching once this long has passed with the condition unmet; one wake names the
+    /// timeout.
+    #[arg(long, value_name = "DURATION", value_parser = rimz::harness::block::timeout)]
+    timeout: Option<Duration>,
     /// The condition to wake on, such as `pr=merged` or `ci=passed,failed`.
     #[arg(value_name = "EXPR")]
     when: Option<String>,
@@ -141,6 +153,8 @@ pub fn run_shell(args: ShellCommand, globals: &GlobalFlags) -> Result<()> {
                 on,
                 options,
                 check_in,
+                timeout,
+                input,
                 command,
             } = args.shell;
             // clap restricts --on to these three values.
@@ -155,12 +169,15 @@ pub fn run_shell(args: ShellCommand, globals: &GlobalFlags) -> Result<()> {
                 words => shlex::try_join(words.iter().map(String::as_str))
                     .expect("argv words carry no NUL byte"),
             };
-            let trigger = WaitTrigger::Shell {
-                command,
-                on,
-                input: None,
-            };
-            add::run(options.request(trigger, check_in), options.json, globals)
+            let input = input
+                .map(|raw| super::json_object_arg("--input", &raw))
+                .transpose()?;
+            let trigger = WaitTrigger::Shell { command, on, input };
+            add::run(
+                options.request(trigger, check_in, timeout),
+                options.json,
+                globals,
+            )
         }
     }
 }
@@ -171,7 +188,10 @@ pub fn run_watch(args: WatchCommand, globals: &GlobalFlags) -> Result<()> {
         Some(WatchSubcmd::List(list)) => list::run(kind, list.json, globals),
         Some(WatchSubcmd::Cancel(cancel)) => cancel::run(kind, cancel, globals),
         None => match args.watch.when {
-            None if args.watch.options.is_bare() && args.watch.check_in.is_none() => {
+            None if args.watch.options.is_bare()
+                && args.watch.check_in.is_none()
+                && args.watch.timeout.is_none() =>
+            {
                 list::run(kind, args.watch.options.json, globals)
             }
             when => {
@@ -179,7 +199,9 @@ pub fn run_watch(args: WatchCommand, globals: &GlobalFlags) -> Result<()> {
                     when: when.unwrap_or_default(),
                 };
                 add::run(
-                    args.watch.options.request(trigger, args.watch.check_in),
+                    args.watch
+                        .options
+                        .request(trigger, args.watch.check_in, args.watch.timeout),
                     args.watch.options.json,
                     globals,
                 )
@@ -194,12 +216,17 @@ impl WaitOptions {
         self.label.is_none()
     }
 
-    fn request(&self, trigger: WaitTrigger, check_in: Option<Duration>) -> WaitRequest {
+    fn request(
+        &self,
+        trigger: WaitTrigger,
+        check_in: Option<Duration>,
+        timeout: Option<Duration>,
+    ) -> WaitRequest {
         WaitRequest {
             label: self.label.clone(),
             trigger,
             check_in,
-            timeout: None,
+            timeout,
         }
     }
 }
@@ -207,7 +234,11 @@ impl WaitOptions {
 impl ShellArgs {
     /// Whether no option but `--json` is set.
     fn is_bare(&self) -> bool {
-        self.on.is_none() && self.check_in.is_none() && self.options.is_bare()
+        self.on.is_none()
+            && self.check_in.is_none()
+            && self.timeout.is_none()
+            && self.input.is_none()
+            && self.options.is_bare()
     }
 }
 

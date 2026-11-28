@@ -12,7 +12,7 @@ Pick `trigger`; `value` is its argument:
 
 `at` and `in` fire once and remove the booking; a repeating clock never replays a missed fire, while a time that passed with no room open fires late. Before writing a `when` beyond `ci=passed,failed` or `pr=merged`, call `guide` with `rimz-watch/conditions`.
 
-Required `arguments` keys by `tool`: `agent` (`profile`, `prompt`; no `stay: false`, `schema`, or `timeout`), `team` (`team`, `prompt`, plus top-level `worktree` or one-shot `from_pr`; no `timeout`), or `workflow` (`name`; no `input` or `detach`). Call `guide` with `rimz-loop/targets` for what differs at a fire from a direct launch.
+Required `arguments` keys by `tool`: `agent` (`profile`, `prompt`), `team` (`team`, `prompt`, plus top-level `worktree` or one-shot `from_pr`), or `workflow` (`name`; no `input` or `detach`). Call `guide` with `rimz-loop/targets` for what differs at a fire from a direct launch.
 
 A booking always reads `when` at the project root, which may not be your checkout, and runs there unless `worktree`, `from_pr`, or `cwd` places it: give one that writes files a `worktree`, and branch-scope `when` keys (`pr[<branch>]`). Each file a prompt names must exist at the fire. A fire stays live until what it launched ends, an idle agent included; on a repeating booking, say in `arguments.prompt` when the session ends or set `overlap`.
 

@@ -132,7 +132,7 @@ struct FanoutArgs {
     /// Disable automatic completion cleanup; hold each child's pane after exit until its parent ends or Ctrl-C is pressed in the pane (run timeouts still apply).
     #[arg(long)]
     keep: bool,
-    /// Retired; independent runs use `rimz agents -p --bg --detach`.
+    /// Retired; independent runs use `rimz agents --stay false --detach`.
     #[arg(long, hide = true)]
     detach: bool,
     /// Emit JSON.
@@ -236,7 +236,7 @@ struct SubagentLaunchArgs {
     /// Disable automatic completion cleanup; hold the child's pane after exit until its parent ends or Ctrl-C is pressed in the pane (run timeouts still apply).
     #[arg(long)]
     keep: bool,
-    /// Retired; independent runs use `rimz agents -p --bg --detach`.
+    /// Retired; independent runs use `rimz agents --stay false --detach`.
     #[arg(long, hide = true)]
     detach: bool,
     /// Seed the child card's description.
@@ -331,7 +331,7 @@ fn reject_detach(args: &SubagentsArgs) -> Result<()> {
     };
     if detach {
         return Err(UsageError::new(
-            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" -p --bg --detach`".into(),
+            "--detach was removed from `rimz subagents`: a subagent ends with its parent. For a run that outlives you, launch a peer: `rimz agents <spec> \"<prompt>\" --stay false --detach`".into(),
         )
         .into());
     }
