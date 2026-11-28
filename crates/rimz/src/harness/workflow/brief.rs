@@ -14,11 +14,17 @@ use crate::store::workflow::{
 const DEFINITION: &str = "a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node.";
 const MORE: &str = "`rimz workflow show` draws the graph with this run's position and trail, and `rimz workflow show --history` lists every step and check so far; a subagent of yours runs the same commands to find this run.";
 
-pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord) -> String {
+pub(super) fn step(
+    paths: &WorkflowPaths,
+    spec: &Definition,
+    record: &RunRecord,
+    starter: Option<&str>,
+    runs: &workflow::RunNames,
+) -> String {
     let step = spec
         .step(&record.node)
         .expect("a step brief is composed at the current step");
-    let mut origin = origin(record);
+    let mut origin = origin(record, starter);
     origin.push_str(" Your prompt is the step's fixed text, not a message someone just typed.");
     let evidence = record.fire.as_ref().and_then(RunFire::evidence);
     if record.prompt.is_some() || evidence.is_some() {
@@ -106,7 +112,7 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
         };
         arrival.push(format!("The previous attempt, {who}, {ended}."));
     }
-    if let Some(joined) = joined(record) {
+    if let Some(joined) = joined(record, runs) {
         arrival.push(joined);
     }
     let (mut after, questions) = lifecycle(spec, step, record);
@@ -146,11 +152,11 @@ pub(super) fn step(paths: &WorkflowPaths, spec: &Definition, record: &RunRecord)
 }
 
 /// The runs the run's `runs` step started, once each has ended, with the command that reads one.
-fn joined(record: &RunRecord) -> Option<String> {
+fn joined(record: &RunRecord, runs: &workflow::RunNames) -> Option<String> {
     if record.joined.is_empty() {
         return None;
     }
-    let runs = record
+    let ended_runs = record
         .joined
         .iter()
         .filter_map(|run| {
@@ -166,7 +172,7 @@ fn joined(record: &RunRecord) -> Option<String> {
                 .reason
                 .as_ref()
                 .map_or_else(String::new, |reason| format!(": {reason}"));
-            let shown = workflow::RunNames::of_project(&record.project_root).shown(&run.id);
+            let shown = runs.shown(&run.id);
             Some(format!(
                 "{} ({}) ended {}{branch}{notes}{reason}: {}.",
                 span(&shown),
@@ -179,7 +185,7 @@ fn joined(record: &RunRecord) -> Option<String> {
             ))
         })
         .collect::<Vec<_>>();
-    let started = match runs.len() {
+    let started = match ended_runs.len() {
         1 => "1 run, which has".to_owned(),
         count => format!("{count} runs, which have"),
     };
@@ -188,14 +194,14 @@ fn joined(record: &RunRecord) -> Option<String> {
         span("runs"),
         span("joined"),
         span("context.json"),
-        runs.join(" ")
+        ended_runs.join(" ")
     ))
 }
 
-pub(super) fn judge(spec: &Definition, record: &RunRecord) -> String {
+pub(super) fn judge(spec: &Definition, record: &RunRecord, starter: Option<&str>) -> String {
     [
         position(spec, record, "a check in", "check"),
-        origin(record),
+        origin(record, starter),
         "Your answer decides where the run goes next.".into(),
         "`rimz workflow show $RIMZ_WORKFLOW_RUN --history` lists every step and check so far."
             .into(),
@@ -309,17 +315,45 @@ fn rail(spec: &Definition, current: &str) -> String {
     text
 }
 
-fn origin(record: &RunRecord) -> String {
+/// What `record`'s starter reads as: an agent's handle, read from the room's rows, ended ones
+/// included, or a run's shown form, read from its record; none for a loop fire or a person, or
+/// a starter no record holds any more.
+pub(super) fn starter_name(
+    state: &crate::StatePaths,
+    runs: &workflow::RunNames,
+    record: &RunRecord,
+) -> Option<String> {
+    let (kind, launch) = match record.starter.as_ref()? {
+        RunStarter::Agent { kind, launch } => (kind, launch),
+        RunStarter::Run { run, .. } => return Some(runs.shown(run)),
+    };
+    let runtime = crate::disk::paths::RuntimePaths::for_state(state).ok()?;
+    let store = crate::store::Store::open_existing(state.clone(), runtime)?;
+    let projection = store
+        .runtime_projection(crate::store::runtime::RuntimeScope::Audit)
+        .ok()?;
+    let peers: Vec<_> = projection.agents.iter().collect();
+    let agent = crate::address::launch_row(peers.iter().copied(), kind, launch)?;
+    Some(crate::address::agent_handle(agent, &peers, true))
+}
+
+fn origin(record: &RunRecord, starter: Option<&str>) -> String {
     let command = span("rimz workflow run");
     match (&record.fire, &record.starter) {
-        (None, Some(RunStarter::Agent { kind, launch })) => format!(
-            "A {} agent (launch {}) started this run with {command}.",
-            span(kind.as_str()),
-            span(launch.as_str())
-        ),
+        (None, Some(RunStarter::Agent { kind, .. })) => match starter {
+            Some(handle) => format!(
+                "The {} agent {} started this run with {command}.",
+                span(kind.as_str()),
+                span(handle)
+            ),
+            None => format!(
+                "A {} agent started this run with {command}.",
+                span(kind.as_str())
+            ),
+        },
         (None, Some(RunStarter::Run { run, node })) => format!(
             "The workflow run {} started this run with {command} from its node {}.",
-            span(run.as_str()),
+            span(starter.unwrap_or(run.as_str())),
             span(node)
         ),
         (None, None) => format!("The user started this run by hand with {command}."),

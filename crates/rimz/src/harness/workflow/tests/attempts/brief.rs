@@ -172,10 +172,13 @@ fn lifecycle_notes_state_only_applicable_turn_and_question_rules() {
 #[test]
 fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
     let parent = "wf_0190b8172c0070008000000000000009";
-    let from_parent = format!(
-        "The workflow run `{parent}` started this run with `rimz workflow run` from its node `pr`."
-    );
-    for origin in ["automatic", "fire", "run", "agent", "parent"] {
+    let from_parent = |shown: &str| {
+        format!(
+            "The workflow run `{shown}` started this run with `rimz workflow run` from its node `pr`."
+        )
+    };
+    let (from_recorded, from_orphan) = (from_parent("review#main"), from_parent(parent));
+    for origin in ["automatic", "fire", "run", "agent", "parent", "orphan"] {
         for prompt in [false, true] {
             let (_dir, state, mut record) =
                 setup(&format!("{OUTCOME_STEP}admission.throttle='off'\n"));
@@ -190,7 +193,7 @@ fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
                         launch: "launch_planner".into(),
                     });
                 }
-                "parent" => {
+                "parent" | "orphan" => {
                     record.starter = Some(crate::store::workflow::RunStarter::Run {
                         run: parent.parse().unwrap(),
                         node: "pr".into(),
@@ -199,6 +202,14 @@ fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
                 _ => {}
             }
             update(&state, &record);
+            if origin == "parent" {
+                let mut starting = record.clone();
+                starting.id = parent.parse().unwrap();
+                starting.workflow = "review".into();
+                starting.starter = None;
+                let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+                records::initialize(&state, &starting, &guard).unwrap();
+            }
             let host = FakeHost::new();
             answer(&state, &record, &host, json!({"outcome":"red"}));
             let first = match origin {
@@ -206,15 +217,14 @@ fn origin_notes_distinguish_automatic_loop_fire_and_workflow_run_prompts() {
                     "RimZ started this run automatically, when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m (loop task `land`)."
                 }
                 "fire" => "The user started this run by hand with `rimz loop fire land`.",
-                "agent" => {
-                    "A `claude` agent (launch `launch_planner`) started this run with `rimz workflow run`."
-                }
-                "parent" => from_parent.as_str(),
+                "agent" => "A `claude` agent started this run with `rimz workflow run`.",
+                "parent" => from_recorded.as_str(),
+                "orphan" => from_orphan.as_str(),
                 _ => "The user started this run by hand with `rimz workflow run`.",
             };
             let extra = match (prompt, origin) {
                 (false, _) => "",
-                (true, "run" | "agent" | "parent") => {
+                (true, "run" | "agent" | "parent" | "orphan") => {
                     " The text given with `--prompt` to `rimz workflow run` ends it."
                 }
                 _ => " The loop fire's prompt ends it: the task's prompt, what fired it, or both.",
@@ -442,7 +452,13 @@ fn missing_enrichment_never_prevents_a_launch_or_invents_a_sender() {
     fs::remove_file(&paths.journal).unwrap();
     fs::create_dir(&paths.journal).unwrap();
     let spec: Definition = toml::from_str(OUTCOME_STEP).unwrap();
-    let text = crate::harness::workflow::brief::step(&paths, &spec, &live);
+    let text = crate::harness::workflow::brief::step(
+        &paths,
+        &spec,
+        &live,
+        None,
+        &crate::store::workflow::RunNames::new(&state),
+    );
     assert!(
         text.contains("RimZ started this run automatically (loop task `missing-task`)."),
         "{text}"
@@ -482,7 +498,13 @@ fn a_step_after_a_runs_step_lists_each_started_run_with_its_show_command() {
     ];
     let paths = state.workflow(&record.id);
     let spec: Definition = toml::from_str(OUTCOME_STEP).unwrap();
-    let text = crate::harness::workflow::brief::step(&paths, &spec, &live);
+    let text = crate::harness::workflow::brief::step(
+        &paths,
+        &spec,
+        &live,
+        None,
+        &crate::store::workflow::RunNames::new(&state),
+    );
     let listing = format!(
         "This run's `runs` step started 2 runs, which have ended; `joined` in `context.json` \
          holds each one's ending. `{done}` (child) ended done on branch `rimz/child-1`, notes in `/notes/child-1`: \
@@ -537,9 +559,26 @@ fn rails_group_multiple_returns_and_never_assert_a_nonexistent_route() {
 }
 
 #[test]
+fn an_agent_starter_is_named_by_its_handle_never_its_launch() {
+    let (spec, _paths, mut record) = judge_fixture();
+    record.starter = Some(crate::store::workflow::RunStarter::Agent {
+        kind: crate::ids::AgentKind::new_unchecked("claude"),
+        launch: "launch_planner".into(),
+    });
+    let text = crate::harness::workflow::brief::judge(&spec, &record, Some("@planner#feat"));
+    assert!(
+        text.contains(
+            "\n\nThe `claude` agent `@planner#feat` started this run with `rimz workflow run`.\n\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("launch_planner"), "{text}");
+}
+
+#[test]
 fn judge_note_is_short_and_has_no_step_or_answer_contract_paragraphs() {
     let (spec, _paths, record) = judge_fixture();
-    let text = crate::harness::workflow::brief::judge(&spec, &record);
+    let text = crate::harness::workflow::brief::judge(&spec, &record, None);
     assert_eq!(
         text,
         "You are a check in a RimZ workflow: a graph of steps and checks that the user defined. RimZ launches an agent for each agent step, and after each step runs a check whose answer picks the next node. You are the check `judge` of the workflow `test` (→ a route, ⇄ a step that returns to its check, [ ] you):\n\n[judge]\n\nThe user started this run by hand with `rimz workflow run`.\n\nYour answer decides where the run goes next.\n\n`rimz workflow show $RIMZ_WORKFLOW_RUN --history` lists every step and check so far."

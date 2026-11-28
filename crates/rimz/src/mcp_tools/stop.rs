@@ -214,7 +214,7 @@ fn launch_id(owners: &Owners<'_>, launch: &Launch) -> Option<String> {
             } else {
                 TaskKind::Agent
             };
-            Some(kind.id(row.name.as_deref().unwrap_or(row.launch_key().as_str())))
+            Some(kind.id(&owned::agent_name(owners.rows(), row)))
         }
         Launch::Child { .. } => None,
     }

@@ -119,7 +119,7 @@ impl Sources<'_> {
                     .description
                     .as_deref()
                     .or(agent.first_prompt.as_deref());
-                let name = agent.name.clone().unwrap_or_else(|| launch.to_string());
+                let name = super::owned::agent_name(self.agents.iter().copied(), agent);
                 (
                     task_kind,
                     name,
