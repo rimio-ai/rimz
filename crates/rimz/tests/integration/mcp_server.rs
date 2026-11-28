@@ -1003,6 +1003,45 @@ fn an_agent_call_for_one_task_records_its_schema_and_deadline() {
     assert!(record.owes_answer());
 }
 
+/// An `agent` call with a rest stays: it opens a staying peer and records the rest on its call,
+/// which books no close before the launch's first turn ends.
+#[cfg(unix)]
+#[test]
+fn an_agent_call_with_a_rest_stays_and_records_its_rest() {
+    let room = LayoutRoom::new();
+    let mut server = room.serve("parent-launch");
+    let (answer, is_error) = server.answer(
+        1,
+        "agent",
+        json!({"profile": "worker", "prompt": "audit the parser", "stay": "10m"}),
+    );
+    assert!(!is_error, "{answer}");
+    assert_eq!(answer["status"], json!("running"), "{answer}");
+    let agents = room.agents();
+    let peer = agents
+        .iter()
+        .find(|agent| agent.profile.as_deref() == Some("worker"))
+        .expect("the peer's launch row");
+    let trace = std::fs::read_to_string(&room.trace).unwrap();
+    assert!(
+        !trace.contains("run claude"),
+        "a staying peer, not a run: {trace}"
+    );
+    let launch_id = peer.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(
+        record.stay && record.rest_secs == Some(600) && record.rest_booked_at.is_none(),
+        "{record:?}"
+    );
+    assert!(
+        !record.owes_answer() && record.deadline.is_none(),
+        "{record:?}"
+    );
+    assert!(rimz::store::idle_stop::read(room.store.paths()).is_empty());
+}
+
 /// A `team` call opens the team's cohort in the named worktree, through a real launch: the
 /// answered id is the seats' team instance, and `tasks`, `join`, and `stop` act on it. A second
 /// call onto the live cohort says its brief went to the leader, so it is not sent again.

@@ -4446,6 +4446,133 @@ fn human_prompt_withdraws_idle_stop_but_harness_turn_still_stops() {
     assert!(idle_stop::read(store.paths()).is_empty());
 }
 
+/// A rest stay's call books no close before the launch's first turn ends; that turn end books
+/// `rimz agents stop --when-idle`'s close of the rest, requested at the turn end. A typed prompt
+/// withdraws it for good: a later turn end books nothing. A due rest closes the agent through the
+/// idle-stop helper, recorded as an `idle_stop` assist.
+#[test]
+fn a_rest_stay_books_its_close_at_its_first_turn_end_until_a_typed_prompt_withdraws_it() {
+    use rimz::harness::idle_stop::IdleStopHelperRequest;
+    use rimz::store::idle_stop;
+    for rest_secs in [600, 0] {
+        let env = Env::new();
+        env.record(&env.project_root);
+        env.install_agent_hooks("claude");
+        let hook = |payload: serde_json::Value| {
+            run_hook(&env, payload, &[("ZELLIJ_PANE_ID", "3")]);
+        };
+        hook(
+            json!({"hook_event_name": "SessionStart", "session_id": "provider-session", "source": "startup"}),
+        );
+        let store = env.store();
+        let created_at = jiff::Timestamp::now();
+        rimz::store::call::create(
+            store.paths(),
+            &rimz::store::call::CallRecord {
+                launch_id: "provider-session".into(),
+                seats: Vec::new(),
+                stay: true,
+                rest_secs: Some(rest_secs),
+                rest_booked_at: None,
+                schema: None,
+                created_at,
+                deadline: None,
+                answer: None,
+                asked: None,
+                timed_out_at: None,
+            },
+        )
+        .unwrap();
+        hook(
+            json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session", "prompt": "the brief"}),
+        );
+        assert!(
+            idle_stop::read(store.paths()).is_empty(),
+            "no close before the first turn ends"
+        );
+        hook(json!({"hook_event_name": "Stop", "session_id": "provider-session"}));
+        let booked = idle_stop::read(store.paths());
+        let [booking] = booked.as_slice() else {
+            panic!("the first turn end books one close: {booked:?}");
+        };
+        let call = rimz::store::call::load(store.paths(), &"provider-session".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            (
+                booking.agent_id.as_str(),
+                booking.stop.after_secs,
+                Some(booking.stop.requested_at)
+            ),
+            ("provider-session", rest_secs, call.rest_booked_at),
+            "{call:?}"
+        );
+        assert!(created_at < booking.stop.requested_at, "{booking:?}");
+        if rest_secs == 600 {
+            hook(
+                json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session", "prompt": "keep working"}),
+            );
+            assert!(
+                idle_stop::read(store.paths()).is_empty(),
+                "a typed prompt withdraws the close"
+            );
+            hook(json!({"hook_event_name": "Stop", "session_id": "provider-session"}));
+            assert!(
+                idle_stop::read(store.paths()).is_empty(),
+                "a later turn end books no close again"
+            );
+            continue;
+        }
+        let session = env.resolve_workspace(&env.project_root).session_name;
+        let mut pane = agent_pane(&env, "claude");
+        pane.session_name = session.clone();
+        let fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
+        let frame = rimz::sidebar::frame::assemble_frame(
+            vec![pane],
+            rimz::utils::time::unix_now_ms(),
+            session.clone(),
+        );
+        rimz::disk::atomic::write_temp_then_rename_cache(
+            &store.runtime_paths().pane_frame_path(),
+            &frame,
+        )
+        .unwrap();
+        run_success(
+            traced_rimz(&env, "rest-stay.log")
+                .env(
+                    "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                    format!("{session} [Created 1s ago]\n"),
+                )
+                .env("RIMZ_TEST_PANE_LIST", &fixture)
+                .args(rimz::child_process::agent_helper_argv(
+                    "idle-stop",
+                    &IdleStopHelperRequest {
+                        workspace_id: env.workspace_id.clone(),
+                        kind: AgentKind::new_unchecked("claude"),
+                        agent_id: "provider-session".into(),
+                        pane_id: PaneId::from_parts(MuxName::Zellij, TRACE_PANE),
+                        label: "@claude".into(),
+                    },
+                )),
+            "idle stop after the rest",
+        );
+        assert!(idle_stop::read(store.paths()).is_empty());
+        let stats = run_success(
+            env.rimz().args(["stats", "--assists", "--all", "--json"]),
+            "assist stats",
+        );
+        let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+        let closes: Vec<_> = stats["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["assist"] == "idle_stop")
+            .collect();
+        assert_eq!(closes.len(), 1, "{stats}");
+        assert_eq!(closes[0]["stopped"], true, "{stats}");
+    }
+}
+
 #[test]
 fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;

@@ -394,6 +394,12 @@ pub(super) fn handle_lifecycle_frame(
             {
                 warn!(%run_id, %error, "lifecycle: could not queue an owed-answer notice");
             }
+            if turn_ended
+                && parent_agent_id.is_none()
+                && let Some(agent_id) = recorded.observation.agent_id.as_ref()
+            {
+                book_rest_close(store, agent, agent_id);
+            }
         }
         let compaction_prompt = !replaced
             && matches!(
@@ -931,6 +937,25 @@ fn record_run_lifecycle(
             );
             None
         }
+    }
+}
+
+/// A rest stay's first turn end books its close. Best effort after the hook transaction: a
+/// failure warns, and the agent stays. It reads the rows without attaching their sidecars, the
+/// cost that grows with the fleet.
+fn book_rest_close(store: &Store, agent: &AgentDefinition, agent_id: &rimz::ids::AgentSessionId) {
+    let Ok(snapshot) = store.snapshot_with_context(|_, _| false) else {
+        return;
+    };
+    let Some(row) = find_agent(&snapshot.agents, agent.spec().kind, agent_id) else {
+        return;
+    };
+    if let Err(error) = rimz::harness::call::book_rest(
+        store.paths(),
+        row,
+        rimz::harness::hook_drain::frame_timestamp(),
+    ) {
+        warn!(%agent_id, %error, "lifecycle: could not book a rest stay's close, so it stays");
     }
 }
 

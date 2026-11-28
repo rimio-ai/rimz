@@ -2747,7 +2747,10 @@ path = "crates/rimz/src/harness"
 # log keeps (+1).
 # `workflow_script::{Calling, Called, Reader}` and `block::WorkflowSource`: the reader of a called
 # workflow's script a run hands its script engine (+4).
-surface-budget = 1490
+# `Stay` and `Stay::rest`, the `stay` value the block, the call spec, and `rimz agents --stay`
+# share, and `call::book_rest` with its error, which the lifecycle hook calls at a rest stay's
+# turn end (+4).
+surface-budget = 1494
 
 [[verdict]]
 kind = "item"
@@ -6587,7 +6590,9 @@ allowed-dependencies = [
 # `Schedule::repeats` and `Schedule::booked`, `Booked` and its two methods, and the
 # `flag_refusal` and `nul_refusal` a `workflow` booking shares, which the `schedule` tool reads
 # (+7).
-surface-budget = 41
+# `Stay`, the one `stay` value the `agent` block, the call spec, and `rimz agents --stay` read,
+# and `Stay::rest`, the rest the call record stores (+2).
+surface-budget = 43
 
 [[module]]
 path = "crates/rimz/src/mcp"

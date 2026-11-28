@@ -90,6 +90,8 @@ mod tests {
             answer: None,
             asked: None,
             timed_out_at: None,
+            rest_secs: None,
+            rest_booked_at: None,
         };
         let later = now + Duration::from_secs(60);
         assert!(

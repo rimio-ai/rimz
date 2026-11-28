@@ -219,7 +219,7 @@ In the timeline header, `N held` joins the detail. A line's mark names its kind:
 | `↘` | Tier fallback: the profile used the next available model. |
 | `▶` | Auto-continue: a parked agent resumed, or `resume held` when delivery did not happen. |
 | `◷` | Cache keepalive (`forced cache keepalive` for the ping sent past the typing hold): idle duration (a range for repeats), the keep-warm horizon when one was holding, and newest pending-wait count, followed by agent, message, and delivery verdict. |
-| `■` | Idle stop: an agent stopped by its `--when-idle` request, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
+| `■` | Idle stop: an agent stopped by its `--when-idle` request or its rest stay, with how long it rested, the threshold, and who asked; `idle stop failed` carries the error. |
 | `↶` | Idle stop withdrawn: a prompt from the user kept the session, with the withdrawn threshold and who asked for the stop. |
 | `⤳` | Molt: the agent moved into a fresh session under the same handle. |
 | `↺` | Launch retry: an agent whose CLI exited before its session opened, with the exit code, how long it lived, and the attempt number; `relaunch failed` carries the error. |
@@ -259,7 +259,7 @@ Counts are of assists that took effect, in the order they print. The five `workf
 | `compacts` | Delivered `auto_compact`, `ceiling_compact`, `idle_compact`, and `flip_compact` events. |
 | `soft_compacts` | Delivered mid-turn compaction reminders. |
 | `keepalives` | Delivered prompt-cache pings. |
-| `idle_stops` | `stop --when-idle` requests that stopped their agent. |
+| `idle_stops` | `stop --when-idle` requests, rest stays' closes included, that stopped their agent. |
 | `idle_stop_withdrawals` | Requests withdrawn by a prompt from the user. |
 | `hibernations`, `hibernate_reclaimed_bytes` | Freezes, and the bytes reclaimed by freezes and deepening steps. |
 | `hibernate_holds` | Map from `kind/agent_id` to the newest hold reason recorded for that agent, held or not; `{}` when none. |
@@ -332,7 +332,7 @@ Every event carries `assist`, its type, and `at`, its time in UTC. A field marke
 
 `Compact reminder: N` counts delivered mid-turn compaction reminders, separately from the compact commands counted by `Auto-compact:`. A reminder rides the agent's post-tool hook (on Antigravity, the hook before its next model call) and counts once per rung it claims. A missed reminder, which only an older binary's steer records, appears only with `--all` and in the held count, not as a delivered reminder.
 
-`Idle stop: N` counts [`stop --when-idle`](./agents.md#stop) requests that stopped their agent. `idle_secs` is how long the agent had rested, `idle_after_secs` the requested threshold, `requested_by` the asking agent's handle, and `stopped` whether the stop ended the agent: no pane hosts it and its process is gone, or, for a process RimZ does not know, its end is recorded. A stop that did not appears with `--all` with `stopped: false` and its reason in `error`, such as its pane staying open or its process still running after SIGTERM; it leaves its request armed unless it closed the agent's pane. `error` can accompany `stopped: true`: the agent stopped and something else failed, such as a child's pane staying open.
+`Idle stop: N` counts [`stop --when-idle`](./agents.md#stop) requests, rest stays' closes included, that stopped their agent. `idle_secs` is how long the agent had rested, `idle_after_secs` the requested threshold, `requested_by` the asking agent's handle, and `stopped` whether the stop ended the agent: no pane hosts it and its process is gone, or, for a process RimZ does not know, its end is recorded. A stop that did not appears with `--all` with `stopped: false` and its reason in `error`, such as its pane staying open or its process still running after SIGTERM; it leaves its request armed unless it closed the agent's pane. `error` can accompany `stopped: true`: the agent stopped and something else failed, such as a child's pane staying open.
 
 `Idle stop withdrawn: N` counts requests withdrawn by a prompt from the user; `idle_after_secs` is the withdrawn threshold. These events count as recorded, never held; their `↶` line names the agent, threshold, and requester when an agent asked.
 

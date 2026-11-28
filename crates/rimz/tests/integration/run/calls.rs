@@ -113,6 +113,8 @@ fn call(schema: Option<serde_json::Value>, deadline: Option<(Timestamp, Duration
         answer: None,
         asked: None,
         timed_out_at: None,
+        rest_secs: None,
+        rest_booked_at: None,
     }
 }
 
@@ -785,6 +787,8 @@ fn team_call(env: &Env, seats: &[(&str, u64)]) -> (Vec<std::process::Child>, Run
             answer: None,
             asked: None,
             timed_out_at: None,
+            rest_secs: None,
+            rest_booked_at: None,
         },
     )
     .unwrap();
