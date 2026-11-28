@@ -302,6 +302,9 @@ impl SupervisedRunRequest {
 #[derive(Debug)]
 pub enum SupervisedRunOutcome {
     Record(Box<RunRecord>),
+    /// The launch's deadline passed after this attempt ended, so no retry started: the record
+    /// keeps the attempt's own end, and the launch exits timed out.
+    DeadlinePassed(Box<RunRecord>),
     Background {
         agent_name: String,
         run_id: RunId,
@@ -1287,25 +1290,31 @@ fn fail_owned_with(
 
 /// Where a completed supervised run stands once one verify command finished.
 pub enum VerifyStep {
-    /// The run is terminal: canceled, verified, or out of verify attempts.
+    /// The run is terminal: canceled, timed out, verified, or out of verify attempts.
     Settled(RunRecord),
     /// The run reopened as `Running`, awaiting the re-prompted turn.
     Reprompt(RunRecord),
 }
 
 /// Store one finished verify on a completed run and settle it: a requested
-/// cancellation wins, then a pass, then the attempt cap; otherwise the run
-/// reopens for a re-prompt.
+/// cancellation wins, then a check the launch's deadline cut short (timed out),
+/// then a pass, then the attempt cap; otherwise the run reopens for a re-prompt.
 pub fn settle_verify(
     paths: &StatePaths,
     run_id: &RunId,
     verify: RunVerify,
     cancel_requested: bool,
+    deadline_cut: bool,
     max_attempts: u32,
 ) -> Result<VerifyStep> {
-    if cancel_requested {
+    if cancel_requested || deadline_cut {
+        let status = if cancel_requested {
+            RunStatus::Canceled
+        } else {
+            RunStatus::TimedOut
+        };
         reopen_for_verify(paths, run_id, verify)?;
-        return mark_terminal(paths, run_id, RunStatus::Canceled)
+        return mark_terminal(paths, run_id, status)
             .map(|(record, _wrote)| VerifyStep::Settled(record));
     }
     if verify.passed {

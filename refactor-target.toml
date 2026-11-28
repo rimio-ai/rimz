@@ -2750,7 +2750,9 @@ path = "crates/rimz/src/harness"
 # `Stay` and `Stay::rest`, the `stay` value the block, the call spec, and `rimz agents --stay`
 # share, and `call::book_rest` with its error, which the lifecycle hook calls at a rest stay's
 # turn end (+4).
-surface-budget = 1494
+# `block::timeout`, the one launch `timeout` grammar, which each CLI `--timeout` of a launch
+# option parses with (+1).
+surface-budget = 1495
 
 [[verdict]]
 kind = "item"
@@ -6592,7 +6594,9 @@ allowed-dependencies = [
 # (+7).
 # `Stay`, the one `stay` value the `agent` block, the call spec, and `rimz agents --stay` read,
 # and `Stay::rest`, the rest the call record stores (+2).
-surface-budget = 43
+# `timeout`, the one launch `timeout` grammar, which each CLI `--timeout` of a launch option
+# parses with (+1).
+surface-budget = 44
 
 [[module]]
 path = "crates/rimz/src/mcp"

@@ -572,7 +572,7 @@ pub(crate) struct AgentLaunchArgs {
     #[arg(long, requires = "print")]
     pub(crate) stdin: bool,
     /// Wait cap for `--print` or `wait`.
-    #[arg(long, value_parser = crate::cli::supervised::parse_timeout, requires = "print")]
+    #[arg(long, value_parser = rimz::harness::block::timeout, requires = "print")]
     pub(crate) timeout: Option<Duration>,
     #[arg(skip)]
     pub(crate) warn: Option<Vec<Duration>>,
@@ -1327,7 +1327,7 @@ fn dispatch_launch(
         let (mut request, presentation) = into_supervised_request(args)?;
         stamp_fire(&mut request, fire);
         return match run_print(request, presentation, globals) {
-            Ok(Some(record)) => std::process::exit(record.status.exit_code()),
+            Ok(Some(exit_code)) => std::process::exit(exit_code),
             Ok(None) => Ok(()),
             Err(err) => exit_print_usage_error(err),
         };
@@ -1540,7 +1540,7 @@ pub(in crate::cli) fn launch_supervised_background(
         SupervisedRunOutcome::BudgetExceeded { reason } => {
             Ok(BackgroundLaunchOutcome::BudgetExceeded { reason })
         }
-        SupervisedRunOutcome::Record(_) => {
+        SupervisedRunOutcome::Record(_) | SupervisedRunOutcome::DeadlinePassed(_) => {
             bail!("background supervised launch returned a blocking run record")
         }
     }
@@ -1637,7 +1637,10 @@ fn into_supervised_request(
     request.effort = args.launch.overrides.effort;
     request.budget = args.launch.cohort.budget;
     request.max_turns = args.launch.max_turns;
-    request.timeout = args.launch.timeout;
+    // A subagent's timeout is its run's own clock; any other launch's rides its call.
+    if args.launch.subagent {
+        request.timeout = args.launch.timeout;
+    }
     request.warn = args.launch.warn;
     request.grace = args.launch.grace;
     request.keep = args.launch.keep;

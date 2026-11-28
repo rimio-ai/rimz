@@ -10,18 +10,21 @@ use std::sync::{Arc, Mutex};
 
 const CHECK_DEFAULT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
 
+/// Run a blocking or background print run and present it: the exit code of a blocking run, none
+/// for a background one or a launch that did not happen.
 pub(in crate::cli) fn run_print(
     request: SupervisedRunRequest,
     presentation: SupervisedPresentation,
     globals: &GlobalFlags,
-) -> Result<Option<RunRecord>> {
+) -> Result<Option<i32>> {
     let output_format = presentation.output_format;
     let report_to = request.report_to;
     let Some(outcome) = run_supervised(request, presentation, globals, &mut None)? else {
         return Ok(None);
     };
-    let record = match outcome {
-        SupervisedRunOutcome::Record(record) => Some(*record),
+    let (record, out_of_time) = match outcome {
+        SupervisedRunOutcome::Record(record) => (*record, false),
+        SupervisedRunOutcome::DeadlinePassed(record) => (*record, true),
         SupervisedRunOutcome::Background {
             agent_name,
             response_path,
@@ -35,16 +38,14 @@ pub(in crate::cli) fn run_print(
                 false,
                 report_to,
             )?;
-            None
+            return Ok(None);
         }
         SupervisedRunOutcome::BudgetExceeded { reason } => {
             render::report(&anyhow::anyhow!(reason));
             std::process::exit(RunStatus::BudgetExceeded.exit_code());
         }
     };
-    let Some(record_ref) = record.as_ref() else {
-        return Ok(record);
-    };
+    let record_ref = &record;
     match output_format {
         OutputFormat::Text => {
             let mut stdout = render::out();
@@ -61,7 +62,15 @@ pub(in crate::cli) fn run_print(
         // stream-json already emitted its events as the run progressed.
         OutputFormat::StreamJson => {}
     }
-    Ok(record)
+    if !out_of_time {
+        return Ok(Some(record.status.exit_code()));
+    }
+    let exit_code = RunStatus::TimedOut.exit_code();
+    writeln!(
+        render::err(),
+        "rimz: the launch's --timeout passed before a retry could start (exit {exit_code})"
+    )?;
+    Ok(Some(exit_code))
 }
 
 struct AttemptContext {
@@ -87,7 +96,12 @@ impl PresentationWaiter {
         prepared: &AttemptContext,
         room: &rimz::room::RoomContext,
         request: &SupervisedRunRequest,
+        run: &RunRecord,
     ) -> Result<RunRecord> {
+        let timeout = match launch_deadline(&prepared.store, run)? {
+            Some(deadline) => Some(time_left(deadline)),
+            None => request.timeout,
+        };
         let record = if prepared.output_format == OutputFormat::StreamJson {
             let mut stdout = std::io::stdout().lock();
             let mut sink = supervised::output::StreamSink::ndjson(&mut stdout);
@@ -95,7 +109,7 @@ impl PresentationWaiter {
                 &self.waiter,
                 &prepared.store,
                 prepared.adapter,
-                request.timeout,
+                timeout,
                 (
                     self.stream_cursor
                         .as_mut()
@@ -117,7 +131,7 @@ impl PresentationWaiter {
                 &self.waiter,
                 &prepared.store,
                 prepared.adapter,
-                request.timeout,
+                timeout,
                 (
                     self.stream_cursor
                         .as_mut()
@@ -131,10 +145,7 @@ impl PresentationWaiter {
                 .enable_time()
                 .build()
                 .context("creating run wait runtime")?;
-            runtime.block_on(
-                self.waiter
-                    .wait_terminal(&prepared.store, request.timeout, None),
-            )?
+            runtime.block_on(self.waiter.wait_terminal(&prepared.store, timeout, None))?
         };
         Ok(record_failure_tail_before_cleanup(
             room.backend(),
@@ -143,6 +154,26 @@ impl PresentationWaiter {
             record,
         ))
     }
+}
+
+/// The deadline of `run`'s launch: a print run's `--timeout` from its first launch, which no
+/// retry, re-prompt, or hold moves. None for a subagent, whose deadline is its run's own.
+fn launch_deadline(store: &rimz::Store, run: &RunRecord) -> Result<Option<jiff::Timestamp>> {
+    let Some(launch_id) = run.launch_id.as_ref() else {
+        return Ok(None);
+    };
+    Ok(rimz::store::call::load(store.paths(), launch_id)
+        .context("reading the launch's deadline")?
+        .and_then(|call| call.deadline))
+}
+
+fn time_left(deadline: jiff::Timestamp) -> std::time::Duration {
+    std::time::Duration::try_from(jiff::Timestamp::now().duration_until(deadline))
+        .unwrap_or_default()
+}
+
+fn deadline_passed(store: &rimz::Store, run: &RunRecord) -> Result<bool> {
+    Ok(launch_deadline(store, run)?.is_some_and(|deadline| deadline <= jiff::Timestamp::now()))
 }
 
 struct BlockingAttempt {
@@ -169,10 +200,37 @@ fn verify_phase(
     let max_attempts = request
         .max_attempts
         .unwrap_or(rimz::harness::run::VERIFY_MAX_ATTEMPTS_DEFAULT);
-    let verify_timeout = request.timeout.unwrap_or(CHECK_DEFAULT_TIMEOUT);
     let mut verify_attempt = 1;
     let mut verify_error = None;
     while record.status == RunStatus::Completed {
+        let deadline = launch_deadline(&prepared.store, &record)?;
+        // A deadline that passed before the check starts runs no check, so the launch reads
+        // timed out however fast the check would have passed.
+        if deadline.is_some_and(|deadline| deadline <= jiff::Timestamp::now()) {
+            let cut = rimz::store::run::RunVerify {
+                cmd: cmd.to_owned(),
+                attempts: verify_attempt,
+                passed: false,
+                code: None,
+                timed_out: true,
+                output: String::new(),
+            };
+            if let VerifyStep::Settled(settled) = rimz::harness::run::settle_verify(
+                prepared.store.paths(),
+                &record.run_id,
+                cut,
+                false,
+                true,
+                max_attempts,
+            )? {
+                record = settled;
+            }
+            break;
+        }
+        let verify_timeout = match deadline {
+            Some(deadline) => time_left(deadline),
+            None => request.timeout.unwrap_or(CHECK_DEFAULT_TIMEOUT),
+        };
         let outcome = match supervised::verify::run_verify(&prepared.cwd, cmd, verify_timeout) {
             Ok(outcome) => outcome,
             Err(err) => {
@@ -206,6 +264,7 @@ fn verify_phase(
             &record.run_id,
             verify,
             outcome.terminated() || waiter.waiter.cancellation().is_requested(),
+            detail.timed_out && deadline_passed(&prepared.store, &record)?,
             max_attempts,
         )? {
             VerifyStep::Settled(settled) => {
@@ -236,7 +295,7 @@ fn verify_phase(
             verify_error = Some(err);
             break;
         }
-        record = waiter.await_terminal(prepared, room, request)?;
+        record = waiter.await_terminal(prepared, room, request, &record)?;
         verify_attempt += 1;
     }
     Ok((record, verify_error, waiter))
@@ -386,7 +445,7 @@ pub(in crate::cli) fn run_supervised(
                 || presentation.stream_text)
                 .then(|| TranscriptCursor::new(true)),
         };
-        let record = waiter.await_terminal(&prepared, &room, &request)?;
+        let record = waiter.await_terminal(&prepared, &room, &request, &run.record)?;
         let blocking = BlockingAttempt { record, waiter };
         let (record, verify_error, waiter) = verify_phase(&prepared, &room, &request, blocking)?;
         join_presented_attempt(&prepared.store, &prepared.workspace.session_name, &record);
@@ -397,7 +456,15 @@ pub(in crate::cli) fn run_supervised(
         if let Some(err) = verify_error {
             return Err(err);
         }
-        if !record.status.is_retryable() || attempt == retries {
+        let retry = record.status.is_retryable() && attempt < retries;
+        if retry {
+            supervised::output::print_run_forensics(&record, &mut render::err())?;
+        }
+        // A deadline that passed between attempts starts no retry: the attempt keeps the end it
+        // reached, and the deadline ends the launch. It is read after the forensics, right before
+        // the retry opens.
+        let out_of_time = retry && deadline_passed(&prepared.store, &record)?;
+        if out_of_time || !retry {
             if retries > 0
                 && prepared.owns_checkout_lifecycle
                 && let Err(err) =
@@ -408,12 +475,13 @@ pub(in crate::cli) fn run_supervised(
                     "rimz: worktree cleanup did not complete: {err}"
                 );
             }
+            if out_of_time {
+                return Ok(Some(SupervisedRunOutcome::DeadlinePassed(Box::new(record))));
+            }
             return Ok(Some(SupervisedRunOutcome::Record(Box::new(record))));
         }
-        let mut stderr = render::err();
-        supervised::output::print_run_forensics(&record, &mut stderr)?;
         writeln!(
-            stderr,
+            render::err(),
             "rimz: retrying (attempt {} of {})",
             u64::from(attempt) + 2,
             u64::from(retries) + 1,

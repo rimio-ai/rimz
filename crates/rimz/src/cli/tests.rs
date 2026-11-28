@@ -725,3 +725,41 @@ fn removed_top_level_command_rejects_before_global_help() {
             .is_ok()
     );
 }
+
+/// Every launch-option `--timeout` takes the tool's `timeout` grammar, capped at a year.
+#[test]
+fn every_launch_option_timeout_takes_the_tools_cap() {
+    let commands: [&[&str]; 1] = [&["agents", "claude", "hi", "-p"]];
+    for command in commands {
+        for (timeout, refusal) in [
+            ("365d", None),
+            (
+                "400d",
+                Some("duration `400d` is longer than the 365d maximum"),
+            ),
+            (
+                "300000000000d",
+                Some("duration `300000000000d` is longer than the 365d maximum"),
+            ),
+        ] {
+            let (head, tail) = match command.iter().position(|word| *word == "--") {
+                Some(split) => command.split_at(split),
+                None => (command, &[][..]),
+            };
+            let argv = std::iter::once("rimz")
+                .chain(head.iter().copied())
+                .chain(["--timeout", timeout])
+                .chain(tail.iter().copied());
+            let parsed = Cli::try_parse_from(argv);
+            match refusal {
+                None => assert!(parsed.is_ok(), "{command:?} {timeout}: {:?}", parsed.err()),
+                Some(refusal) => {
+                    let error = parsed
+                        .err()
+                        .unwrap_or_else(|| panic!("{command:?} took {timeout}"));
+                    assert!(error.to_string().contains(refusal), "{command:?}: {error}");
+                }
+            }
+        }
+    }
+}
