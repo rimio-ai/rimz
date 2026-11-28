@@ -4,7 +4,7 @@
 
 A team cooperates through files in its checkout. The members write the content. RimZ links the files to room state, reads the board's current stage, and owns three kinds of board write: registration of the link, a recorded Goal, Decisions, or Result entry, and the stage flip. Neither the board nor member status is lifecycle authority: a stage is advisory progress for the agents, the reports, and the displays, and a hand-edited `Stage:` line is read like any other.
 
-A team is staged when it declares `stages` or any role `owns` a stage (`config::Team::staged`). An unstaged team gets no archive, no memory listing, and no board.
+A team is staged when it declares `stages` or any role `owns` a stage (`config::Team::staged`). An unstaged team gets no archive, no memory listing, and no board. A Markdown team definition must declare a nonempty `stages:`, and its loader refuses one that does not (`crates/rimz/src/config/definitions/team.rs`), and the machine `config.toml` refuses an `[agents.teams]` table, so only a project TOML team under `[agents.teams]` in `.rimz/config.toml` and the built-in `peer` team (`crates/rimz/src/config/agents.rs::default_machine_teams`) can be unstaged.
 
 ## Modules
 
