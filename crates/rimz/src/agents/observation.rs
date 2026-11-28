@@ -323,6 +323,8 @@ pub struct LaunchParams {
     pub budget: Option<String>,
     /// The `[agents.teams]` team name the launcher selected, passed through
     /// `RIMZ_TEAM`. It is role/cohort/resume identity; routing uses `channel`.
+    /// Every agent cell of a team's layout carries it, a roleless profile cell
+    /// included, so a rule for the team's seats also reads `role`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
