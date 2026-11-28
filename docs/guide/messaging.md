@@ -73,13 +73,13 @@ Either way you get a receipt. It says whether the text went in now or is queued,
 
 ```console
 $ rimz message @coder#probe "open a PR summary once tests pass"
-queued for @coder#probe (@brave-yard) (msg_ucqiep1c) — @coder#probe (@brave-yard) is running; send now: rimz message steer msg_ucqiep1c
+queued for @coder#probe (@spry-ridge) (msg_4foffo1a) — @coder#probe (@spry-ridge) is running; send now: rimz message steer msg_4foffo1a
 
 $ rimz message @reviewer#probe "draft the follow-up plan"
-sent to @reviewer#probe (@kind-plaza) (msg_gq0vhpkg)
+sent to @reviewer#probe (@upbeat-ridge) (msg_n3h2s33g)
 ```
 
-Nothing is locked in until it lands: `rimz message cancel msg_ucqiep1c` stops a message still waiting, and `rimz message steer msg_ucqiep1c` promotes that exact record past its gate.
+Nothing is locked in until it lands: `rimz message cancel msg_4foffo1a` stops a message still waiting, and `rimz message steer msg_4foffo1a` promotes that exact record past its gate.
 
 Other receipts name the opening time, the first unmet `--after` or `--when` condition, the blocking message id, or the missing live pane. A resumed provider gets a receipt saying it is starting. A parent's follow-up to its ended child instead names the registration deadline and says it is queued while the child resumes; the three-second pane-bind check never discards it. When a prompt owns the input, the receipt says your text will not be read until that prompt is answered and points to `rimz asks show @coder` and `rimz answer @coder <choice>`. `message show` gives the same pair of commands for that blocker.
 
@@ -129,29 +129,29 @@ A parked message delivers the moment the agent can take it, which means all of t
 `rimz message show` names the first unmet condition and the command that clears it, so you never have to guess why a message is still sitting there:
 
 ```console
-$ rimz message show msg_ucqiep1c
-msg_ucqiep1c — queued
+$ rimz message show msg_4foffo1a
+msg_4foffo1a — queued
   from:    user
-  to:      @coder (@brave-yard)
+  to:      @coder (@spry-ridge)
   channel: probe
-  created: 6s ago (2026-11-28T17:40:24Z)
+  created: 3s ago (2026-11-28T17:56:43Z)
 
 TEXT
   open a PR summary once tests pass
 
 TIMELINE
   EVENT   WHEN
-  queued  6s ago (2026-11-28T17:40:24Z)
+  queued  3s ago (2026-11-28T17:56:43Z)
 
 DELIVERY CHECK
-  schedule: ok; retry wait in 24s (2026-11-28T17:40:55Z)
+  schedule: ok; retry wait in 27s (2026-11-28T17:57:14Z)
   fifo:     ok
   agent:    ok
   gate:     closed (status running, gate done)
   ask:      ok
   pane:     ok (tmux:%6)
   waiting: @coder#probe is running; gate 'done' opens at next turn end
-  force now: rimz message steer msg_ucqiep1c
+  force now: rimz message steer msg_4foffo1a
 ```
 
 ## Hold a message until a condition is met
@@ -219,23 +219,23 @@ An empty inbox can still have messages elsewhere. Without a target or status fil
 rimz message list                       # this channel's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
 rimz message list --system              # include waits, signals, subagent digests, and nudges
-rimz message show msg_ucqiep1c          # full text, timeline, and the first delivery blocker
-rimz message edit msg_ucqiep1c --text "…"  # revise a queued message before it lands
-rimz message steer msg_ucqiep1c         # deliver now, past schedule, conditions, and gate
-rimz message requeue msg_ucqiep1c       # send a finished message again as a fresh record
-rimz message cancel msg_ucqiep1c        # cancel a queued message; the record stays
+rimz message show msg_4foffo1a          # full text, timeline, and the first delivery blocker
+rimz message edit msg_4foffo1a --text "…"  # revise a queued message before it lands
+rimz message steer msg_4foffo1a         # deliver now, past schedule, conditions, and gate
+rimz message requeue msg_4foffo1a       # send a finished message again as a fresh record
+rimz message cancel msg_4foffo1a        # cancel a queued message; the record stays
 rimz message clear @coder               # cancel every open message for one agent
 ```
 
 ```console
 $ rimz message list
-user → @reviewer (@kind-plaza)  queued  6s ago  msg_51maiste
+user → @reviewer (@upbeat-ridge)  queued  3s ago  msg_aedpnhc2
   read plan.md and start the review · after @coder#probe
-user → @reviewer (@kind-plaza)  sent  6s ago  msg_gq0vhpkg
+user → @reviewer (@upbeat-ridge)  sent  3s ago  msg_n3h2s33g
   draft the follow-up plan
-user → @coder (@brave-yard)  queued  6s ago  msg_ucqiep1c
+user → @coder (@spry-ridge)  queued  3s ago  msg_4foffo1a
   open a PR summary once tests pass
-... 1 system messages hidden (--system shows them)
+... 1 system message hidden (--system shows them)
 ```
 
 The inbox shows conversation by default: your sends and attributed agent sends. The trailing line counts what the view left out, and `--system` brings in system traffic, including `--no-from` text, so you can see what woke or nudged an agent. Repeated keepalives, compaction commands, and restarted or stalled notices about the same child run can fold into one row with their count and span, leaving the newest notice visible ([fold key](../reference/cli/message.md#list-messages)). Other notices and system prompts keep their own rows. `--limit` and `--status` narrow it further; the limit counts rows, a folded repeat as one, or individual messages with `--json`.

@@ -525,16 +525,19 @@ pub(super) fn render_message_digest(
     } else {
         render_message_rows(out, rows, agents, now, 0, 2)?;
     }
+    let plural = |count: usize| if count == 1 { "" } else { "s" };
     if hidden > 0 {
         writeln!(
             out,
-            "... {hidden} older messages hidden (--limit 0 for all)"
+            "... {hidden} older message{} hidden (--limit 0 for all)",
+            plural(hidden)
         )?;
     }
     if system_hidden > 0 {
         writeln!(
             out,
-            "... {system_hidden} system messages hidden (--system shows them)"
+            "... {system_hidden} system message{} hidden (--system shows them)",
+            plural(system_hidden)
         )?;
     }
     Ok(())

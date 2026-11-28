@@ -2005,7 +2005,10 @@ fn message_list_folds_machine_repeats_but_keeps_json_records() {
         assert!(text.contains("keepalive 2"), "{text}");
         assert!(!text.contains(&machine_ids[0]), "{text}");
         if limit == "1" {
-            assert!(text.contains("... 1 older messages hidden"), "{text}");
+            assert!(
+                text.contains("... 1 older message hidden (--limit 0 for all)"),
+                "{text}"
+            );
             assert!(!text.contains(&human), "{text}");
         } else {
             assert!(text.contains(&short_id(&human)), "{text}");
