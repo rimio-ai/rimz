@@ -5886,9 +5886,7 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
         let human = String::from_utf8(output.stdout).expect("human show output");
         assert!(human.contains("Messages"), "{human}");
         assert!(
-            human.contains(
-                "4 system messages hidden — rimz message list --all --system @sess-messages"
-            ),
+            human.contains("4 system messages hidden — rimz message list --all --system @claude"),
             "{human}"
         );
         assert_eq!(

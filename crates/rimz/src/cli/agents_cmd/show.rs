@@ -291,12 +291,7 @@ fn render_show_sections(
         render_run_section(w, run, now)?;
     }
     if !report.messages.is_empty() || report.system_messages_hidden > 0 {
-        render_messages_section(
-            w,
-            &report.messages,
-            report.system_messages_hidden,
-            &agent.id,
-        )?;
+        render_messages_section(w, &report.messages, report.system_messages_hidden, agent)?;
     }
     if let Some(started) = report
         .started
@@ -874,7 +869,7 @@ fn render_messages_section(
     w: &mut impl Write,
     messages: &[ShowMessage],
     system_messages_hidden: usize,
-    agent_id: &rimz::ids::AgentSessionId,
+    agent: &AgentReportEntry,
 ) -> std::io::Result<()> {
     section(w, "Messages")?;
     let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
@@ -894,13 +889,15 @@ fn render_messages_section(
         table.render(w)?;
     }
     if system_messages_hidden > 0 {
+        let plural = if system_messages_hidden == 1 { "" } else { "s" };
         writeln!(
             w,
             "{}",
             render::paint(
                 render::palette::faint(),
                 &format!(
-                    "{system_messages_hidden} system messages hidden — rimz message list --all --system @{agent_id}"
+                    "{system_messages_hidden} system message{plural} hidden — rimz message list --all --system {}",
+                    agent.handle
                 ),
             )
         )?;

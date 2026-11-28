@@ -1149,3 +1149,21 @@ fn show_parked_launched_child_prints_phase_in_text_and_json() {
     assert_eq!(parent_json["sub_agents"][0]["status"], "success");
     assert_eq!(parent_json["sub_agents"][0]["phase"], "parked");
 }
+
+#[test]
+fn hidden_system_messages_count_in_number_and_name_the_agent_by_its_handle() {
+    let agent = entry();
+    for (hidden, line) in [
+        (
+            1,
+            "1 system message hidden — rimz message list --all --system @coder",
+        ),
+        (
+            2,
+            "2 system messages hidden — rimz message list --all --system @coder",
+        ),
+    ] {
+        let text = strip(|w| render_messages_section(w, &[], hidden, &agent));
+        assert!(text.contains(line), "{text}");
+    }
+}
