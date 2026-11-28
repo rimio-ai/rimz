@@ -1734,14 +1734,10 @@ fn opencode_stamped_asks_still_record_edges() {
             ),
         );
         crate::common::wait::seed_signal_wait(&env, "waiting", "agent.waiting", false);
-        let mut tasks = crate::common::wait::wait_instances(&env);
-        tasks.0.get_mut("waiting").unwrap().matches =
-            Some([("session".to_owned(), "ses-screen-ask".to_owned())].into());
-        std::fs::write(
-            crate::common::wait::loop_instances_path(&env),
-            serde_json::to_vec(&tasks).unwrap(),
-        )
-        .unwrap();
+        crate::common::wait::rewrite_loop_instances(&env, |tasks: &mut rimz::config::Tasks| {
+            tasks.0.get_mut("waiting").unwrap().matches =
+                Some([("session".to_owned(), "ses-screen-ask".to_owned())].into());
+        });
         let session = "ses-screen-ask";
         assert_hook_succeeded_neutral(
             "opencode",

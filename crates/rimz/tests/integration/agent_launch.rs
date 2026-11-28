@@ -3694,7 +3694,9 @@ fn user_shell_subagents_list_inspects_the_channel() {
     assert_eq!(rows[0]["parent"], "@planner");
     assert_eq!(rows[0]["channel"], "feat-x");
 
-    std::fs::write(&instances_path, b"{}").unwrap();
+    crate::common::wait::rewrite_loop_instances(&env, |tasks: &mut rimz::config::Tasks| {
+        tasks.0.clear();
+    });
     let output = live_rimz(&env)
         .args(["subagents", "list", "--json"])
         .output()

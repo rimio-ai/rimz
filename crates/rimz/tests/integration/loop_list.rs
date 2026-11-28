@@ -1519,12 +1519,12 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
     assert_eq!(value["rooms"][0]["tasks"].as_array().unwrap().len(), 4);
     assert_eq!(value["rooms"][0]["tasks"][0]["name"], "generated-0");
 
-    let mut tasks = read_loop_instances(&env);
-    let mut named = tasks.0["generated-0"].clone();
-    named.loop_task = None;
-    tasks.0.insert("user-one".into(), named.clone());
-    tasks.0.insert("user-two".into(), named);
-    write_loop_instances(&env, tasks);
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        let mut named = tasks.0["generated-0"].clone();
+        named.loop_task = None;
+        tasks.0.insert("user-one".into(), named.clone());
+        tasks.0.insert("user-two".into(), named);
+    });
     let text = loop_ok(&env, &["loop", "list", "--all"]);
     assert!(
         text.contains("user-one") && text.contains("user-two") && text.contains("6 tasks"),

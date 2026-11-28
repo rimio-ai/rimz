@@ -4252,10 +4252,9 @@ fn a_join_on_a_childs_shell_answers_and_leaves_the_childs_message() {
     let id = start["id"].as_str().unwrap().to_owned();
     let name = id.strip_prefix("shell:").unwrap().to_owned();
     // The shell reads as the child's: its outcome goes to the child.
-    let path = crate::common::wait::loop_instances_path(&env);
-    let mut rows: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    rows[&name]["wait"] = json!({"kind": "claude", "session": "launch-kid", "handle": "@kid"});
-    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    crate::common::wait::rewrite_loop_instances(&env, |rows: &mut Value| {
+        rows[&name]["wait"] = json!({"kind": "claude", "session": "launch-kid", "handle": "@kid"});
+    });
     server.start_call(2, "join", json!({"id": id, "timeout": "60s"}));
     std::thread::sleep(Duration::from_millis(500));
     let claim = crate::common::wait::wait_instances(&env).0[&name]
@@ -4369,20 +4368,16 @@ fn tasks_reads_a_lingering_terminal_subagent_as_done() {
 /// that its team armed is not, and stays booked.
 #[test]
 fn stop_refuses_a_subscription_another_armed_for_the_caller() {
-    use crate::common::wait::{seed_signal_wait, wait_instances};
+    use crate::common::wait::{rewrite_loop_instances, seed_signal_wait, wait_instances};
 
     let env = Env::new();
     env.record(&env.project_root);
     crate::common::wait::register_calling_agent(&env);
     seed_signal_wait(&env, "own-ping", "own-ping", false);
     seed_signal_wait(&env, "team-ping", "team-ping", false);
-    let mut tasks = wait_instances(&env);
-    tasks.0.get_mut("team-ping").unwrap().team = Some("forge#main".parse().unwrap());
-    std::fs::write(
-        crate::common::wait::loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut rimz::config::Tasks| {
+        tasks.0.get_mut("team-ping").unwrap().team = Some("forge#main".parse().unwrap());
+    });
     let mut server = serve_as_agent(&env);
     server.initialize();
 

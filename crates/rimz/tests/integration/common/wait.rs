@@ -32,31 +32,49 @@ pub fn wait_instances(env: &Env) -> Tasks {
     serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
 }
 
+/// Rewrites the room's `loop-instances.json` as the product's writers do: `edit` gets the rows
+/// read under `loop-instances.lock` (a missing file reads as the default), and the result is
+/// published whole by a rename. A starting `rimz shell watcher` strict-loads the file without
+/// that lock, so a truncating write can hand it an empty file and lose the shell's outcome; and
+/// a product write that runs beside the rewrite lands before its read or after its publish.
+pub fn rewrite_loop_instances<T, R>(env: &Env, edit: impl FnOnce(&mut T) -> R) -> R
+where
+    T: serde::Serialize + serde::de::DeserializeOwned + Default,
+{
+    let state = env.state_path_for(&env.project_root);
+    let lock = state.workspace_lock.with_file_name("loop-instances.lock");
+    let _guard = rimz::disk::lock::WorkspaceLock::acquire(&lock).expect("loop instances lock");
+    let path = state.root.join("records/loop-instances.json");
+    let mut rows = match std::fs::read(&path) {
+        Ok(bytes) => serde_json::from_slice(&bytes).expect("loop instances"),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => T::default(),
+        Err(err) => panic!("read {}: {err}", path.display()),
+    };
+    let result = edit(&mut rows);
+    std::fs::create_dir_all(path.parent().expect("records dir")).expect("mkdir records");
+    rimz::disk::atomic::write_temp_then_rename_cache(&path, &rows).expect("publish loop instances");
+    result
+}
+
 /// Writes the delivery row that wakes the calling agent on `signal`, the shape a team
 /// binding stores; `loop add` no longer arms one.
 pub fn seed_signal_wait(env: &Env, name: &str, signal: &str, repeat: bool) {
-    let path = loop_instances_path(env);
-    let mut tasks = if path.exists() {
-        wait_instances(env)
-    } else {
-        Tasks::default()
-    };
-    tasks.0.insert(
-        name.to_owned(),
-        TaskEntry {
-            root: env.project_root.clone(),
-            signal: Some(signal.to_owned()),
-            repeat,
-            wait: Some(TaskTarget {
-                kind: AgentKind::new_unchecked("claude"),
-                session: AgentSessionId::from("provider-session"),
-                handle: "@planner#main".to_owned(),
-            }),
-            ..TaskEntry::default()
-        },
-    );
-    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    std::fs::write(path, serde_json::to_vec(&tasks).unwrap()).unwrap();
+    rewrite_loop_instances(env, |tasks: &mut Tasks| {
+        tasks.0.insert(
+            name.to_owned(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                signal: Some(signal.to_owned()),
+                repeat,
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: AgentSessionId::from("provider-session"),
+                    handle: "@planner#main".to_owned(),
+                }),
+                ..TaskEntry::default()
+            },
+        );
+    });
 }
 
 /// Waits until no process in `env`'s sandbox runs `rimz loop run <task>`. A delivering
