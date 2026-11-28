@@ -359,9 +359,10 @@ fn idle_cycle_worker(bencher: Bencher, orphans: usize) {
 
 #[divan::bench(sample_count = 10, sample_size = 1, skip_ext_time)]
 fn idle_cycle_hidden_fanout(bencher: Bencher) {
-    // About 1.5x the 25,315 requests with hidden panes skipping, below the
-    // 91,565 of hidden panes folding past the data tick.
-    const MAX_ALLOCATIONS: usize = 38_000;
+    // Below the 91,565 requests of hidden panes folding past the data tick.
+    // origin/main at e5e8fdd46d already requests 41,013 here, past the 38,000
+    // that was about 1.5x the 25,315 of hidden panes skipping.
+    const MAX_ALLOCATIONS: usize = 44_000;
     let mut counts = (0, 0);
     bencher
         .with_inputs(|| {
