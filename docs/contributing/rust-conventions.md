@@ -280,6 +280,7 @@ Use `proptest` for parsers (TOML override values, agent payloads, framing), seri
 - A test helper that asserts for its callers is `#[track_caller]` and asserts in its own body, never inside a closure or a thread it runs: closures do not inherit `#[track_caller]`, so a panic there names the helper's line instead of the caller's step.
 - Capture planned behaviour in the owning doc and add the executable test when the implementation can make it pass. An ignored test standing in for a future product target does not land.
 - A change that deletes a test lists the inputs it covered and carries each into a surviving test, or names the dropped input in the hand-off.
+- A change that turns a refusal or other negative test into a success test keeps a negative case the same code path still has to produce, or names the test that now pins it.
 
 ## Dependency budget
 
