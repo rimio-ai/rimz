@@ -9,7 +9,7 @@ Behaviour is documented per topic under `docs/internals/harness/`: [fleet.md](..
 - Harness modules own domain rules, durable records, helper argv shape, and side-effect boundaries, and leave argument parsing and presentation to the CLI handler.
 - Harness delivery rides `message`; it never reimplements queues, gates, retries, or transcript audit.
 - `harness` never reaches `sidebar`: a helper returns what the sidebar needs, and its CLI entry publishes it through `sidebar::refresh`.
-- **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), `harness::workflow` imports nothing from `harness::schedule`, and `harness::block` and `harness::workflow_script` import nothing from `harness::schedule` or `harness::workflow` (each one's `[[module]]` entry in `refactor-target.toml`).
+- **Invariant.** `plan` never imports `resume` (`cargo xtask invariants`), `harness::workflow` imports nothing from `harness::schedule`, `harness::block` and `harness::workflow_script` import nothing from `harness::schedule` or `harness::workflow`, and `harness::workflow_run` imports nothing from `harness::schedule`, `harness::throttle`, `harness::workflow`, `launcher`, `mux`, or `mcp` (each one's `[[module]]` entry in `refactor-target.toml`).
 
 ## The sidebar import graph
 

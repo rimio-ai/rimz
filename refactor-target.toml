@@ -6598,6 +6598,28 @@ allowed-dependencies = [
 surface-budget = 17
 
 [[module]]
+path = "crates/rimz/src/harness/workflow_run"
+# The run engine advances a script's run through its record and the room it is handed: it reads
+# the script engine, the block types, the shared command runner, and its store record, so
+# `harness::schedule`, `harness::throttle`, `harness::workflow`, `launcher`, `mux`, and `mcp`
+# stay off this list (R21).
+allowed-dependencies = [
+    # `pub(in crate::harness)` names the crate root.
+    "(crate)",
+    "disk",
+    "harness::block",
+    "harness::check_run",
+    "harness::duration",
+    "harness::workflow_script",
+    "ids",
+    "proc",
+    "store",
+]
+# `Start`, `Status`, `start`, `advance`, `cancel`, `resume`: the run's entries, which link 4's
+# `rimz workflow` calls (+6).
+surface-budget = 6
+
+[[module]]
 path = "crates/rimz/src/harness/check_run"
 # Neutral home of the hosted subprocess check runner the scheduler and the engine share;
 # it reaches neither `harness::schedule` nor `harness::workflow`.
