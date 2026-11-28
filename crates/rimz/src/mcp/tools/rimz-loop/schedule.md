@@ -10,7 +10,7 @@ Pick `trigger`; `value` is its argument:
 - `cron`: five fields or a macro (`0 9 * * mon-fri`, `@daily`).
 - `signal`: an event name or `<family>.*` (`ci.failed`, `pr.merged`); never replayed and carries no default scope, so an unscoped `ci.failed` fires for every polled checkout (narrow with `match`; call `guide` with `rimz-loop/signals`).
 
-`at` and `in` fire once and remove the booking; a repeating clock never replays a missed fire, while a time that passed with no room open fires late. Before writing a `when` beyond `ci=passed,failed` or `pr=merged`, call `guide` with `rimz-watch/conditions`.
+`at` and `in` fire once and remove the booking; a repeating clock never replays a missed fire, while a time that passed with no room open fires late. Before writing a `when` beyond `ci=passed,failed` or `pr=merged`, call `guide` with `conditions`.
 
 Required `arguments` keys by `tool`: `agent` (`profile`, `prompt`; no `stay: false`, `schema`, or `timeout`), `team` (`team`, `prompt`, plus top-level `worktree` or one-shot `from_pr`; no `timeout`), or `workflow` (`name`; no `input` or `detach`). Call `guide` with `rimz-loop/targets` for what differs at a fire from a direct launch.
 

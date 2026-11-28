@@ -38,7 +38,7 @@ A launch's instructions are `crates/rimz/src/mcp/wording.rs::Wording::instructio
 
 ### Where long material goes
 
-A tool's description carries what most calls need. Craft and reference material that few calls need (how to write a brief, which kind to pick, rare traps, a condition grammar) goes in a guide file under the capability's `guides/` folder, which the agent loads with `guide` when the description tells it to. A guide is text, not code, so it can disagree with what the binary accepts; that is accepted, and where the binary has a list to compare against, a unit test holds the built-in guide to it, as `harness::when::tests::the_conditions_guide_names_every_key_the_evaluator_reads` does for the `when` keys.
+A tool's description carries what most calls need. Craft and reference material that few calls need (how to write a brief, which kind to pick, rare traps, a condition grammar) goes in a guide file under the capability's `guides/` folder, or under the top-level `guides/` folder for a guide no capability owns (the `when` grammar, which `crates/rimz/src/mcp/wording.rs::guide_names` serves as `conditions` to a launch serving `rimz-watch` or `rimz-loop`), which the agent loads with `guide` when the description tells it to. A guide is text, not code, so it can disagree with what the binary accepts; that is accepted, and where the binary has a list to compare against, a unit test holds the built-in guide to it, as `harness::when::tests::the_conditions_guide_names_every_key_the_evaluator_reads` does for the `when` keys.
 
 ## The serve loop
 

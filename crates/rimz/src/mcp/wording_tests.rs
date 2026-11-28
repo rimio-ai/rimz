@@ -35,11 +35,7 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
         "Shared, replaced.\nSecond line.\n",
     );
     put(dir.path(), "guide.md", "Load a guide, replaced.");
-    put(
-        dir.path(),
-        "rimz-watch/guides/conditions.md",
-        "Conditions, replaced.",
-    );
+    put(dir.path(), "guides/conditions.md", "Conditions, replaced.");
     put(dir.path(), "rimz-watch/notes.txt", "not wording");
     let wording = Wording::read(dir.path());
     assert_eq!(messages(&wording), Vec::<String>::new());
@@ -72,7 +68,7 @@ fn a_replacement_replaces_its_file_and_is_marked_with_its_path() {
     );
     assert_eq!(wording.instruction_paths(&[Capability::Watch]).count(), 1);
     assert_eq!(
-        wording.guide(&[Capability::Watch], "rimz-watch/conditions"),
+        wording.guide(&[Capability::Watch], "conditions"),
         Ok("Conditions, replaced.")
     );
 }
@@ -175,11 +171,7 @@ fn an_unusable_replacement_warns_and_the_built_in_text_is_served() {
             "y".repeat(4000).into_bytes(),
             "the instructions with every group would hold",
         ),
-        (
-            "rimz-watch/guides/conditions.md",
-            b"\n".to_vec(),
-            "it is empty",
-        ),
+        ("guides/conditions.md", b"\n".to_vec(), "it is empty"),
     ];
     for (path, bytes, reason) in cases {
         let dir = tempfile::tempdir().unwrap();
@@ -255,7 +247,7 @@ fn a_file_at_no_wording_path_is_ignored_and_named_where_it_belongs() {
                 "{} is ignored: RimZ has no wording file rimz-lsp/guides/conditions.md; \
                  it belongs at {}",
                 shown("rimz-lsp/guides/conditions.md"),
-                shown("rimz-watch/guides/conditions.md")
+                shown("guides/conditions.md")
             ),
             format!(
                 "{} is ignored: RimZ has no wording file rimz-lsp/shell.md; it belongs at {}",
@@ -348,7 +340,7 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
     let dir = tempfile::tempdir().unwrap();
     put(dir.path(), "rimz-lsp/lsp.md", "");
     put(dir.path(), "guide.md", "");
-    put(dir.path(), "rimz-watch/guides/conditions.md", "");
+    put(dir.path(), "guides/conditions.md", "");
     let wording = Wording::read(dir.path());
     let count = |groups: &[Capability]| wording.warnings_for(groups).count();
     assert_eq!(count(&[Capability::Lsp]), 2);
@@ -359,6 +351,7 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
         2,
         "a launch serving rimz-loop alone is served the conditions guide, so it hears its warning"
     );
+    assert_eq!(count(&[Capability::Watch, Capability::Loop]), 2);
     assert_eq!(
         Wording::read(&dir.path().join("absent")).warnings().len(),
         0
@@ -369,11 +362,11 @@ fn a_launch_carries_the_warnings_of_its_groups_and_shared_files() {
 fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
     let wording = Wording::built_in();
     let conditions = wording
-        .guide(&[Capability::Watch], "rimz-watch/conditions")
+        .guide(&[Capability::Watch], "conditions")
         .expect("the conditions guide");
     assert!(conditions.contains("`pr.queue`"), "{conditions}");
     let served = vec![
-        "rimz-watch/conditions".to_owned(),
+        "conditions".to_owned(),
         "rimz-subagents/delegating".to_owned(),
         "rimz-agents/launching".to_owned(),
         "rimz-teams/launching".to_owned(),
@@ -388,16 +381,24 @@ fn a_guide_answers_for_a_served_group_and_lists_the_served_guides_otherwise() {
         wording.guide(&Capability::ALL, "rimz-watch/nope"),
         Err(served.clone())
     );
-    assert_eq!(wording.guide(&Capability::ALL, "conditions"), Err(served));
     assert_eq!(
-        wording.guide(&[Capability::Shell], "rimz-watch/conditions"),
+        wording.guide(&Capability::ALL, "rimz-watch/conditions"),
+        Err(served)
+    );
+    assert_eq!(
+        wording.guide(&[Capability::Shell], "conditions"),
         Err(Vec::new())
     );
-    assert_eq!(
-        wording.guide(&[Capability::Loop], "rimz-watch/conditions"),
-        Ok(conditions),
-        "a launch serving rimz-loop alone loads the one conditions guide"
-    );
+    for groups in [
+        &[Capability::Loop][..],
+        &[Capability::Watch, Capability::Loop],
+    ] {
+        assert_eq!(
+            wording.guide(groups, "conditions"),
+            Ok(conditions),
+            "a launch serving {groups:?} loads the one conditions guide"
+        );
+    }
     assert!(has_guides(Capability::Watch));
     assert!(!has_guides(Capability::Shell));
     assert!(has_guides(Capability::Loop));

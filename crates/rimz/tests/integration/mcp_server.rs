@@ -1797,7 +1797,7 @@ fn only_serves_the_named_capability() {
     assert!(wait["error"]["code"].is_i64(), "{wait}");
     server.start_call(3, "no_such_tool", json!({}));
     assert!(server.reply(&json!(3))["error"]["code"].is_i64());
-    server.start_call(4, "guide", json!({"name": "rimz-watch/conditions"}));
+    server.start_call(4, "guide", json!({"name": "conditions"}));
     let guide = server.reply(&json!(4));
     assert_eq!(guide["error"]["code"], -32602, "{guide}");
 
@@ -1825,20 +1825,20 @@ fn guide_answers_a_served_guide_and_lists_the_served_guides_for_any_other() {
         .collect();
     assert_eq!(names, ["watch", "tasks", "join", "stop", "guide"]);
 
-    let (text, is_error) = server.call(2, "guide", json!({"name": "rimz-watch/conditions"}));
+    let (text, is_error) = server.call(2, "guide", json!({"name": "conditions"}));
     assert!(!is_error, "{text}");
     assert_eq!(
         Ok(text.as_str()),
-        Wording::built_in().guide(&[Capability::Watch], "rimz-watch/conditions")
+        Wording::built_in().guide(&[Capability::Watch], "conditions")
     );
-    for (id, name) in [(3, "rimz-watch/none"), (4, "rimz-lsp/conditions")] {
+    for (id, name) in [(3, "rimz-watch/conditions"), (4, "rimz-lsp/conditions")] {
         let (failure, is_error) = server.answer(id, "guide", json!({"name": name}));
         assert!(is_error, "{failure}");
         assert_eq!(
             failure,
             json!({
                 "error": format!("no guide {name:?}"),
-                "hint": "this launch has: rimz-watch/conditions",
+                "hint": "this launch has: conditions",
             }),
         );
     }

@@ -1246,7 +1246,7 @@ impl ToolArgs for BlackboardRecordArgs {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct GuideArgs {
-    /// The guide, as `<group>/<guide>`.
+    /// The guide, named as a tool description names it.
     pub name: String,
 }
 
