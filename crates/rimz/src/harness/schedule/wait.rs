@@ -159,7 +159,7 @@ pub fn read_condition(
     expr: &WhenExpr,
     fired_at: Option<Timestamp>,
 ) -> ConditionReading {
-    let scope = entry.run_dir();
+    let scope = super::attention::when_scope(entry);
     let source = room.source.as_ref();
     let now = Timestamp::now();
     let windows = WindowReadings::new(room.runtime.as_ref(), now);

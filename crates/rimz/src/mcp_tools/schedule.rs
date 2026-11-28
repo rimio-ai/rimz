@@ -20,6 +20,7 @@ use crate::harness::ancestry::{
 };
 use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
 use crate::harness::schedule::arm::task_label;
+use crate::harness::schedule::attention::when_scope;
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
 use crate::harness::schedule::{self, TaskShape, shell_task};
@@ -39,9 +40,7 @@ struct Launch {
     target: String,
     args: Vec<String>,
     worktree: Option<String>,
-    /// Whether the booking sets a place (`worktree`, `from_pr`, or `cwd`).
-    has_place: bool,
-    /// The checkout a command runs in.
+    /// The directory a command's `cwd` names; the caller's checkout when `None`.
     dir: Option<PathBuf>,
     /// A command's time limit and label.
     timeout: Option<String>,
@@ -74,7 +73,10 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
         target: (launch.kind != LaunchKind::Shell).then(|| launch.target.clone()),
         args: launch.args.clone(),
         worktree: launch.worktree.clone(),
-        dir: launch.dir.clone(),
+        dir: Some(match &launch.dir {
+            Some(dir) => dir.clone(),
+            None => room.workspace.worktree_root.clone(),
+        }),
         timeout: launch.timeout.clone(),
         label: launch.label.clone(),
         max_strikes: args.max_strikes,
@@ -91,7 +93,7 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     };
     set_trigger(&mut entry, args, &machine)?;
     if let Some(clauses) = &entry.when {
-        let scope = entry.run_dir();
+        let scope = when_scope(&entry);
         let place = WhenPlace {
             root: &root,
             scope: Some(&scope),
@@ -117,14 +119,6 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     catalog.replace_machine(&args.name, &entry)?;
     let mut warnings = launch.warnings;
     warnings.extend(idle_warning(booking));
-    if !launch.has_place && room.workspace.worktree_root != root {
-        warnings.push(format!(
-            "runs at the project root {}, not {}; set `worktree` to run each fire in a \
-             RimZ-owned worktree",
-            root.display(),
-            room.workspace.worktree_root.display()
-        ));
-    }
     Ok(Answer::data(&Start {
         warnings,
         ..Start::running(TaskKind::Schedule, &args.name, REPORT)
@@ -255,7 +249,7 @@ fn launch(
                 .cwd
                 .as_deref()
                 .map(|cwd| {
-                    host_dir(tools, room, Some(cwd))?
+                    host_dir(tools, room, cwd)?
                         .to_str()
                         .map(str::to_owned)
                         .ok_or_else(|| Failure::new("`arguments.cwd` is not valid UTF-8"))
@@ -297,7 +291,6 @@ fn launch(
                 target: profile.to_owned(),
                 args: tail,
                 worktree: args.worktree.clone(),
-                has_place: args.worktree.is_some() || from_pr.is_some() || cwd.is_some(),
                 dir: None,
                 timeout: None,
                 label: None,
@@ -337,7 +330,6 @@ fn launch(
                 target: team_name.to_owned(),
                 args: tail,
                 worktree: args.worktree.clone(),
-                has_place: true,
                 dir: None,
                 timeout: None,
                 label: None,
@@ -351,8 +343,11 @@ fn launch(
             target: String::new(),
             args: vec!["sh".to_owned(), "-c".to_owned(), shell.command.clone()],
             worktree: args.worktree.clone(),
-            has_place: true,
-            dir: Some(host_dir(tools, room, shell.cwd.as_deref())?),
+            dir: shell
+                .cwd
+                .as_deref()
+                .map(|cwd| host_dir(tools, room, cwd))
+                .transpose()?,
             timeout: Some(shell.timeout.as_deref().map_or_else(
                 || shell_task::default_timeout(machine),
                 |timeout| timeout.trim().to_owned(),
@@ -372,8 +367,8 @@ fn launch(
 
 /// The host directory `cwd` names from the caller's, where a fire, which runs outside the
 /// caller's sandbox, finds it.
-fn host_dir(tools: &Tools, room: &Room, cwd: Option<&Path>) -> Result<PathBuf, Failure> {
-    let resolved = tools.dir(cwd)?;
+fn host_dir(tools: &Tools, room: &Room, cwd: &Path) -> Result<PathBuf, Failure> {
+    let resolved = tools.dir(Some(cwd))?;
     Ok(
         crate::launcher::checkout::resolve_launch_cwd(Some(&resolved), room.store.paths())?
             .unwrap_or(resolved),
@@ -427,13 +422,11 @@ fn workflow_launch(
     if run.skip_capacity {
         tail.push("--skip-capacity".to_owned());
     }
-    let has_place = worktree.is_some();
     Ok(Launch {
         kind: LaunchKind::Workflow,
         target: wf_name.to_owned(),
         args: tail,
         worktree,
-        has_place,
         dir: None,
         timeout: None,
         label: None,

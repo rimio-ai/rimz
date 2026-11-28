@@ -13,7 +13,7 @@ fn probe_paths(
     records: &super::task_record::TaskRecords,
 ) -> Vec<std::path::PathBuf> {
     if !entry.each_worktree {
-        return vec![entry.run_dir()];
+        return vec![super::attention::when_scope(entry)];
     }
     owned
         .iter()

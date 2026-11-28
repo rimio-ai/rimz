@@ -34,7 +34,7 @@ pub(super) fn add(args: AddArgs) -> Result<()> {
         login.preflight(&rimz::agents::ambient_env())?;
     }
     if !args.when.is_empty() {
-        let scope = entry.run_dir();
+        let scope = schedule::attention::when_scope(&entry);
         let place = WhenPlace {
             root: &project_root,
             scope: (!entry.each_worktree).then_some(scope.as_path()),

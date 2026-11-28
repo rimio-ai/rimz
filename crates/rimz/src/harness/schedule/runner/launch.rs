@@ -52,6 +52,7 @@ impl Fire<'_> {
                         launch: &launch.launch,
                         fire: &fire,
                         task: &self.name,
+                        root: &self.entry.resolved_root(),
                         checkout: &checkout,
                         trigger: &trigger,
                         booked_by: &booked_by,

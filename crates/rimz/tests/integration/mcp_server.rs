@@ -5927,8 +5927,8 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
 }
 
 /// A booking carrying `cwd`, `name`, `agent`, and `description` resolves relative `cwd` at the
-/// call, routes `agent` into a usage-window condition's provider lookup, omits the root-run
-/// warning when a place is set, and stores a row `rimz loop add` accepts.
+/// call, routes `agent` into a usage-window condition's provider lookup, stores the checkout it
+/// was booked from, and stores a row `rimz loop add` accepts.
 #[test]
 fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_accepts() {
     let env = schedule_room();
@@ -6024,8 +6024,8 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         .unwrap();
     assert!(output.status.success(), "{tail:?}: {output:?}");
 
-    // From a linked worktree, the "runs at the project root" warning appears only when the
-    // booking carries no place at all (`worktree`, `from_pr`, or `cwd`).
+    // From a linked worktree, a booking with no place of its own (`worktree`, `from_pr`, or
+    // `cwd`) fires in that worktree, and none warns of the project root.
     for args in [
         &["init", "-q", "-b", "main"][..],
         &["config", "user.email", "rimz@example.test"],
@@ -6089,15 +6089,12 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
         }),
     );
     assert!(!is_error, "{unplaced}");
-    let root_warnings = unplaced["warnings"].as_array().unwrap();
-    assert!(
-        root_warnings.iter().any(|line| line
-            .as_str()
-            .unwrap_or("")
-            .contains("runs at the project root")),
-        "{unplaced}"
-    );
+    assert!(unplaced.get("warnings").is_none(), "{unplaced}");
     in_wt.close();
+    assert_eq!(
+        loop_instances(&env).0["unplaced"].dir,
+        Some(std::fs::canonicalize(&side).unwrap())
+    );
 }
 
 /// A shell booking stores its command as `sh -c` in the checkout its `cwd` names, under its own
@@ -6237,6 +6234,241 @@ fn a_shell_booking_runs_its_command_in_its_checkout_under_its_time_limit() {
     assert!(
         logs.contains("│ command ran past its timeout 1s\n"),
         "{logs}"
+    );
+}
+
+/// A booking fires where it was booked: the same `when` booked from the project root and from a
+/// linked worktree stores each checkout as its row's `dir` and reads each one, and a booking
+/// whose checkout is gone by its fire fails that fire with no fallback to the root.
+#[cfg(unix)]
+#[test]
+fn a_booking_reads_and_fires_in_the_checkout_it_was_booked_from() {
+    let env = schedule_room();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.test"],
+        &["config", "user.name", "RimZ Test"],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        crate::common::git::git(&env.project_root, args);
+    }
+    let made = env
+        .rimz()
+        .args(["worktree", "new", "side"])
+        .output()
+        .unwrap();
+    assert!(made.status.success(), "{made:?}");
+    let side = std::fs::canonicalize(env.home_root.join("project-worktrees/side")).unwrap();
+    let root = std::fs::canonicalize(&env.project_root).unwrap();
+    let runtime = env.runtime_paths();
+    crate::common::room::seed_sidebar_heartbeat(
+        &runtime,
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "where",
+    );
+    std::fs::create_dir_all(runtime.lane_path("pr-state.json").parent().unwrap()).unwrap();
+    let path = |dir: &std::path::Path| dir.to_string_lossy().into_owned();
+    std::fs::write(
+        runtime.lane_path("pr-state.json"),
+        json!({
+            "branch_ci": {},
+            "path_repos": {path(&root): "repo", path(&side): "repo"},
+            "repos": {"repo": {
+                "ok": true,
+                "refreshed_at_ms": jiff::Timestamp::now().as_millisecond() + 3_600_000,
+            }},
+            "states": {path(&root): {"state": "merged"}, path(&side): {"state": "open"}},
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let gone = side.join("gone");
+    std::fs::create_dir(&gone).unwrap();
+    let book = |dir: &std::path::Path, name: &str, tool: &str, value: &str, arguments: Value| {
+        let trigger = if value.contains('=') { "when" } else { "cron" };
+        let mut command = crate::common::wait::agent_wait(&env);
+        command.current_dir(dir).args(["mcp", "serve"]);
+        let mut server = McpServer::spawn(command);
+        server.initialize();
+        let (booked, is_error) = server.answer(
+            1,
+            "schedule",
+            json!({"name": name, "trigger": trigger, "value": value, "tool": tool,
+                   "arguments": arguments}),
+        );
+        server.close();
+        assert!(!is_error, "{name}: {booked}");
+        assert!(booked.get("warnings").is_none(), "{name}: {booked}");
+    };
+    let worker = json!({"profile": "worker", "prompt": "go"});
+    book(&root, "at-root", "agent", "pr=merged", worker.clone());
+    book(&side, "at-side", "agent", "pr=merged", worker);
+    book(
+        &side,
+        "in-gone",
+        "shell",
+        "0 0 1 1 *",
+        json!({"command": "touch fired", "cwd": "gone"}),
+    );
+    // From a subdirectory, a booking reads and fires in its checkout; a shell `cwd` stays where
+    // the command runs, and its `when` reads that directory's checkout.
+    let pkg = side.join("pkg");
+    std::fs::create_dir(&pkg).unwrap();
+    let here = json!({"command": "pwd -P > here"});
+    book(
+        &pkg,
+        "from-pkg",
+        "agent",
+        "pr=merged",
+        json!({"profile": "worker", "prompt": "go"}),
+    );
+    book(&pkg, "pkg-shell", "shell", "pr=merged", here.clone());
+    book(
+        &side,
+        "into-pkg",
+        "shell",
+        "pr=merged",
+        json!({"command": "pwd -P > here", "cwd": "pkg"}),
+    );
+    let instances = loop_instances(&env).0;
+    assert_eq!(instances["at-root"].dir, Some(root.clone()));
+    assert_eq!(instances["at-side"].dir, Some(side.clone()));
+    assert_eq!(instances["from-pkg"].dir, Some(side.clone()));
+    assert_eq!(instances["pkg-shell"].dir, Some(side.clone()));
+    assert_eq!(instances["into-pkg"].dir, Some(pkg.clone()));
+    let rows = loop_rows(&env);
+    assert_eq!(
+        rows["in-gone"]["dir"].as_str().map(std::path::Path::new),
+        Some(gone.as_path())
+    );
+    let show = |name: &str| {
+        let output = env.rimz().args(["loop", "show", name]).output().unwrap();
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    };
+    for (name, reading) in [
+        ("at-root", "✓ merged"),
+        ("at-side", "✗ open"),
+        ("from-pkg", "✗ open"),
+        ("pkg-shell", "✗ open"),
+        ("into-pkg", "✗ open"),
+    ] {
+        let shown = show(name);
+        assert!(
+            shown.contains(&format!("\n  pr=merged   {reading}\n")),
+            "{name}: {shown}"
+        );
+    }
+    for (name, ran_in) in [("pkg-shell", &side), ("into-pkg", &pkg)] {
+        let before = crate::loop_schedule::run_mark(&env, name);
+        let fired = env.rimz().args(["loop", "run", name]).output().unwrap();
+        assert!(fired.status.success(), "{name}: {fired:?}");
+        let ran = crate::loop_schedule::wait_for_loop_report_after(&env, name, before);
+        assert_eq!(
+            ran.result,
+            rimz::harness::schedule::run_log::LoopRunResult::Completed,
+            "{name}: {ran:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(ran_in.join("here"))
+                .unwrap()
+                .trim_end(),
+            ran_in.to_str().unwrap(),
+            "{name}"
+        );
+    }
+
+    std::fs::remove_dir(&gone).unwrap();
+    let fired = env
+        .rimz()
+        .args(["loop", "run", "in-gone"])
+        .output()
+        .unwrap();
+    let logs = env
+        .rimz()
+        .args(["loop", "logs", "in-gone"])
+        .output()
+        .unwrap();
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert!(!fired.status.success(), "{fired:?}");
+    assert!(logs.starts_with("✗ error · "), "{logs}");
+    assert!(
+        logs.contains(&format!(
+            "│ task checkout {}: No such file or directory (os error 2)\n",
+            gone.display()
+        )),
+        "{logs}"
+    );
+    assert!(!root.join("fired").exists() && !side.join("fired").exists());
+}
+
+/// A booking from an agent whose start directory lies outside the room's repository fires in
+/// the booking's room: the fire's launch runs in the booked directory under the room's pin.
+#[cfg(unix)]
+#[test]
+fn a_fire_acts_in_the_booking_room_whatever_its_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let env = schedule_room();
+    let workspace = env.resolve_workspace(&env.project_root);
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &workspace.session_name,
+        "away",
+    );
+    let outside = env.home_root.join("outside");
+    std::fs::create_dir(&outside).unwrap();
+    let outside = std::fs::canonicalize(&outside).unwrap();
+    let mut command = crate::common::wait::agent_wait(&env);
+    command
+        .current_dir(&outside)
+        .envs(rimz::workspace::pin_env(
+            &workspace.workspace_id,
+            &workspace.project_root,
+        ))
+        .args(["mcp", "serve"]);
+    let mut server = McpServer::spawn(command);
+    server.initialize();
+    let (booked, is_error) = server.answer(
+        1,
+        "schedule",
+        json!({"name": "away", "trigger": "cron", "value": "0 0 1 1 *", "tool": "agent",
+               "arguments": {"profile": "worker", "prompt": "go"}}),
+    );
+    server.close();
+    assert!(!is_error, "{booked}");
+    let seen = env.home_root.join("away-seen");
+    let wrapper = env.home_root.join("rimz-away");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh
+case \"$1\" in agents) ;; *) exec {real:?} \"$@\";; esac
+\
+             echo \"$(pwd -P) ${{RIMZ_PROJECT_ROOT-unset}} ${{RIMZ_WORKSPACE_ID-unset}}\" > {seen:?}
+",
+            real = env.rimz_bin().display().to_string(),
+            seen = seen.display().to_string(),
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let fired = env
+        .rimz()
+        .env("RIMZ_BIN", &wrapper)
+        .args(["loop", "run", "away"])
+        .output()
+        .unwrap();
+    assert!(fired.status.success(), "{fired:?}");
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap().trim_end(),
+        format!(
+            "{} {} {}",
+            outside.display(),
+            workspace.project_root.display(),
+            workspace.workspace_id
+        )
     );
 }
 
