@@ -1800,7 +1800,7 @@ fn claude_marks_become_always_load_and_serve_flags() {
 
 /// A mark a launch cannot apply reaches explain once, naming its entry, never the launch
 /// warnings, and the launch still compiles without it. Claude's code mode offers the model only
-/// REPL and Poll, so no mark of RimZ's applies there.
+/// REPL and Poll, so no mark of RimZ's applies there, nor a staged seat's up-front board load.
 #[test]
 fn claude_marks_it_cannot_apply_reach_explain_and_never_warn() {
     let room = Room::new();
@@ -1854,6 +1854,16 @@ fn claude_marks_it_cannot_apply_reach_explain_and_never_warn() {
             "the mcps entry `rimz:always` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
             "the mcps entry `rimz-lsp:deferred` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
             "the mcps entry `github:always` is not applied: Claude takes a load mode only for RimZ's server and its capabilities",
+        ]
+    );
+    let mut seated = seat("claude", Some(&["rimz-lsp:always"]));
+    seated.identity.params.code_mode = Some(true);
+    let plan = room.compile_config(&teams(true, true), &seated, Isolation::Host);
+    assert_eq!(
+        unapplied(&plan),
+        [
+            "the mcps entry `rimz-lsp:always` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
+            "the `always` load a staged team's role seat gives `rimz-blackboard` is not applied: Claude's code mode offers the model only REPL and Poll, so no MCP tool loads up front",
         ]
     );
 }

@@ -2674,6 +2674,11 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']\ncode-mode: on",
         ),
         (
+            "cflipcode",
+            "claude",
+            "['rimz:always', 'rimz-lsp:deferred']\ncode-mode: on",
+        ),
+        (
             "pmark",
             "pi",
             "['*', 'rimz:deferred', 'rimz-lsp:always', 'github:always']",
@@ -2717,7 +2722,8 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         &env,
         "teams",
         "crew",
-        "leader: lead\nstages: [Plan]\nroles:\n  - {role: lead, agent: cmark, owns: [Plan]}",
+        "leader: lead\nstages: [Plan]\nroles:\n  - {role: lead, agent: cmark, owns: [Plan]}\n  - \
+         {role: code, agent: cflipcode}",
         "Complete the work.",
     );
     let config = env.rimz_home().join("config.toml");
@@ -2893,6 +2899,31 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
         "{out}"
     );
     assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
+    // Nor does a staged seat's up-front board load, or a mark on `rimz`, which shows beside each
+    // load it sets.
+    let out = explain("crew.code");
+    for tool in ["blackboard_flip", "blackboard_record"] {
+        assert_eq!(
+            tool_load(&out, tool),
+            format!(
+                "always; the `always` load a staged team's role seat gives `rimz-blackboard` \
+                 {coded}"
+            ),
+            "{out}"
+        );
+    }
+    for tool in ["shell", "join", "guide"] {
+        assert_eq!(
+            tool_load(&out, tool),
+            format!("always; the mcps entry `rimz:always` {coded}"),
+            "{out}"
+        );
+    }
+    assert_eq!(
+        tool_load(&out, "lsp"),
+        format!("deferred; the mcps entry `rimz-lsp:deferred` {coded}"),
+        "{out}"
+    );
 
     // Pi's installed extension registers the server from the launch env, each tool at the
     // exposure Pi gives it; Pi cannot limit or mark the user's own servers.

@@ -327,7 +327,7 @@ pub(super) fn run(args: ExplainArgs, globals: &GlobalFlags) -> Result<()> {
 
 /// What a launch hands its provider for MCP: RimZ's server and the load mode
 /// of each of its tools (Pi's own exposure on Pi), the user's servers it
-/// keeps, each `mcps` mark the adapter did not apply beside the line it
+/// keeps, each load mark the adapter did not apply beside the line it
 /// concerns, and the provider arguments that carry them, all read from the
 /// compiled plan; then the instructions and each tool's description and
 /// schema, as the server sends them.
@@ -409,12 +409,12 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
             }
         )
     };
-    // A capability's mark shows on its tools' rows, and any other mark of RimZ's on this line.
+    // A capability's mark shows on its tools' rows, and any other mark of RimZ's on this line (a
+    // mark on `rimz` also on each row that reads it).
     let unapplied = &process.unapplied_marks;
     let rimz_marks = unapplied.iter().filter(|mark| {
-        mark.entry.user_server().is_none()
+        mark.user_server().is_none()
             && mark
-                .entry
                 .capability()
                 .is_none_or(|capability| !served.contains(&capability))
     });
@@ -426,9 +426,7 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
     } else {
         user_servers(plan, &arguments, rides_agent_file)
     };
-    let user_marks = unapplied
-        .iter()
-        .filter(|mark| mark.entry.user_server().is_some());
+    let user_marks = unapplied.iter().filter(|mark| mark.user_server().is_some());
     servers.push(
         "your servers",
         render::cell(with_marks(user_line, user_marks)),
@@ -459,15 +457,23 @@ fn write_mcps(plan: &LaunchPlan, server_on: bool, w: &mut impl Write) -> std::io
                     .mcp_tool_load(&process.env, tool.name)
                     .unwrap_or_else(|| load_mode(&arguments, &launch_env, tool.capability))
             };
-            let marks = unapplied.iter().filter(|mark| {
-                tool.capability
-                    .is_some_and(|capability| mark.entry.capability() == Some(capability))
-            });
+            let mut marks: Vec<_> = unapplied
+                .iter()
+                .filter(|mark| tool.capability.is_some() && mark.capability() == tool.capability)
+                .collect();
+            // A tool with no mark of its own shows the mark on `rimz` whose mode its load reads.
+            if marks.is_empty() {
+                marks.extend(
+                    unapplied
+                        .iter()
+                        .filter(|mark| mark.server_mode().is_some_and(|mode| mode.name() == load)),
+                );
+            }
             table.row([
                 render::cell(tool.group_name()),
                 render::cell(tool.name),
                 render::cell(format!("~{size}")),
-                render::cell(with_marks(load.to_owned(), marks)),
+                render::cell(with_marks(load.to_owned(), marks.into_iter())),
             ]);
         }
         writeln!(w, "\nTools")?;

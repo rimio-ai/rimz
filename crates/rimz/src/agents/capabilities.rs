@@ -50,19 +50,62 @@ pub struct LaunchFrontend {
 /// --mcps` shows it beside the load it concerns.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnappliedMark {
-    pub entry: crate::config::McpName,
-    /// The profile key the entry came from: `capabilities` or `mcps`.
-    key: &'static str,
+    mark: Mark,
     reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Mark {
+    /// A list entry, from the profile key `key`: `capabilities` or `mcps`.
+    Entry {
+        entry: crate::config::McpName,
+        key: &'static str,
+    },
+    /// The `always` a staged team's role seat gives a capability no list marks
+    /// ([`McpLaunch::always`]).
+    UpFront(crate::mcp::catalog::Capability),
+}
+
+impl UnappliedMark {
+    /// The capability whose tools the mark loads.
+    pub fn capability(&self) -> Option<crate::mcp::catalog::Capability> {
+        match &self.mark {
+            Mark::Entry { entry, .. } => entry.capability(),
+            Mark::UpFront(capability) => Some(*capability),
+        }
+    }
+
+    /// The user's own server the mark is on.
+    pub fn user_server(&self) -> Option<&str> {
+        match &self.mark {
+            Mark::Entry { entry, .. } => entry.user_server(),
+            Mark::UpFront(_) => None,
+        }
+    }
+
+    /// The mode of a mark on `rimz`, which loads each tool whose capability has no mark of its
+    /// own.
+    pub fn server_mode(&self) -> Option<crate::mcp::catalog::LoadMode> {
+        match &self.mark {
+            Mark::Entry { entry, .. } if entry.name() == crate::mcp::catalog::SERVER_NAME => {
+                entry.mode()
+            }
+            _ => None,
+        }
+    }
 }
 
 impl std::fmt::Display for UnappliedMark {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "the {} entry `{}` is not applied: {}",
-            self.key, self.entry, self.reason
-        )
+        match &self.mark {
+            Mark::Entry { entry, key } => write!(f, "the {key} entry `{entry}`")?,
+            Mark::UpFront(capability) => write!(
+                f,
+                "the `always` load a staged team's role seat gives `{}`",
+                capability.name()
+            )?,
+        }
+        write!(f, " is not applied: {}", self.reason)
     }
 }
 
@@ -129,15 +172,17 @@ impl McpLaunch<'_> {
         reason: impl Into<String>,
     ) -> UnappliedMark {
         UnappliedMark {
-            entry: entry.clone(),
-            key: self.key(entry),
+            mark: Mark::Entry {
+                entry: entry.clone(),
+                key: self.key(entry),
+            },
             reason: reason.into(),
         }
     }
 
     /// Each mark the launch cannot apply: a mark on one of the user's servers, for
     /// `user_server_reason`, any other mark while RimZ's server is off, and with
-    /// `served_reason` every other mark too.
+    /// `served_reason` every other mark too, and [`Self::always`] after them.
     pub(super) fn unapplied_marks(
         &self,
         user_server_reason: &str,
@@ -157,6 +202,14 @@ impl McpLaunch<'_> {
                 };
                 Some(self.unapplied(entry, reason))
             })
+            .chain(
+                served_reason
+                    .zip(self.always)
+                    .map(|(reason, capability)| UnappliedMark {
+                        mark: Mark::UpFront(capability),
+                        reason: reason.to_owned(),
+                    }),
+            )
             .collect()
     }
 }
