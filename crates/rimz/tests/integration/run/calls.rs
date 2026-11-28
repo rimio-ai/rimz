@@ -660,6 +660,43 @@ fn a_launch_ended_before_its_deadline_is_sent_nothing() {
     let after = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
     assert_ne!(after.status, RunStatus::TimedOut, "{after:?}");
     assert!(digest(&env).is_empty(), "no report");
+
+    // A seat whose owner dies after `latest.json` is published, with no append since, is also
+    // gone: `call-timeout` reads a fresh projection rather than the stale cache.
+    let env = room();
+    let mut process = provider();
+    let pid = process.id();
+    let record = task_run_in(
+        &env,
+        Some(call(None, Some((created, Duration::from_secs(30 * 60))))),
+        Some((7, pid)),
+    );
+    // Retract the cadence stamp so the hook's append publishes `latest.json` with the live owner.
+    if let Some(dir) = env.store().paths().snapshots_dir() {
+        let _ = std::fs::remove_file(dir.join("publish.stamp"));
+    }
+    hook_as(&env, &record, pid, "UserPromptSubmit", json!({}));
+    let _ = process.kill();
+    let _ = process.wait();
+    assert!(
+        !rimz::proc::process_is_live(pid, None),
+        "reaped stand-in pid {pid} still reads live"
+    );
+    let cached = env.store().snapshot_cached().unwrap();
+    assert!(
+        cached
+            .agents
+            .iter()
+            .any(|agent| agent.name.as_deref() == Some("tasker") && agent.ended_at.is_none()),
+        "latest.json should still serve the published live row before the fresh check: {:?}",
+        cached.agents
+    );
+    assert!(!live(&env, "tasker"));
+    let output = call_timeout(&env, TASK_LAUNCH, &[]);
+    assert!(output.status.success(), "{output:?}");
+    let after = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
+    assert_ne!(after.status, RunStatus::TimedOut, "{after:?}");
+    assert!(digest(&env).is_empty(), "no report");
 }
 
 /// A `team` call of `@planner`'s whose launch opened `lead` and `coder` on `forge#x`, its
