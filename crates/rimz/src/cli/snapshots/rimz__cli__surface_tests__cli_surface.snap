@@ -4640,6 +4640,7 @@ rimz worktree merge
 
 rimz worktree new
     <name>  [action=set takes=1..=1]
+    --allow-external  [action=set-true takes=0..=0]
     --base <BASE>  [action=set takes=1..=1]
     --branch <BRANCH>  [action=set takes=1..=1]
     --color <COLOR>  [action=set takes=1..=1 global default=auto values=auto|always|never]

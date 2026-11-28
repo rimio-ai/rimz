@@ -39,7 +39,7 @@ pub use own_lane::own_lane;
 
 pub use exclude::exclude_team_scratch;
 pub use landed_memo::LandedMemo;
-pub use pr::{PrBranchChoice, PrBranchDivergence, create_from_pr};
+pub use pr::{ExternalPrHead, PrBranchChoice, PrBranchDivergence, create_from_pr};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 4;
@@ -189,6 +189,17 @@ pub enum WorktreeErr {
         holder: PathBuf,
         detail: String,
     },
+    #[error(
+        "{head}; check it out with `rimz worktree new {name} --from-pr {} --allow-external`, then launch again with `--from-pr {} -w {name}`",
+        head.number,
+        head.number
+    )]
+    PrExternal {
+        head: ExternalPrHead,
+        /// The worktree name as the caller spelled it, so the printed command keeps the branch a
+        /// branch-style name asks for.
+        name: String,
+    },
     #[error("local PR branch `{branch}` differs from the PR head: {divergence}; {}", pr::alignment_commands(branch, holder.as_deref()))]
     PrBranchDiverged {
         branch: String,
@@ -224,6 +235,28 @@ pub struct WorktreeMarker {
     /// (`stamp_loop_fire`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_fire: Option<crate::ids::FireId>,
+    /// How the checkout was confirmed when the tree holds a pull request whose head was on no
+    /// branch of `origin`; `None` for every other tree, and for trees made before it was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external: Option<ExternalCheckout>,
+}
+
+/// The confirmation that let an external pull request be checked out into a tree.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ExternalCheckout {
+    pub confirmed_by: ConfirmedBy,
+    /// The calling agent's name, when an agent ran the checkout.
+    #[serde(default)]
+    pub agent: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ConfirmedBy {
+    /// A yes at the terminal prompt.
+    Prompt,
+    /// `--allow-external` on the command line.
+    Flag,
 }
 
 /// What a linked worktree's `.git` metadata records about where it came from.
@@ -1009,6 +1042,7 @@ pub fn create(
             base_branch,
             base_ref,
             from_pr: None,
+            external: None,
         },
         Checkout::NewBranch(&checkout_base_ref),
         &config.hooks,
@@ -1143,7 +1177,16 @@ pub fn resolve_launch_checkout(
             return Err(WorktreeErr::LaunchPrRequiresRepo);
         }
         let name = worktree.map(str::trim).filter(|name| !name.is_empty());
-        let created = create_from_pr(repo_root, config, pr, name, None, name.is_some(), pr_branch)?;
+        let created = create_from_pr(
+            repo_root,
+            config,
+            pr,
+            name,
+            None,
+            name.is_some(),
+            pr_branch,
+            None,
+        )?;
         let created_marker = (!created.reused).then(|| created.marker.clone());
         let review_only_reason = created.review_only_reason;
         let marker = created.marker;
@@ -2261,6 +2304,7 @@ struct MarkerProvenance {
     base_branch: Option<String>,
     base_ref: String,
     from_pr: Option<u64>,
+    external: Option<ExternalCheckout>,
 }
 
 enum WorktreeCreateTarget {
@@ -2376,6 +2420,7 @@ fn finish_worktree(
         base_branch,
         base_ref,
         from_pr,
+        external,
     } = provenance;
     let marker = WorktreeMarker {
         version: MARKER_VERSION,
@@ -2388,6 +2433,7 @@ fn finish_worktree(
         worktree_path: path.clone(),
         created_at: jiff::Timestamp::now(),
         loop_fire: None,
+        external,
     };
     write_marker(&path, &marker)?;
     let included = include::copy_includes(repo_root, &path);

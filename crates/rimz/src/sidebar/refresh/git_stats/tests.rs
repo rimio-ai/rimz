@@ -57,6 +57,7 @@ fn rowless_active_and_parked_groups_supply_the_run_scope_to_git_demand() {
     let path = dir.path().to_string_lossy().into_owned();
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "lane".into(),
         branch: "lane".into(),
@@ -1337,6 +1338,7 @@ fn write_rimz_worktree_marker_with_pr(
 ) {
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: name.to_owned(),
         branch: "feature".to_owned(),

@@ -1891,6 +1891,7 @@ fn gc_keeps_a_retired_task_record_while_anything_still_shows_it() {
         worktree_path: canonical(&tree),
         created_at: Timestamp::now(),
         loop_fire: row.fire.clone(),
+        external: None,
     };
     std::fs::write(&marker, serde_json::to_vec(&fired).unwrap()).unwrap();
     assert!(gc().is_some(), "the worktree marker keeps the record");

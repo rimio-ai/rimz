@@ -501,6 +501,7 @@ mod tests {
         rimz::worktree::ManagedWorktree {
             marker: rimz::worktree::WorktreeMarker {
                 loop_fire: None,
+                external: None,
                 version: 1,
                 name: name.to_owned(),
                 branch: branch.to_owned(),

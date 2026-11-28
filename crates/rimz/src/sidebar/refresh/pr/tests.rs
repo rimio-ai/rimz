@@ -1534,6 +1534,7 @@ fn build_targets_marks_main_and_the_resolved_trunk() {
     let marker_created_at = jiff::Timestamp::from_second(2_000).unwrap();
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "feature".to_owned(),
         branch: "feature".to_owned(),

@@ -1652,6 +1652,7 @@ fn worktree_inspection_holds_a_forge_condition_probed_before_its_fire_stamp() {
     let checkout = checkout.canonicalize().unwrap();
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 4,
         name: "lane".into(),
         branch: "lane".into(),
