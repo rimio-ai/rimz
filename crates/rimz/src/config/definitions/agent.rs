@@ -11,7 +11,7 @@ use crate::config::{Isolation, Profile, PromptSource, SkillName};
 use crate::mcp::catalog::{Capability, LoadMode, SERVER_NAME};
 
 use super::contest::{self, ListWriters};
-use super::frontmatter::AgentFrontmatter;
+use super::frontmatter::{AddedNames, AgentFrontmatter};
 use super::{
     BuildBase, DefinitionCause, DefinitionErr, LoadContext, LoadScope, LoadedDefinitions,
     Namespace, SkillCatalog, SkillCheck, SubagentCheck, frontmatter, traits,
@@ -1573,7 +1573,7 @@ fn finish_profile(
             },
         ));
     }
-    let seat_edits = settle_lists(shared, kind, namespace, kind_base, seat, &mut fm)
+    let (seat_edits, added) = settle_lists(shared, kind, namespace, kind_base, seat, &mut fm)
         .map_err(|message| DefinitionErr::new(path, message))?;
     profile.allowed_tools = fm
         .allowed_tools
@@ -1618,11 +1618,15 @@ fn finish_profile(
     }
     let lowered = match fm.capabilities.as_deref() {
         Some(written) => {
-            for (key, listed) in [
-                ("skills", fm.skills.as_deref()),
-                ("mcps", fm.mcps.as_deref()),
+            for (key, listed, added) in [
+                ("skills", fm.skills.as_deref(), added.skills.as_deref()),
+                ("mcps", fm.mcps.as_deref(), added.mcps.as_deref()),
             ] {
-                let entries = listed.into_iter().flatten().map(|entry| entry.trim());
+                let entries = listed
+                    .into_iter()
+                    .chain(added)
+                    .flatten()
+                    .map(|entry| entry.trim());
                 // No list may name the board, so its entry goes rather than into the grant.
                 if let Some(board) = entries.clone().find(|entry| {
                     Capability::from_name(frontmatter::marked_name(entry))
@@ -1734,19 +1738,28 @@ fn finish_profile(
         }
         SkillCheck::Skip => false,
     };
+    let skill_check = (shared.skills.check.as_ref(), scoped);
     profile.skills = match fm.skills.as_deref() {
         // `capabilities:` beside `skills: []` keeps the empty list; its RimZ capabilities
         // live in the grant.
         Some([]) if fm.capabilities.is_some() => Some(Vec::new()),
-        listed => skill_policy(
-            path,
-            kind,
-            listed,
-            tools.as_ref(),
-            (shared.skills.check.as_ref(), scoped),
-            &shared.skills,
-        )?,
+        Some(_) if agents::skills_lack_skill_tool(kind, tools.as_ref()) => {
+            return Err(DefinitionErr::new(
+                path,
+                "sets `skills:` and lists no Skill tool; the list governs which skills that tool reaches on its own",
+            ));
+        }
+        listed => skill_policy(path, kind, listed, skill_check, &shared.skills)?,
     };
+    // A `+` list nothing below added to stays absent, which admits every skill, and its names
+    // take a plain list's checks.
+    skill_policy(
+        path,
+        kind,
+        added.skills.as_deref(),
+        skill_check,
+        &shared.skills,
+    )?;
     if seat_edits.added_consensus
         && let Some(skills) = &mut profile.skills
     {
@@ -1765,6 +1778,9 @@ fn finish_profile(
         .as_deref()
         .map(|listed| mcp_names(path, listed))
         .transpose()?;
+    if let Some(added) = added.mcps.as_deref() {
+        mcp_names(path, added)?;
+    }
     profile.tools = tools;
     profile.kind_defaults = true;
     profile.isolation = fm.isolation;
@@ -1897,7 +1913,8 @@ fn finish_profile(
 }
 
 /// Settles `fm`'s lists as `finish_profile` lowers them: its kind base filled in below the chain
-/// unless `fm` is that base, each `+` list settled, then its seat's edits.
+/// unless `fm` is that base, each `+` list settled, then its seat's edits, which come back with
+/// the names of each `+` list left absent.
 fn settle_lists(
     shared: &super::SharedLoadState,
     kind: &str,
@@ -1905,12 +1922,13 @@ fn settle_lists(
     kind_base: bool,
     seat: Option<&SeatInfo>,
     fm: &mut AgentFrontmatter,
-) -> Result<SeatSkillEdits, String> {
+) -> Result<(SeatSkillEdits, AddedNames), String> {
     if !kind_base && let Some(base) = shared.bases.get(kind) {
         fm.inherit_base(base, namespace, lists_agent_tool(fm));
     }
-    fm.settle_plus(kind)?;
-    Ok(seat.map_or_else(SeatSkillEdits::default, |seat| seat.edits.edit(fm)))
+    let added = fm.settle_plus(kind)?;
+    let edits = seat.map_or_else(SeatSkillEdits::default, |seat| seat.edits.edit(fm));
+    Ok((edits, added))
 }
 
 /// The contests of `fm`'s settled lists, which `writers` and the kind base below them wrote
@@ -2266,19 +2284,12 @@ pub(super) fn skill_policy(
     path: &Path,
     kind: &str,
     listed: Option<&[String]>,
-    tools: Option<&ToolSet>,
     (check, scoped): (SkillCheck<'_>, bool),
     catalog: &SkillCatalog,
 ) -> Result<Option<Vec<SkillName>>, DefinitionErr> {
     let Some(listed) = listed else {
         return Ok(None);
     };
-    if agents::skills_lack_skill_tool(kind, tools) {
-        return Err(DefinitionErr::new(
-            path,
-            "sets `skills:` and lists no Skill tool; the list governs which skills that tool reaches on its own",
-        ));
-    }
     let mut skills = Vec::new();
     let definition = agents::find_definition(kind);
     // A host kind without a switch enforces no list, so its launch refuses only a listed name

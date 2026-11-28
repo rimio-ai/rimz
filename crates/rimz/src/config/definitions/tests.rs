@@ -1530,7 +1530,8 @@ fn a_profile_naming_rimz_wait_is_refused_with_its_two_replacements() {
 /// `rimz-blackboard` left the profile vocabulary: RimZ serves the board tools to every role seat
 /// of a staged team, so a definition naming it, bare or marked, in `capabilities:` or `mcps:`, or in
 /// `skills:` or `mcps:` beside `capabilities:`, is refused with that reason and never told to
-/// move it into `capabilities:`, and so is a team role that lists it.
+/// move it into `capabilities:`, and so is a team role that lists it. A `+` entry nothing below
+/// adds to is refused as a plain one.
 #[test]
 fn a_definition_naming_rimz_blackboard_is_refused_since_seats_are_served_the_board() {
     let reason = "RimZ serves the board tools to every role seat of a staged team and to no \
@@ -1561,25 +1562,27 @@ fn a_definition_naming_rimz_blackboard_is_refused_since_seats_are_served_the_boa
             refused(root.path()),
             [format!("lists `{entry}` in `capabilities:`, but {reason}")]
         );
-        let root = fixture();
-        definition(
-            root.path(),
-            "agents/probe.md",
-            &format!("agent: claude\ntools: [Bash]\nmcps: [github, '{entry}']"),
-            "",
-        );
-        assert_eq!(
-            refused(root.path()),
-            [format!(
-                "sets `mcps:` with an invalid mcps entry `{entry}`: {reason}"
-            )]
-        );
-        for key in ["skills", "mcps"] {
+        for mcps in [format!("github, '{entry}'"), format!("'+{entry}'")] {
             let root = fixture();
             definition(
                 root.path(),
                 "agents/probe.md",
-                &format!("agent: claude\ncapabilities: [read]\n{key}: ['{entry}']"),
+                &format!("agent: claude\ntools: [Bash]\nmcps: [{mcps}]"),
+                "",
+            );
+            assert_eq!(
+                refused(root.path()),
+                [format!(
+                    "sets `mcps:` with an invalid mcps entry `{entry}`: {reason}"
+                )]
+            );
+        }
+        for (key, plus) in [("skills", ""), ("mcps", ""), ("skills", "+"), ("mcps", "+")] {
+            let root = fixture();
+            definition(
+                root.path(),
+                "agents/probe.md",
+                &format!("agent: claude\ncapabilities: [read]\n{key}: ['{plus}{entry}']"),
                 "",
             );
             assert_eq!(
@@ -5593,7 +5596,7 @@ fn plus_lists_add_to_the_chain_and_the_kind_base_in_place_and_in_order() {
 }
 
 #[test]
-fn plus_lists_refuse_a_mix_a_bare_plus_and_nothing_below_a_required_list() {
+fn plus_lists_refuse_a_mix_a_bare_plus_a_bad_name_and_nothing_below_a_required_list() {
     for (fields, needle) in [
         (
             "agent: claude\ntools: [Bash, +Read]",
@@ -5607,6 +5610,14 @@ fn plus_lists_refuse_a_mix_a_bare_plus_and_nothing_below_a_required_list() {
             "agent: claude\ntools: [+Bash]",
             "sets `tools:` with `+` entries, but neither its chain nor the claude kind base \
              lists `tools`; write the full list",
+        ),
+        (
+            "agent: claude\ntools: [Bash]\nmcps: [+github, +rimz-nosuch]",
+            "sets `mcps:` with an invalid mcps entry `rimz-nosuch`: list `*`, `rimz`",
+        ),
+        (
+            "agent: claude\ntools: [Bash, Skill]\nskills: [+work, '+work:always']",
+            "lists skill \"work:always\"; rimz reads one bare directory name",
         ),
         (
             "agent: claude\ntools: [Bash]\nallowed-tools: [+Read]",

@@ -283,11 +283,11 @@ impl AgentFrontmatter {
     }
 
     /// Settles each `+` list nothing below added to, once the whole chain and the kind base are
-    /// in: `skills` and `mcps` stay absent, which already means everything, and `tools`,
-    /// `capabilities`, and `allowed-tools` have no list to add to. A pending `subagents` list
-    /// stays for `finish_profile`, which refuses it where a plain list is refused before it
-    /// reads it as absent.
-    pub(super) fn settle_plus(&mut self, kind: &str) -> Result<(), String> {
+    /// in: `skills` and `mcps` stay absent, which already means everything, their names kept in
+    /// the [`AddedNames`] returned, and `tools`, `capabilities`, and `allowed-tools` have no
+    /// list to add to. A pending `subagents` list stays for `finish_profile`, which refuses it
+    /// where a plain list is refused before it reads it as absent.
+    pub(super) fn settle_plus(&mut self, kind: &str) -> Result<AddedNames, String> {
         for (key, list) in self.lists() {
             if list.is_some_and(|list| list.iter().any(|entry| is_plus(entry)))
                 && matches!(key, "tools" | "capabilities" | "allowed-tools")
@@ -298,15 +298,21 @@ impl AgentFrontmatter {
                 ));
             }
         }
-        for list in [&mut self.skills, &mut self.mcps] {
+        let mut added_names = AddedNames::default();
+        for (list, names) in [
+            (&mut self.skills, &mut added_names.skills),
+            (&mut self.mcps, &mut added_names.mcps),
+        ] {
             if list
                 .as_ref()
                 .is_some_and(|list| list.iter().any(|entry| is_plus(entry)))
             {
-                *list = None;
+                *names = list
+                    .take()
+                    .map(|list| list.iter().map(|entry| added(entry).to_owned()).collect());
             }
         }
-        Ok(())
+        Ok(added_names)
     }
 
     /// A kind base's or direct parent's fields less those `namespace` drops: a subagent takes no
@@ -321,6 +327,14 @@ impl AgentFrontmatter {
         }
         self
     }
+}
+
+/// The entries of each `skills` and `mcps` `+` list [`AgentFrontmatter::settle_plus`] left
+/// absent, less their `+`, which still take every name check a plain list of that key takes.
+#[derive(Default)]
+pub(super) struct AddedNames {
+    pub skills: Option<Vec<String>>,
+    pub mcps: Option<Vec<String>>,
 }
 
 #[derive(Deserialize)]
