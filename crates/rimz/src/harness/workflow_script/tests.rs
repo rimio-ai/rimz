@@ -266,11 +266,28 @@ fn phase_and_log_make_no_call_and_each_call_carries_its_phase() {
          return [said, phase('Done')]",
         vec![result(json!({"code": 3})), result(json!({"code": 0}))],
     );
+    let titles: Vec<_> = replay
+        .marks
+        .iter()
+        .filter_map(|mark| match &mark.progress {
+            Progress::Phase(title) => Some(title.as_ptr()),
+            Progress::Log(_) => None,
+        })
+        .collect();
+    // A call shares its title with the phase's mark, whose charge covers it, and copies nothing.
+    assert_eq!(
+        replay
+            .calls
+            .iter()
+            .map(|call| call.phase.as_deref().map(str::as_ptr))
+            .collect::<Vec<_>>(),
+        vec![Some(titles[0]), Some(titles[1])]
+    );
     let call = |number, command: &str, phase: &str| {
         (
             number,
             digest(BlockName::Shell, &json!({ "command": command })),
-            Some(phase.to_owned()),
+            Some(phase.into()),
         )
     };
     let mark = |after, replayed, progress| Mark {
@@ -278,7 +295,7 @@ fn phase_and_log_make_no_call_and_each_call_carries_its_phase() {
         replayed,
         progress,
     };
-    let phase = |title: &str| Progress::Phase(title.to_owned());
+    let phase = |title: &str| Progress::Phase(title.into());
     let log = |line: &str| Progress::Log(line.to_owned());
     assert_eq!(
         (

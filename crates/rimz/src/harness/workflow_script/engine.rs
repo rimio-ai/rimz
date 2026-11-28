@@ -5,6 +5,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
 use rquickjs::context::{EvalOptions, intrinsic};
@@ -44,8 +45,9 @@ struct State {
     unhandled: Vec<(Persistent<JsValue<'static>>, Persistent<JsValue<'static>>)>,
     /// The prelude's maker of a failure's `Error`.
     fail: Option<Persistent<Function<'static>>>,
-    /// The title of the script's last `phase`.
-    phase: Option<String>,
+    /// The title of the script's last `phase`: one allocation that its mark and every call made
+    /// under it share, so the mark's charge against the heap's cap covers them all.
+    phase: Option<Arc<str>>,
     marks: Vec<Mark>,
     /// How many lines the log holds, and how many of them the pass has handed back.
     lines: usize,
@@ -56,7 +58,10 @@ impl State {
     /// Keep `progress` as a mark of the pass. The pass keeps it outside the engine's heap, so its
     /// bytes count against the heap's cap.
     fn mark(&mut self, heap: &Heap, progress: Progress) -> rquickjs::Result<()> {
-        let (Progress::Phase(text) | Progress::Log(text)) = &progress;
+        let text: &str = match &progress {
+            Progress::Phase(title) => title,
+            Progress::Log(line) => line,
+        };
         if !heap.hold(std::mem::size_of::<Mark>() + text.len()) {
             return Err(rquickjs::Error::Allocation);
         }
@@ -556,10 +561,11 @@ fn install<'js>(
             move |ctx: Ctx<'js>, title: Opt<JsValue<'js>>| {
                 let title = text(&ctx, title, "`phase` takes its title as text")?;
                 let mut state = state.borrow_mut();
-                if state.phase.as_ref() == Some(&title) {
+                if state.phase.as_deref() == Some(title.as_str()) {
                     return Ok(());
                 }
-                state.phase = Some(title.clone());
+                let title = Arc::<str>::from(title);
+                state.phase = Some(Arc::clone(&title));
                 state.mark(&heap, Progress::Phase(title))
             },
         )?
