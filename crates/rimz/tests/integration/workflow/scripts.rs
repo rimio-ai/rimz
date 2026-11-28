@@ -409,7 +409,7 @@ fn try_prints_phase_changes_and_log_lines_among_the_calls() {
          const gate = await shell({ command: 'cargo xtask gate' })\n\
          phase('Gate')\n\
          phase('Fix')\n\
-         log(`the gate exited ${gate.code}`)\n\
+         log(`the gate exited ${gate.code}\\nsending the fixer`)\n\
          await shell({ command: 'cargo xtask fix' })\n\
          phase('Report')\n\
          return gate.code\n",
@@ -443,6 +443,7 @@ fn try_prints_phase_changes_and_log_lines_among_the_calls() {
          1 shell cargo xtask gate\n  answer {\"code\":3}\n\
          phase Fix\n\
          log the gate exited 3\n\
+         log sending the fixer\n\
          2 shell cargo xtask fix\n  answer {\"code\":0}\n\
          phase Report\n\
          returns 3\n"

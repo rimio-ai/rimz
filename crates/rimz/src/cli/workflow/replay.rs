@@ -102,16 +102,20 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
     Ok(())
 }
 
-/// Each mark not written yet that the script made with at most `made` calls behind it.
+/// Each mark not written yet that the script made with at most `made` calls behind it, each line
+/// of its text under its own prefix, so a line break in the text cannot pass for a call.
 fn write_marks<'a>(
     out: &mut impl Write,
     marks: &mut std::iter::Peekable<impl Iterator<Item = &'a Mark>>,
     made: u64,
 ) -> std::io::Result<()> {
     while let Some(mark) = marks.next_if(|mark| mark.after <= made) {
-        match &mark.progress {
-            Progress::Phase(title) => writeln!(out, "phase {title}")?,
-            Progress::Log(line) => writeln!(out, "log {line}")?,
+        let (prefix, text): (_, &str) = match &mark.progress {
+            Progress::Phase(title) => ("phase", title),
+            Progress::Log(line) => ("log", line),
+        };
+        for line in text.split('\n') {
+            writeln!(out, "{prefix} {line}")?;
         }
     }
     Ok(())
