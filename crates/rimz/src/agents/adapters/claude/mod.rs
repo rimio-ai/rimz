@@ -514,6 +514,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         variants: &[],
         runs_other_providers_models: false,
         home_series: Some("Claude"),
+        line_names: &["Opus", "Sonnet", "Haiku", "Fable", "Mythos", "Instant"],
         effort: Some("xhigh"),
         models: &[
             crate::agents::definition::DefinitionModel {

@@ -249,6 +249,7 @@ static ANTIGRAVITY_DESCRIPTOR: AgentSpec = AgentSpec {
             prefixes: &["gemini-"],
             foreign_prefixes: &[("claude-", "high")],
             home_series: Some("Gemini"),
+            line_names: &["Neon", "Hydrogen", "Argon", "Carbon"],
             tools: crate::agents::definition::DefinitionTools::RequiredFile(
                 agent_file::render_definition_tools,
             ),

@@ -196,7 +196,7 @@ forge team · 2 agents · 1h04m active · $9.23 · 2 messages (1 from you)
       tokens:    837.2k input, 119.3k output, 130.9k cache write, 23.3m cache read
 
 Models
-  GPT 6.2 Sol: $5.82 · 976.1k input, 125.5k output, 26.1m cache read · 45 tok/s
+  GPT Sol 6.2: $5.82 · 976.1k input, 125.5k output, 26.1m cache read · 45 tok/s
   Opus 5.5:    $1.94 · 66 input, 22.8k output, 130.9k cache write, 2.2m cache read · 109 tok/s
   Fable 5.2:   $1.47 · 32 input, 8.6k output, 62.5k cache write, 608.2k cache read · 85 tok/s
 ```

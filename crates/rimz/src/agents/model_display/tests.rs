@@ -186,21 +186,49 @@ fn parse_and_render_cover_design_examples_and_traps() {
         ("grok-fast", Some("Grok"), Some("Grok"), "Grok"),
         ("grok-fast", None, Some("Grok"), "Grok"),
         // Fixture names and the shapes today's callers feed.
+        // A declared line leads the core under any series its adapter owns, and
+        // the series hides only beside its own kind.
+        ("Gemini 4 Neon", Some("Gemini"), None, "Neon 4"),
+        ("Gemini 4 Neon", None, Some("Gemini"), "Gemini Neon 4"),
+        ("gemini-4-neon", Some("Gemini"), None, "Neon 4"),
+        ("gemini-4-neon", None, Some("Gemini"), "Gemini Neon 4"),
+        ("gemini-4-carbon", Some("Gemini"), None, "Carbon 4"),
+        ("gemini-4-carbon", None, Some("Gemini"), "Gemini Carbon 4"),
+        ("gpt-6.2-sol", Some("GPT"), None, "Sol 6.2"),
+        ("gpt-6.2-sol", None, Some("GPT"), "GPT Sol 6.2"),
+        ("gpt-6.1-sol", Some("GPT"), None, "Sol 6.1"),
+        ("gpt-6.1-sol", None, Some("GPT"), "GPT Sol 6.1"),
+        ("gpt-6.1-sol", Some("Claude"), Some("GPT"), "GPT Sol 6.1"),
+        ("gpt-7-sol-mini", Some("GPT"), None, "Sol 7 Mini"),
+        ("gpt-7-sol-mini", None, Some("GPT"), "GPT Sol 7 Mini"),
+        ("Sol 6.1", None, None, "Sol 6.1"),
+        ("Opus 4.8", Some("Claude"), None, "Opus 4.8"),
+        ("Opus 4.8", None, None, "Opus 4.8"),
+        // Only the line word that leads leaves the children.
+        ("gpt-7-sol-sol", Some("GPT"), None, "Sol 7 Sol"),
+        ("gpt-7-sol-sol", None, Some("GPT"), "GPT Sol 7 Sol"),
+        // Tier and size words stay children, so the series shows.
+        ("gpt-5.4-mini", Some("GPT"), Some("GPT"), "GPT 5.4 Mini"),
+        ("gpt-5.4-mini", None, Some("GPT"), "GPT 5.4 Mini"),
+        ("gpt-5.5-pro", Some("GPT"), Some("GPT"), "GPT 5.5 Pro"),
+        ("gpt-5.5-pro", None, Some("GPT"), "GPT 5.5 Pro"),
         (
-            "Gemini 4 Neon",
+            "gemini-3.1-flash-lite",
             Some("Gemini"),
             Some("Gemini"),
-            "Gemini 4 Neon",
+            "Gemini 3.1 Flash Lite",
         ),
-        ("Gemini 4 Neon", None, Some("Gemini"), "Gemini 4 Neon"),
         (
-            "gemini-4-carbon",
+            "gemini-3.1-flash-lite",
+            None,
             Some("Gemini"),
-            Some("Gemini"),
-            "Gemini 4 Carbon",
+            "Gemini 3.1 Flash Lite",
         ),
-        ("gpt-6.2-sol", Some("GPT"), Some("GPT"), "GPT 6.2 Sol"),
-        ("gpt-6.2-sol", None, Some("GPT"), "GPT 6.2 Sol"),
+        // A line its adapter has not declared keeps the series and trails.
+        ("gpt-7-nova", Some("GPT"), Some("GPT"), "GPT 7 Nova"),
+        ("gpt-7-nova", None, Some("GPT"), "GPT 7 Nova"),
+        // A line of another adapter stays a child of the parsed series.
+        ("gpt-7-neon", Some("GPT"), Some("GPT"), "GPT 7 Neon"),
         (
             "claude-opus-4-8",
             Some("Gemini"),
@@ -243,8 +271,14 @@ fn parse_and_render_cover_design_examples_and_traps() {
         (
             "gemini-pro-orchestrator-neon",
             Some("Gemini"),
+            None,
+            "Neon Pro Orchestrator",
+        ),
+        (
+            "gemini-pro-orchestrator-neon",
+            None,
             Some("Gemini"),
-            "Gemini Pro Orchestrator Neon",
+            "Gemini Neon Pro Orchestrator",
         ),
         ("high", None, None, "High"),
         (
@@ -354,6 +388,40 @@ fn home_series_declarations_match_adapter_ruling() {
         .map(|(kind, _)| (*kind, home_series(kind)))
         .collect();
     assert_eq!(actual, declared.to_vec());
+
+    // Line names lead the model name; only the adapters whose ids carry one
+    // declare them.
+    let lines: [(&str, &[&str]); 18] = [
+        (
+            "claude",
+            &["Opus", "Sonnet", "Haiku", "Fable", "Mythos", "Instant"],
+        ),
+        ("codex", &["Sol", "Terra", "Luna", "Astra"]),
+        ("antigravity", &["Neon", "Hydrogen", "Argon", "Carbon"]),
+        ("grok", &[]),
+        ("kimi", &[]),
+        ("minimax", &[]),
+        ("qwen", &[]),
+        ("pi", &[]),
+        ("opencode", &[]),
+        ("cursor", &[]),
+        ("droid", &[]),
+        ("copilot", &[]),
+        ("amp", &[]),
+        ("kiro", &[]),
+        ("hermes", &[]),
+        ("muse", &[]),
+        ("qoder", &[]),
+        ("omp", &[]),
+    ];
+    let actual_lines: Vec<_> = lines
+        .iter()
+        .map(|(kind, _)| {
+            let spec = super::super::registry::spec_by_kind(kind).expect("a built-in kind");
+            (*kind, spec.launch.definitions.line_names)
+        })
+        .collect();
+    assert_eq!(actual_lines, lines.to_vec());
 
     // Brand-colour lookup finds the adapter declaring the shown series
     // case-insensitively and returns None for undeclared series.
@@ -705,8 +773,8 @@ fn window_qualifiers_and_verbatim_brackets_are_preserved() {
         assert_eq!(parsed.window(), Some("1M"), "{raw}");
     }
     let astra = ParsedModel::parse("gpt-6-astra[200k]");
-    assert_eq!(astra.render(Some("GPT")).full(), "GPT 6 Astra");
-    assert_eq!(astra.render(None).full(), "GPT 6 Astra");
+    assert_eq!(astra.render(Some("GPT")).full(), "Astra 6");
+    assert_eq!(astra.render(None).full(), "GPT Astra 6");
     assert_eq!(astra.window(), Some("200k"));
 
     for raw in [
