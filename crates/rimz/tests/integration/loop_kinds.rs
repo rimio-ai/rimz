@@ -329,11 +329,11 @@ fn loop_add_refuses_what_a_launch_task_cannot_carry() {
         ),
         (
             &["--agent", "worker", "--timeout", "1h"],
-            "loop task `t`: --agent `worker`: --timeout bounds a shell task's command; remove it: an agent task's `-p` run takes `--timeout` in its arguments after `--`\n",
+            "loop task `t`: --agent `worker`: --timeout bounds a shell task's command; remove it: an agent task takes `--timeout` in its arguments after `--`\n",
         ),
         (
             &["--team", "forge", "--timeout", "1h"],
-            "loop task `t`: --team `forge`: --timeout bounds a shell task's command; remove it: loop does not time a team task's launch\n",
+            "loop task `t`: --team `forge`: --timeout bounds a shell task's command; remove it: a team task takes `--timeout` in its arguments after `--`\n",
         ),
         (
             &[
@@ -2499,8 +2499,8 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
     let env = live_room();
     kinds_fixture(&env);
     let receipt = |add: &[&str]| loop_ok(&env, &[&["loop", "add"][..], add].concat());
-    let idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch beside it";
-    let team_idle = "note: an agent left idle holds later fires; add `-p` for a run that ends itself, or `--overlap replace` to stop the old agent at each fire";
+    let idle = "note: an agent left idle holds later fires; add `-p` or `--stay false` for a run that ends itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch beside it";
+    let team_idle = "note: an agent left idle holds later fires; add `-p` or `--stay false` for a run that ends itself, or `--overlap replace` to stop the old agent at each fire";
     let trap = receipt(&[
         "trap", "--agent", "worker", "--every", "1h", "--", "-w", "one-word",
     ]);
@@ -2554,10 +2554,20 @@ fn loop_add_reads_each_launch_back_in_its_receipt() {
         flow.lines().any(|line| line == "launch: worktree `deps`"),
         "{flow}"
     );
-    let crew = receipt(&["crew", "--team", "forge", "--every", "1h", "--", "-w"]);
+    let crew = receipt(&[
+        "crew",
+        "--team",
+        "forge",
+        "--every",
+        "1h",
+        "--",
+        "--timeout",
+        "2h",
+        "-w",
+    ]);
     assert!(
         crew.lines()
-            .any(|line| line == "launch: a new worktree each fire · no prompt"),
+            .any(|line| line == "launch: a new worktree each fire · no prompt · time limit 2h"),
         "{crew}"
     );
     assert!(crew.lines().any(|line| line == team_idle), "{crew}");

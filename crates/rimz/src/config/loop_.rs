@@ -181,8 +181,8 @@ impl LaunchKind {
         match self {
             Self::Shell => "the task's `timeout` bounds its command",
             Self::Workflow => "a workflow task's run is bounded by its workflow's deadline",
-            Self::Agent => "an agent task's `-p` run takes `--timeout` in its arguments after `--`",
-            Self::Team => "loop does not time a team task's launch",
+            Self::Agent => "an agent task takes `--timeout` in its arguments after `--`",
+            Self::Team => "a team task takes `--timeout` in its arguments after `--`",
         }
     }
 }

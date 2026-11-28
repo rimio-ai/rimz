@@ -935,26 +935,6 @@ fn arguments_outside_the_schema_shape_are_refused() {
             "team",
             json!({"team": "forge", "prompt": "p", "worktree": "a", "timeout": "0x"}),
         ),
-        (
-            "schedule",
-            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
-                   "arguments": {"profile": "w", "prompt": "go", "stay": false}}),
-        ),
-        (
-            "schedule",
-            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
-                   "arguments": {"profile": "w", "prompt": "go", "schema": {"type": "string"}}}),
-        ),
-        (
-            "schedule",
-            json!({"name": "n", "trigger": "in", "value": "5m", "tool": "agent",
-                   "arguments": {"profile": "w", "prompt": "go", "timeout": "1h"}}),
-        ),
-        (
-            "schedule",
-            json!({"name": "n", "trigger": "in", "value": "5m", "worktree": "fix", "tool": "team",
-                   "arguments": {"team": "forge", "prompt": "go", "timeout": "1h"}}),
-        ),
         ("team", json!({"team": " ", "prompt": "p", "worktree": "a"})),
         (
             "team",
@@ -1096,7 +1076,10 @@ fn schemas_are_inline_objects_without_null_types() {
     assert!(
         stay["description"]
             .as_str()
-            .is_some_and(|text| text.contains("`\"10m\"`"))
+            .is_some_and(|text| ["`\"10m\"`", "`\"true\"`", "`\"false\"`"]
+                .iter()
+                .all(|form| text.contains(form))),
+        "the description names every form: {stay}"
     );
     let guide = tool("guide").listing(&Wording::built_in());
     assert_eq!(guide["inputSchema"]["required"], json!(["name"]));

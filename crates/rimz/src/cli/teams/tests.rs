@@ -216,6 +216,18 @@ fn a_team_launch_takes_a_timeout_in_both_spellings() {
     ] {
         assert!(TeamsHarness::try_parse_from(argv).is_err(), "{argv:?}");
     }
+    for argv in [
+        &["rimz", "forge", "--continue", "--timeout", "1h"][..],
+        &["rimz", "launch", "forge", "--continue", "--timeout", "1h"],
+    ] {
+        let error =
+            TeamsHarness::try_parse_from(argv).expect_err("a resumed cohort has no deadline");
+        assert_eq!(
+            error.kind(),
+            clap::error::ErrorKind::ArgumentConflict,
+            "{argv:?}: {error}"
+        );
+    }
 }
 
 #[test]

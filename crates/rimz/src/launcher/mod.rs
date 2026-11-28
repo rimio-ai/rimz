@@ -444,10 +444,16 @@ struct PreparedLayout {
 }
 
 /// A call that needs one agent seat launches what the command resolves to one, a `team.role` and a
-/// bare role of the caller's lane included; a layout of several cells and a command cell are
-/// refused.
-fn require_one_seat(spec: &str, layout: &LayoutSpec) -> Result<()> {
+/// bare role of the caller's lane included; a team, a layout of several cells, and a command cell
+/// are refused.
+fn require_one_seat(spec: &str, layout: &LayoutSpec, team: Option<&str>) -> Result<()> {
     use crate::harness::call::SeatRefusal;
+    if crate::harness::plan::names_team(spec, team) {
+        return Err(SeatRefusal::Team {
+            spec: spec.to_owned(),
+        }
+        .into());
+    }
     let spec = spec.to_owned();
     let cells: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
     if cells > 1 {
@@ -607,11 +613,18 @@ pub fn prepare_layout(
             }
         }
     })?;
+    let spec = args.launch.spec.as_deref().unwrap_or_default();
     if args.launch.one_seat {
-        require_one_seat(
-            args.launch.spec.as_deref().unwrap_or_default(),
-            &resolved.layout,
-        )?;
+        require_one_seat(spec, &resolved.layout, resolved.team_name.as_deref())?;
+    }
+    // A timeout alone needs no one seat, but it needs an agent to stop; it never drops silently.
+    if args.launch.call.as_ref().is_some_and(CallSpec::asks)
+        && resolved.layout.agent_cells().next().is_none()
+    {
+        return Err(crate::harness::call::SeatRefusal::NoAgent {
+            spec: spec.to_owned(),
+        }
+        .into());
     }
     if let Some(spec) = qualified_spec {
         args.launch.spec = Some(spec);

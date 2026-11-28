@@ -38,7 +38,13 @@ pub struct TeamsArgs {
     #[arg(long, value_name = "host|scoped|sandbox", requires = "name")]
     isolation: Option<rimz::config::Isolation>,
     /// Stop the team once this long has passed since it launched.
-    #[arg(long, value_name = "DURATION", value_parser = rimz::harness::block::timeout, requires = "name")]
+    #[arg(
+        long,
+        value_name = "DURATION",
+        value_parser = rimz::harness::block::timeout,
+        requires = "name",
+        conflicts_with = "continue_cohort"
+    )]
     timeout: Option<std::time::Duration>,
     /// Retired listing flag, kept so the no-verb refusal can echo it into `list`.
     #[arg(long, hide = true)]
@@ -122,7 +128,12 @@ struct TeamLaunchArgs {
     #[arg(long, value_name = "host|scoped|sandbox")]
     isolation: Option<rimz::config::Isolation>,
     /// Stop the team once this long has passed since it launched.
-    #[arg(long, value_name = "DURATION", value_parser = rimz::harness::block::timeout)]
+    #[arg(
+        long,
+        value_name = "DURATION",
+        value_parser = rimz::harness::block::timeout,
+        conflicts_with = "continue_cohort"
+    )]
     timeout: Option<std::time::Duration>,
 }
 
@@ -617,6 +628,7 @@ pub(super) fn check_loop_launch(
             .prompt
             .as_deref()
             .is_some_and(|prompt| !prompt.trim().is_empty()),
+        timeout: launch.timeout,
         ..Default::default()
     })
 }

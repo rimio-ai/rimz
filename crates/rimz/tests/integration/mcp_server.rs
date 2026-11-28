@@ -929,6 +929,45 @@ fn a_cli_launch_with_a_timeout_records_its_deadline_from_the_launch() {
     );
     assert!(!stderr.contains("`agent` launches one"), "{stderr}");
     assert_eq!(room.agents().len(), rows, "a refused launch opens nothing");
+
+    let config = room.env.rimz_home().join("config.toml");
+    let mut text = std::fs::read_to_string(&config).unwrap();
+    text.push_str("\n[agents.commands]\ntailer = 'true'\n");
+    std::fs::write(&config, text).unwrap();
+    for (argv, refusal) in [
+        (
+            &["agents", "solo", "build it", "--stay", "10m"][..],
+            "`solo` is a team; `--stay` launches one agent",
+        ),
+        (
+            &["agents", "solo", "build it", "--stay", "false"],
+            "`solo` is a team; `--stay false` launches one agent",
+        ),
+        (
+            &[
+                "agents",
+                "solo",
+                "build it",
+                "--schema",
+                r#"{"type": "object"}"#,
+            ],
+            "`solo` is a team; `--schema` launches one agent",
+        ),
+        (
+            &["agents", "tailer", "--timeout", "1m"],
+            "`tailer` runs no agent; `--timeout` needs one",
+        ),
+    ] {
+        let out = room.cli(argv);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success(), "{argv:?}: {out:?}");
+        assert!(stderr.contains(refusal), "{argv:?}: {stderr}");
+        assert_eq!(
+            room.agents().len(),
+            rows,
+            "{argv:?}: a refused launch opens nothing"
+        );
+    }
 }
 
 /// `rimz teams <team> --timeout` records the team launch's deadline on its call record, counted
@@ -6096,6 +6135,30 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
             }),
             None,
         ),
+        (
+            9,
+            "to-resting",
+            "cron",
+            "0 9 * * mon",
+            "agent",
+            json!({
+                "profile": "worker",
+                "prompt": "go",
+                "stay": "10m",
+                "schema": {"type": "object", "properties": {"ok": {"type": "boolean"}}},
+                "timeout": "4h",
+            }),
+            None,
+        ),
+        (
+            10,
+            "to-timed-crew",
+            "cron",
+            "0 9 * * mon",
+            "team",
+            json!({"team": "forge", "prompt": "ship", "timeout": "4h"}),
+            Some("timed-crew"),
+        ),
     ] {
         let mut arguments = json!({
             "name": name,
@@ -6128,6 +6191,16 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
             vec!["--fresh", "--description=- daily crew", "- ship it"],
         ),
         ("to-pr-agent", vec!["--from-pr=42", "watch pr"]),
+        (
+            "to-resting",
+            vec![
+                "--stay=10m",
+                r#"--schema={"properties":{"ok":{"type":"boolean"}},"type":"object"}"#,
+                "--timeout=4h",
+                "go",
+            ],
+        ),
+        ("to-timed-crew", vec!["--fresh", "--timeout=4h", "ship"]),
     ] {
         assert_eq!(
             rows[name]["args"],
@@ -6172,6 +6245,8 @@ fn each_target_a_schedule_books_passes_the_commands_launch_check() {
         ("to-crew", "--team"),
         ("to-pr-agent", "--agent"),
         ("to-workflow", "--workflow"),
+        ("to-resting", "--agent"),
+        ("to-timed-crew", "--team"),
     ] {
         let row = rows[name].as_table().unwrap();
         let tail: Vec<&str> = row
@@ -6258,6 +6333,27 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
             .iter()
             .any(|line| line.as_str().unwrap_or("").contains("`arguments.prompt`")),
         "{repeating}"
+    );
+    // A `stay: false` agent closes itself, so no idle agent holds a later fire.
+    let (one_task, is_error) = server.answer(
+        3,
+        "schedule",
+        json!({
+            "name": "one-task",
+            "trigger": "every",
+            "value": "1h",
+            "tool": "agent",
+            "arguments": {"profile": "worker", "prompt": "check once", "stay": false},
+        }),
+    );
+    assert!(!is_error, "{one_task}");
+    assert!(
+        one_task["warnings"]
+            .as_array()
+            .is_none_or(|warnings| warnings
+                .iter()
+                .all(|line| !line.as_str().unwrap_or("").contains("left idle"))),
+        "{one_task}"
     );
     server.close();
 
@@ -6669,6 +6765,14 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
             json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
                    "arguments": {"profile": "worker", "prompt": "go", "name": "bad name"}}),
             "`arguments.name`: invalid agent name `bad name`; use ASCII letters, numbers, and `-`"
+                .to_owned(),
+        ),
+        (
+            json!({"name": "bad", "trigger": "every", "value": "1h", "tool": "agent",
+                   "arguments": {"profile": "forge.coder", "prompt": "go", "stay": false}}),
+            "`arguments.profile` `forge.coder` is a seat of team `forge`; with `stay: false` a \
+             fire runs one agent outside any team, so book it with `stay: true` or book the team \
+             with `tool` `team`"
                 .to_owned(),
         ),
     ];

@@ -58,6 +58,30 @@ pub fn arm(paths: &StatePaths, request: IdleStopRequest) -> Result<(), IdleStopE
     Ok(())
 }
 
+/// Record `request` unless the session has a request already; `false` when it kept that one.
+pub(crate) fn arm_unless_pending(
+    paths: &StatePaths,
+    request: IdleStopRequest,
+) -> Result<bool, IdleStopErr> {
+    let _guard = WorkspaceLock::acquire(&paths.workspace_lock)?;
+    let mut requests = read(paths);
+    if requests
+        .iter()
+        .any(|pending| pending.kind == request.kind && pending.agent_id == request.agent_id)
+    {
+        return Ok(false);
+    }
+    requests.push(request);
+    atomic::write_temp_then_rename(
+        &paths.idle_stop_requests,
+        &IdleStopRecord {
+            version: IDLE_STOP_VERSION,
+            requests,
+        },
+    )?;
+    Ok(true)
+}
+
 /// Remove the session's request; `false` when it had none. Session
 /// retirement calls this on every end, so a session without a request costs
 /// one lock-free read.

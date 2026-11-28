@@ -10350,6 +10350,16 @@ fn team_worktree_launch_doorways_cut_from_the_remote_tip() {
         vec!["teams", "launch", "solo", "-w", "demo"],
         vec!["agents", "solo", "-w", "demo"],
         vec!["agents", "solo.lead", "-w", "demo"],
+        vec![
+            "agents",
+            "solo.lead",
+            "complete the work",
+            "--stay",
+            "false",
+            "--detach",
+            "-w",
+            "demo",
+        ],
     ] {
         let env = team_worktree_launch_env();
         let origin = env.home_root.join("origin.git");

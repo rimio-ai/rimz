@@ -19,12 +19,12 @@ fn task_run(env: &Env, call: Option<CallRecord>) -> RunRecord {
 
 /// [`task_run`] in Zellij terminal `pane`, owned by process `pid`, so a stop can end it.
 fn task_run_in(env: &Env, call: Option<CallRecord>, owner: Option<(u64, u32)>) -> RunRecord {
-    seed_run(env, call, owner, |record| record.self_cleanup = true)
+    seed_run(env, call, owner, |record, _| record.self_cleanup = true)
 }
 
 /// The first turn of `@tasker` as a staying peer of `@planner`, its turn record open.
 fn peer_turn_in(env: &Env, call: Option<CallRecord>, owner: Option<(u64, u32)>) -> RunRecord {
-    seed_run(env, call, owner, |record| {
+    seed_run(env, call, owner, |record, _| {
         record.peer = Some(rimz::store::run::PeerRun {
             launch_id: AgentSessionId::from(TASK_LAUNCH),
             opened_by: Vec::new(),
@@ -36,7 +36,7 @@ fn seed_run(
     env: &Env,
     call: Option<CallRecord>,
     owner: Option<(u64, u32)>,
-    shape: impl FnOnce(&mut RunRecord),
+    shape: impl FnOnce(&mut RunRecord, &mut LaunchParams),
 ) -> RunRecord {
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
@@ -52,7 +52,14 @@ fn seed_run(
     record.agent_id = Some(AgentSessionId::from(TASK_SESSION));
     record.launch_id = Some(AgentSessionId::from(TASK_LAUNCH));
     record.reader = Some("planner".to_owned());
-    shape(&mut record);
+    let mut launch = LaunchParams {
+        launched_by: Some(Box::new(rimz::agents::LaunchedBy {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from(LAUNCHER_LAUNCH),
+        })),
+        ..LaunchParams::default()
+    };
+    shape(&mut record, &mut launch);
     let peer = record.peer.is_some();
     rimz::harness::run::create(store.paths(), &record).expect("create the task's run");
     store
@@ -66,13 +73,7 @@ fn seed_run(
                 launch_id: Some(AgentSessionId::from(TASK_LAUNCH)),
                 agent_name: "tasker".to_owned(),
                 agent_name_explicit: true,
-                launch: LaunchParams {
-                    launched_by: Some(Box::new(rimz::agents::LaunchedBy {
-                        kind: AgentKind::new_unchecked("claude"),
-                        agent_id: AgentSessionId::from(LAUNCHER_LAUNCH),
-                    })),
-                    ..LaunchParams::default()
-                },
+                launch,
                 state: AgentLaunchState::Bound,
                 run_id: (!peer).then(|| record.run_id.clone()),
                 pane_id: owner.map(|(pane, _)| {
@@ -329,7 +330,7 @@ fn a_one_task_run_settles_at_its_turn_end_and_reports_its_last_message() {
 #[test]
 fn a_join_on_an_agent_past_its_kept_run_waits_for_its_live_turn() {
     let env = room();
-    let record = seed_run(&env, None, None, |record| record.keep = true);
+    let record = seed_run(&env, None, None, |record, _| record.keep = true);
     turn(&env, &record, "the kept run's answer");
     let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
     assert_eq!(settled.status, RunStatus::Completed, "{settled:?}");
@@ -615,7 +616,8 @@ fn a_resting_agents_timeout_is_its_newest_run() {
 }
 
 /// A `stay: false` run that completes after its deadline's claim has reported its own end: the
-/// stop writes no timed-out record and sends no second report.
+/// stop writes no timed-out record, sends no second report, and leaves the pane, which `--keep`
+/// holds open past the run's end, alone.
 #[test]
 fn a_one_task_run_that_completes_at_its_deadline_reports_once() {
     let env = room();
@@ -629,17 +631,85 @@ fn a_one_task_run_that_completes_at_its_deadline_reports_once() {
     turn_as(&env, &record, process.id(), "done just in time");
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
-    assert!(
-        process.try_wait().unwrap().is_some(),
-        "the stop ends the agent's own stand-in: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
     let runs = rimz::harness::run::list(env.store().paths()).unwrap();
     assert!(
         runs.iter().all(|run| run.status == RunStatus::Completed),
         "{runs:?}"
     );
     assert_eq!(digest(&env).len(), 1, "one report");
+    assert!(
+        process.try_wait().unwrap().is_none(),
+        "nothing stops a completed run's agent"
+    );
+    assert!(
+        live(&env, "tasker"),
+        "a completed run's kept pane outlives its deadline: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = process.kill();
+    let _ = process.wait();
+}
+
+/// A seat of team `forge` run alone by `--stay false` has no team run: its deadline settles its
+/// own run timed out and stops it, as a solo run's does.
+#[test]
+fn a_team_seat_run_alone_times_out_as_a_solo_run_does() {
+    let env = room();
+    let mut process = provider();
+    let created = Timestamp::now() - Duration::from_secs(31 * 60);
+    let record = seed_run(
+        &env,
+        Some(call(None, Some((created, Duration::from_secs(30 * 60))))),
+        Some((7, process.id())),
+        |record, launch| {
+            record.self_cleanup = true;
+            launch.team = Some("forge".to_owned());
+        },
+    );
+    hook(&env, &record, "UserPromptSubmit", json!({}));
+    let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
+    assert!(output.status.success(), "{output:?}");
+    let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::TimedOut, "{settled:?}");
+    assert!(
+        !live(&env, "tasker"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = process.kill();
+    let _ = process.wait();
+}
+
+/// A staying peer launched with `--detach` that rests at its deadline gets its timed-out record,
+/// which reports to no one, as its launch asked.
+#[test]
+fn a_detached_peers_timeout_at_rest_reports_to_no_one() {
+    let env = room();
+    let mut process = provider();
+    let created = Timestamp::now() - Duration::from_secs(31 * 60);
+    let mut staying = call(None, Some((created, Duration::from_secs(30 * 60))));
+    staying.stay = true;
+    let first = seed_run(&env, Some(staying), Some((7, process.id())), |record, _| {
+        record.peer = Some(rimz::store::run::PeerRun {
+            launch_id: AgentSessionId::from(TASK_LAUNCH),
+            opened_by: Vec::new(),
+        });
+        record.report_to = rimz::store::run::ReportTo::Nobody;
+    });
+    turn(&env, &first, "the first turn's answer");
+    let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
+    assert!(output.status.success(), "{output:?}");
+    let runs = rimz::harness::run::list(env.store().paths()).unwrap();
+    let timed_out = runs
+        .iter()
+        .find(|run| run.status == RunStatus::TimedOut)
+        .unwrap_or_else(|| panic!("a timed-out record: {runs:?}"));
+    assert_eq!(
+        timed_out.report_to,
+        rimz::store::run::ReportTo::Nobody,
+        "{timed_out:?}"
+    );
+    assert!(digest(&env).is_empty(), "no report");
     let _ = process.kill();
     let _ = process.wait();
 }
