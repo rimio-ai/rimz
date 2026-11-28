@@ -77,14 +77,14 @@ pub fn call_timeout(request: CallTimeoutRequest, globals: &super::GlobalFlags) -
         Some(_) => return Ok(()),
         None => return stop(&ctx, globals, &snapshot, &seats),
     }
-    stop(&ctx, globals, &snapshot, &seats)?;
+    let stop_result = stop(&ctx, globals, &snapshot, &seats);
     if let Some((_, launcher)) = leader.launcher() {
         rimz::harness::orphan_sweep::spawn_digest_helper(
             ctx.store.runtime_paths(),
             launcher.clone(),
         );
     }
-    Ok(())
+    stop_result
 }
 
 fn stop(
@@ -96,10 +96,12 @@ fn stop(
     if seats.is_empty() {
         return Ok(());
     }
-    for stop in super::stop_resolved(ctx, globals, snapshot, seats)? {
-        if let Some(error) = stop.error() {
-            tracing::warn!(%error, "call timeout: could not stop a seat");
-        }
+    let errors: Vec<String> = super::stop_resolved(ctx, globals, snapshot, seats)?
+        .into_iter()
+        .filter_map(|stop| stop.error())
+        .collect();
+    if errors.is_empty() {
+        return Ok(());
     }
-    Ok(())
+    anyhow::bail!("call timeout: could not stop a seat: {}", errors.join("; "))
 }
