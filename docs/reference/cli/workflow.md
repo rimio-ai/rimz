@@ -1062,7 +1062,7 @@ The command waits up to 30 seconds for the replacement to launch, park, or end t
 
 `rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell command, judge, command step's process group, or every cell of an agent step's layout and its subagents, whether or not the run's definition is missing, unreadable, or refused by validation. It prints `canceled <address>`, and, at a runs step, `its started runs were left running: <runs>` for the started runs that had not ended, each named as [run addresses](#run-addresses) say: a cancel never stops them. An already-finished run id prints `<address> is already <state>; unchanged` and exits 0. Both receipts end with a `workflow show` hint. The checkout's commits and edits, and the run directory, stay. A cancellation journal row may carry `reason`.
 
-An unfinished run holds its worktree against removal and automatic cleanup, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints the run id's `rimz workflow cancel` command.
+An unfinished run holds its worktree against removal and automatic cleanup, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints a `rimz workflow cancel` command that names the run as [run addresses](#run-addresses) say.
 
 ### `resume`
 

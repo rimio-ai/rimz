@@ -325,7 +325,7 @@ then = "review"
 
 Each entry names a workflow by name, from `~/.rimz/workflows/` or an installed pack. RimZ cuts one new worktree per entry from the commit the run's checkout is at, and starts each workflow there with the step's prompt file, the entry's, the step's sign, and the run's `--prompt`. So commit first: a checkout with uncommitted changes, untracked files included, fails the step with `died` before anything starts, as does a name no workflow answers to or a workflow that sets `scope = "project"`. The run waits while the started runs work, and `rimz workflow show` lists each with its state and worktree. Once every one has ended, the step follows `then` when all ended done, and fails with `died` naming each one that did not otherwise. The next step's agent is told where each started run ended and how to read it.
 
-A timeout or a cancel ends the waiting and leaves the started runs running; cancel each by its id when you want it stopped.
+A timeout or a cancel ends the waiting and leaves the started runs running; cancel each, by the name `rimz workflow show` lists it under, when you want it stopped.
 
 ## Wait on the outside world
 
