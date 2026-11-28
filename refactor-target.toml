@@ -6599,11 +6599,13 @@ surface-budget = 19
 [[module]]
 path = "crates/rimz/src/harness/duration.rs"
 # Neutral leaf holding the duration grammar of workflow definitions and their start limits.
+# `When`, `parse_when`, and `When::resolve`: the workflow time a deadline or a `give_up` takes,
+# here so `harness::block` checks it without reaching `harness::workflow` (+3).
 allowed-dependencies = [
     "(crate)",
     "utils::time",
 ]
-surface-budget = 1
+surface-budget = 4
 
 [[module]]
 path = "crates/rimz/src/harness/loop_task.rs"
