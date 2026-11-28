@@ -290,8 +290,7 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
 /// a zero `--at` delay are.
 fn task_timeout(raw: Option<&str>) -> Result<String> {
     let Some(raw) = raw else {
-        let configured = MachineConfig::load_lenient().r#loop.default_timeout.clone();
-        return Ok(configured.unwrap_or_else(|| SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned()));
+        return Ok(shell_task::default_timeout(&MachineConfig::load_lenient()));
     };
     let duration = parse_compact_duration(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
     if duration.is_zero() {

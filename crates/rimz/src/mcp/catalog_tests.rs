@@ -52,7 +52,7 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
     );
     assert_eq!(
         schema["properties"]["tool"]["enum"],
-        json!(["agent", "team", "workflow"])
+        json!(["agent", "team", "workflow", "shell"])
     );
     assert_eq!(schema["properties"]["arguments"]["type"], json!("object"));
     assert!(schema["properties"].get("worktree").is_some(), "{schema}");
@@ -62,8 +62,30 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
     let team_args = json!({"team": "forge", "prompt": "go"});
     let workflow_args = json!({"name": "held"});
 
-    // Valid flat calls across triggers and all three targets.
+    // Valid flat calls across triggers and all four targets.
     for valid in [
+        json!({
+            "name": "n",
+            "trigger": "cron",
+            "value": "*/30 * * * *",
+            "tool": "shell",
+            "arguments": {"command": "cargo test 2>&1 | tail", "cwd": "sub", "timeout": "20m", "label": "run the tests"},
+        }),
+        json!({
+            "name": "n",
+            "trigger": "at",
+            "value": "30m",
+            "tool": "shell",
+            "arguments": {"command": "make"},
+        }),
+        json!({
+            "name": "n",
+            "trigger": "at",
+            "value": "30m",
+            "worktree": "w",
+            "tool": "shell",
+            "arguments": {"command": "make"},
+        }),
         json!({
             "name": "n",
             "trigger": "at",
@@ -220,6 +242,36 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
     // Target, worktree, and fire-only refusals.
     let mut target_failures = Vec::new();
     for (label, arguments, expected) in [
+        (
+            "shell blank command",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": " "}}),
+            "`arguments`: `command` is blank",
+        ),
+        (
+            "shell input",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make", "input": {"a": 1}}}),
+            "`arguments.input`: a fire runs its command with no input",
+        ),
+        (
+            "shell check_in",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make", "check_in": "10m"}}),
+            "`arguments.check_in`: a fire's command sends no still-running notice; set `timeout` to bound it",
+        ),
+        (
+            "shell on",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make", "on": "fail"}}),
+            "`arguments.on`: a fire sends no message, so no outcome wakes anyone",
+        ),
+        (
+            "shell zero timeout",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make", "timeout": "0s"}}),
+            "`arguments.timeout`: must be greater than zero",
+        ),
+        (
+            "shell NUL command",
+            json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "shell", "arguments": {"command": "make\u{0}"}}),
+            "`arguments.command` holds a NUL character",
+        ),
         (
             "arguments.worktree on agent",
             json!({"name": "n", "trigger": "cron", "value": "0 * * * *", "tool": "agent", "arguments": {"profile": "worker", "prompt": "go", "worktree": "feat"}}),

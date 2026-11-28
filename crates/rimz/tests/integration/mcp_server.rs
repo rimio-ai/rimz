@@ -6100,6 +6100,146 @@ fn a_schedule_carrying_cwd_name_agent_and_description_stores_a_row_the_command_a
     in_wt.close();
 }
 
+/// A shell booking stores its command as `sh -c` in the checkout its `cwd` names, under its own
+/// `timeout` or else `loop.default-timeout`. A fire runs it there, and a fire past its time limit
+/// is killed and fails as timed out, which the loop log records.
+#[cfg(unix)]
+#[test]
+fn a_shell_booking_runs_its_command_in_its_checkout_under_its_time_limit() {
+    use crate::loop_schedule::{run_mark, wait_for_loop_report_after};
+    use rimz::harness::schedule::run_log::LoopRunResult;
+
+    let env = schedule_room();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "rimz@example.test"],
+        &["config", "user.name", "RimZ Test"],
+        &["commit", "-q", "--allow-empty", "-m", "init"],
+    ] {
+        crate::common::git::git(&env.project_root, args);
+    }
+    crate::common::room::seed_sidebar_heartbeat(
+        &env.runtime_paths(),
+        rimz::ids::MuxName::Zellij,
+        &env.resolve_workspace(&env.project_root).session_name,
+        "shell",
+    );
+    let set = env
+        .rimz()
+        .args(["config", "set", "loop.default-timeout", "45m"])
+        .output()
+        .unwrap();
+    assert!(set.status.success(), "{set:?}");
+    let checkout = env.project_root.join("sub");
+    std::fs::create_dir(&checkout).unwrap();
+    let seen = env.home_root.join("seen");
+    let command = format!("pwd > '{}' < /dev/null", seen.display());
+    let placed_seen = env.home_root.join("placed-seen");
+    let placed = format!("pwd > '{}' < /dev/null", placed_seen.display());
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    for (id, name, arguments, worktree) in [
+        (
+            1,
+            "where",
+            json!({"command": command, "cwd": "sub", "label": "check the checkout"}),
+            None,
+        ),
+        (
+            2,
+            "slow",
+            json!({"command": "sleep 30", "timeout": "1s"}),
+            None,
+        ),
+        (3, "placed", json!({"command": placed}), Some("deps")),
+    ] {
+        let mut call = json!({"name": name, "trigger": "cron", "value": "0 0 1 1 *",
+                              "tool": "shell", "arguments": arguments});
+        if let Some(worktree) = worktree {
+            call["worktree"] = json!(worktree);
+        }
+        let (booked, is_error) = server.answer(id, "schedule", call);
+        assert!(!is_error, "{name}: {booked}");
+    }
+    server.close();
+    let rows = loop_rows(&env);
+    let row = |name: &str| rows[name].as_table().unwrap().clone();
+    let words = |row: &toml::Table| -> Vec<String> {
+        row["args"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|word| word.as_str().unwrap().to_owned())
+            .collect()
+    };
+    let here = row("where");
+    assert_eq!(here["kind"].as_str(), Some("shell"), "{here:?}");
+    assert_eq!(words(&here), ["sh", "-c", command.as_str()], "{here:?}");
+    assert_eq!(here["timeout"].as_str(), Some("45m"), "{here:?}");
+    assert_eq!(
+        here["label"].as_str(),
+        Some("check the checkout"),
+        "{here:?}"
+    );
+    assert_eq!(
+        here["dir"].as_str().map(std::path::Path::new),
+        Some(checkout.as_path()),
+        "{here:?}"
+    );
+    let slow = row("slow");
+    assert_eq!(words(&slow), ["sh", "-c", "sleep 30"], "{slow:?}");
+    assert_eq!(slow["timeout"].as_str(), Some("1s"), "{slow:?}");
+
+    let fire = |name: &str| {
+        let before = run_mark(&env, name);
+        let output = env.rimz().args(["loop", "run", name]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        wait_for_loop_report_after(&env, name, before)
+    };
+    assert_eq!(fire("where").result, LoopRunResult::Completed);
+    assert_eq!(
+        std::fs::read_to_string(&seen).unwrap().trim_end(),
+        checkout.to_str().unwrap()
+    );
+    let placed_row = row("placed");
+    assert_eq!(
+        placed_row["worktree"].as_str(),
+        Some("deps"),
+        "{placed_row:?}"
+    );
+    assert_eq!(
+        words(&placed_row),
+        ["sh", "-c", placed.as_str()],
+        "{placed_row:?}"
+    );
+    assert_eq!(fire("placed").result, LoopRunResult::Completed);
+    let owned = rimz::worktree::discover_owned(&env.project_root).unwrap();
+    let tree = owned
+        .iter()
+        .find(|tree| tree.marker.name == "deps")
+        .unwrap_or_else(|| panic!("the fire makes its worktree: {owned:?}"));
+    assert_eq!(
+        std::fs::canonicalize(std::fs::read_to_string(&placed_seen).unwrap().trim_end()).unwrap(),
+        std::fs::canonicalize(&tree.marker.worktree_path).unwrap(),
+        "the command runs in the booking's worktree"
+    );
+    let timed_out = fire("slow");
+    assert!(
+        timed_out
+            .check
+            .as_ref()
+            .is_some_and(|check| check.timed_out),
+        "{timed_out:?}"
+    );
+    let logs = env.rimz().args(["loop", "logs", "slow"]).output().unwrap();
+    let logs = String::from_utf8_lossy(&logs.stdout);
+    assert!(logs.starts_with("✗ failed (timeout) · "), "{logs}");
+    assert!(
+        logs.contains("│ command ran past its timeout 1s\n"),
+        "{logs}"
+    );
+}
+
 /// A repeating `when` booking with `for` stores a row whose trigger and launch, read back as
 /// `rimz loop add` flags, pass the command's own checks.
 #[test]

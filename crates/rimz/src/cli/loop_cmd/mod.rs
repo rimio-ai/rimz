@@ -32,7 +32,7 @@ use rimz::harness::schedule::run_log::{
     self, CheckRecord, LoopRunMode, LoopRunPresentation, LoopRunRecord, LoopRunResult, ProcessExit,
     RunStage, RunTransition,
 };
-use rimz::harness::schedule::shell_task::SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL;
+use rimz::harness::schedule::shell_task;
 use rimz::harness::schedule::wait::{WhenPlace, WindowAccount, read_when};
 use rimz::harness::schedule::{
     self, TaskAction, TaskActionKind,

@@ -260,7 +260,10 @@ interface Workflow {
   timeout?: string;
 }
 
-/** Books a launch for later; the call gives the booking's id at once, and nothing follows. */
+/**
+ * Books a launch or a command for later; the call gives the booking's id at once, and nothing
+ * follows.
+ */
 declare function schedule(block: Schedule): Promise<ScheduleResult>;
 
 interface Schedule {
@@ -277,8 +280,8 @@ interface Schedule {
    * a condition.
    */
   value: string;
-  /** What each fire launches. */
-  tool: "agent" | "team" | "workflow";
+  /** What each fire launches, or `shell` for a command it runs. */
+  tool: "agent" | "team" | "workflow" | "shell";
   /**
    * The object `tool` takes as a call of its own, without `worktree` (pass top-level
    * `worktree`).

@@ -7771,12 +7771,12 @@ fn wait_for_loop_report(env: &Env, task: &str) -> LoopRunRecord {
 
 /// How much of a task's history a test has seen: its log rows and its last quiet fire's run.
 #[derive(Clone, Debug, Default)]
-struct RunMark {
+pub(crate) struct RunMark {
     rows: usize,
     quiet: Option<String>,
 }
 
-fn run_mark(env: &Env, task: &str) -> RunMark {
+pub(crate) fn run_mark(env: &Env, task: &str) -> RunMark {
     RunMark {
         rows: read_loop_run_records(env).len(),
         quiet: quiet_fires(env, task).and_then(|(_, last)| last.run_id),
@@ -7818,7 +7818,7 @@ fn holds_a_checkout(env: &Env, task: &str) -> bool {
 
 /// Wait for a terminal run report of `task` past `mark`: a history row, or a quiet fire, whose
 /// summary row stands in for the report it no longer logs.
-fn wait_for_loop_report_after(env: &Env, task: &str, mark: RunMark) -> LoopRunRecord {
+pub(crate) fn wait_for_loop_report_after(env: &Env, task: &str, mark: RunMark) -> LoopRunRecord {
     let report = |record: &LoopRunRecord| {
         record.task == task && record.run_id.is_some() && record.result != LoopRunResult::Launched
     };

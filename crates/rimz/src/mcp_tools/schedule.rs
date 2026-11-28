@@ -1,9 +1,10 @@
-//! `schedule`: the job of `rimz loop add` for an agent, a team, or a workflow, booked in the
-//! caller's room through the write the command makes. The command's check of a fire's launch
-//! parses with the binary's root parser, out of reach here, so this refuses each argument the
-//! stored launch would misparse, and resolves each target the way that check resolves it.
+//! `schedule`: the job of `rimz loop add` for an agent, a team, a workflow, or a command,
+//! booked in the caller's room through the write the command makes. The command's check of a
+//! fire's launch parses with the binary's root parser, out of reach here, so this refuses each
+//! argument the stored launch would misparse, and resolves each target the way that check
+//! resolves it.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
@@ -18,9 +19,10 @@ use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
 use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
+use crate::harness::schedule::arm::task_label;
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
-use crate::harness::schedule::{self, TaskShape};
+use crate::harness::schedule::{self, TaskShape, shell_task};
 use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
@@ -39,6 +41,11 @@ struct Launch {
     worktree: Option<String>,
     /// Whether the booking sets a place (`worktree`, `from_pr`, or `cwd`).
     has_place: bool,
+    /// The checkout a command runs in.
+    dir: Option<PathBuf>,
+    /// A command's time limit and label.
+    timeout: Option<String>,
+    label: Option<String>,
     /// The agent kinds the target routes to; empty for a team or a workflow.
     kinds: Vec<String>,
     warnings: Vec<String>,
@@ -64,9 +71,12 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
     let launch = launch(tools, &room, &machine, booking)?;
     let mut entry = TaskEntry {
         kind: Some(launch.kind),
-        target: Some(launch.target.clone()),
+        target: (launch.kind != LaunchKind::Shell).then(|| launch.target.clone()),
         args: launch.args.clone(),
         worktree: launch.worktree.clone(),
+        dir: launch.dir.clone(),
+        timeout: launch.timeout.clone(),
+        label: launch.label.clone(),
         max_strikes: args.max_strikes,
         overlap: args.overlap.map(|overlap| match overlap {
             ScheduleOverlap::Skip => OverlapPolicy::Skip,
@@ -245,13 +255,8 @@ fn launch(
                 .cwd
                 .as_deref()
                 .map(|cwd| {
-                    let resolved = tools.dir(Some(cwd))?;
-                    let host = crate::launcher::checkout::resolve_launch_cwd(
-                        Some(&resolved),
-                        room.store.paths(),
-                    )?
-                    .unwrap_or(resolved);
-                    host.to_str()
+                    host_dir(tools, room, Some(cwd))?
+                        .to_str()
                         .map(str::to_owned)
                         .ok_or_else(|| Failure::new("`arguments.cwd` is not valid UTF-8"))
                 })
@@ -293,6 +298,9 @@ fn launch(
                 args: tail,
                 worktree: args.worktree.clone(),
                 has_place: args.worktree.is_some() || from_pr.is_some() || cwd.is_some(),
+                dir: None,
+                timeout: None,
+                label: None,
                 kinds,
                 warnings: Vec::new(),
             })
@@ -330,12 +338,46 @@ fn launch(
                 args: tail,
                 worktree: args.worktree.clone(),
                 has_place: true,
+                dir: None,
+                timeout: None,
+                label: None,
                 kinds: Vec::new(),
                 warnings: Vec::new(),
             })
         }
         ScheduleTarget::Workflow(run) => workflow_launch(root, args.worktree.as_deref(), run),
+        ScheduleTarget::Shell(shell) => Ok(Launch {
+            kind: LaunchKind::Shell,
+            target: String::new(),
+            args: vec!["sh".to_owned(), "-c".to_owned(), shell.command.clone()],
+            worktree: args.worktree.clone(),
+            has_place: true,
+            dir: Some(host_dir(tools, room, shell.cwd.as_deref())?),
+            timeout: Some(shell.timeout.as_deref().map_or_else(
+                || shell_task::default_timeout(machine),
+                |timeout| timeout.trim().to_owned(),
+            )),
+            label: shell
+                .label
+                .as_deref()
+                .map(|raw| {
+                    task_label(raw).map_err(|err| Failure::new(format!("`arguments.label`: {err}")))
+                })
+                .transpose()?,
+            kinds: Vec::new(),
+            warnings: Vec::new(),
+        }),
     }
+}
+
+/// The host directory `cwd` names from the caller's, where a fire, which runs outside the
+/// caller's sandbox, finds it.
+fn host_dir(tools: &Tools, room: &Room, cwd: Option<&Path>) -> Result<PathBuf, Failure> {
+    let resolved = tools.dir(cwd)?;
+    Ok(
+        crate::launcher::checkout::resolve_launch_cwd(Some(&resolved), room.store.paths())?
+            .unwrap_or(resolved),
+    )
 }
 
 fn parse_pr_flag(raw: Option<&str>) -> Result<Option<String>, Failure> {
@@ -392,6 +434,9 @@ fn workflow_launch(
         args: tail,
         worktree,
         has_place,
+        dir: None,
+        timeout: None,
+        label: None,
         kinds: Vec::new(),
         warnings,
     })
@@ -448,7 +493,7 @@ fn idle_warning(booking: &Booking) -> Option<String> {
     let choices = match booking.target {
         ScheduleTarget::Team(_) => "`replace`",
         ScheduleTarget::Agent(_) => "`replace` or `allow`",
-        ScheduleTarget::Workflow(_) => return None,
+        ScheduleTarget::Workflow(_) | ScheduleTarget::Shell(_) => return None,
     };
     Some(format!(
         "note: an agent left idle holds later fires; say in `arguments.prompt` when it ends its \

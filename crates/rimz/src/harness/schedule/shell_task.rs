@@ -5,9 +5,19 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 
-use crate::config::TaskEntry;
+use crate::config::{MachineConfig, TaskEntry};
 
 pub const SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL: &str = "2h";
+
+/// The time limit a command task stores when it is given none: `loop.default-timeout`, else
+/// [`SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL`].
+pub fn default_timeout(machine: &MachineConfig) -> String {
+    machine
+        .r#loop
+        .default_timeout
+        .clone()
+        .unwrap_or_else(|| SCHEDULED_RUN_DEFAULT_TIMEOUT_LABEL.to_owned())
+}
 
 /// The node a command fire's run starts at and ends on.
 pub const COMMAND_NODE: &str = "command";

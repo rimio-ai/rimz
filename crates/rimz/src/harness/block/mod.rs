@@ -427,6 +427,7 @@ pub enum ScheduleTool {
     Agent,
     Team,
     Workflow,
+    Shell,
 }
 
 /// What a repeating booking does about a trigger during a live fire.
@@ -440,7 +441,8 @@ pub enum ScheduleOverlap {
     Allow,
 }
 
-/// Books a launch for later; the call gives the booking's id at once, and nothing follows.
+/// Books a launch or a command for later; the call gives the booking's id at once, and nothing
+/// follows.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Schedule {
@@ -453,7 +455,7 @@ pub struct Schedule {
     /// `<weekday> HH:MM`, `YYYY-MM-DD HH:MM`); for `cron`, a five-field expression; for `when`,
     /// a condition.
     pub value: String,
-    /// What each fire launches.
+    /// What each fire launches, or `shell` for a command it runs.
     pub tool: ScheduleTool,
     /// The object `tool` takes as a call of its own, without `worktree` (pass top-level
     /// `worktree`).
@@ -732,10 +734,13 @@ impl Schedule {
     }
 
     /// `arguments`, with top-level `worktree` merged in, as the launch each fire stores. A fire
-    /// starts it afresh, outside any script, so it parses as a tool's call.
+    /// starts it afresh, outside any script, so it parses as a tool's call. A `shell` call takes
+    /// no `worktree`: its fires run the command in the tree the row's own `worktree` names.
     pub(crate) fn booked<B: Booked>(&self) -> Result<B, String> {
         let mut carried = self.arguments.clone();
-        if let Some(worktree) = &self.worktree {
+        if let Some(worktree) = &self.worktree
+            && self.tool != ScheduleTool::Shell
+        {
             carried.insert("worktree".to_owned(), Value::String(worktree.clone()));
         }
         let booked = B::parse_call(Value::Object(carried)).map_err(carried_reason)?;
@@ -753,6 +758,7 @@ impl Schedule {
             // parses, until that tool takes this block.
             ScheduleTool::Workflow if caller == Caller::Tool => None,
             ScheduleTool::Workflow => self.booked::<Workflow>().err(),
+            ScheduleTool::Shell => self.booked::<Shell>().err(),
         }
     }
 }
@@ -764,6 +770,43 @@ pub(crate) trait Booked: Sized {
     fn parse_call(object: Value) -> Result<Self, String>;
     /// Why a call that runs on its own cannot ride a fire's stored launch.
     fn booking_refusal(&self, repeats: bool) -> Option<String>;
+}
+
+impl Booked for Shell {
+    fn parse_call(object: Value) -> Result<Self, String> {
+        parse(object, Caller::Tool)
+    }
+
+    fn booking_refusal(&self, _repeats: bool) -> Option<String> {
+        let unfit = [
+            (
+                self.input.is_some(),
+                "input",
+                "a fire runs its command with no input",
+            ),
+            (
+                self.check_in.is_some(),
+                "check_in",
+                "a fire's command sends no still-running notice; set `timeout` to bound it",
+            ),
+            (
+                self.on.is_some(),
+                "on",
+                "a fire sends no message, so no outcome wakes anyone",
+            ),
+        ];
+        if let Some((_, field, reason)) = unfit.iter().find(|(given, ..)| *given) {
+            return Some(format!("`arguments.{field}`: {reason}"));
+        }
+        nul_refusal("arguments.command", Some(&self.command))
+            .or_else(|| nul_refusal("arguments.label", self.label.as_deref()))
+            .or_else(|| {
+                let timeout = crate::harness::duration::duration(self.timeout.as_deref()?).ok()?;
+                timeout
+                    .is_zero()
+                    .then(|| "`arguments.timeout`: must be greater than zero".to_owned())
+            })
+    }
 }
 
 impl Booked for Agent {
