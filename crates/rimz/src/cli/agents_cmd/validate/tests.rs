@@ -1122,6 +1122,7 @@ fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
     let (_, profile) = own_rows(&loaded)
         .find(|(row, _)| row.name == "granted")
         .unwrap();
+    let ungranted = profile.clone();
     let mut profile = profile.clone();
     profile.tools = profile
         .tools
@@ -1131,6 +1132,31 @@ fn a_grant_decides_which_rimz_capabilities_a_profile_reaches() {
     assert_eq!(reasons("rimz-watch"), (Vec::new(), Vec::new()));
     let left_out = vec!["its capabilities leave out rimz-message".to_owned()];
     assert_eq!(reasons("rimz-message"), (left_out.clone(), left_out));
+    // No list reaches the board's tools, which RimZ serves to a staged team's role seats alone;
+    // its skill takes the path any other name's does: a grant leaves it out, and without one the
+    // skills list admits it.
+    let seats_only =
+        vec!["RimZ serves rimz-blackboard to a staged team's role seats alone".to_owned()];
+    assert_eq!(
+        reasons("rimz-blackboard"),
+        (
+            seats_only.clone(),
+            vec!["its capabilities leave out rimz-blackboard".to_owned()]
+        )
+    );
+    let mut ungranted = ungranted;
+    assert_eq!(
+        shut_out(&machine, "claude", &ungranted, false, "rimz-blackboard"),
+        (
+            seats_only.clone(),
+            vec!["its skills leave out rimz-blackboard".to_owned()]
+        )
+    );
+    ungranted.skills = None;
+    assert_eq!(
+        shut_out(&machine, "claude", &ungranted, false, "rimz-blackboard"),
+        (seats_only, Vec::new())
+    );
     // A `rimz-*` skill alone is the skills list's to admit, whatever the grant names.
     let no_tools = vec!["rimz-reflect has no MCP tools".to_owned()];
     assert_eq!(

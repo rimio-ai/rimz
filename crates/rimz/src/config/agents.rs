@@ -719,8 +719,10 @@ pub struct Profile {
     #[serde(skip)]
     pub seat_consensus_skill: bool,
     /// The RimZ MCP capabilities and the user's own MCP servers a launch keeps;
-    /// unset serves every capability and leaves the user's servers alone. A subagent child and
-    /// a workflow judge are never served `rimz-subagents`, `rimz-agents`, or `rimz-teams`, and
+    /// unset serves every capability a list may name (`Capability::LISTED`) and leaves the user's
+    /// servers alone. A role seat of a staged team is also served `rimz-blackboard`
+    /// (`LaunchReminders::board_seat`). A subagent child and a workflow judge are never served
+    /// `rimz-subagents`, `rimz-agents`, `rimz-teams`, or `rimz-loop`, and
     /// a launch whose profile sets `subagents = []` is never served `rimz-subagents`, nor a
     /// team seat other than its leader `rimz-ask`, whatever this holds. A blanket entry (`*`,
     /// `rimz`, or unset) serves neither `rimz-ask` nor `rimz-subagents` where the tools list

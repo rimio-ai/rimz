@@ -11,9 +11,9 @@ use crate::mcp::catalog::{Capability, LoadMode};
 /// One RimZ capability a `capabilities:` list grants: `rimz-<name>`, a lowercase name of
 /// letters, digits, and hyphens that starts with a letter, with an optional load mark
 /// (`rimz-lsp:deferred`), or `rimz`, which carries the mark of a grant that names every
-/// capability. A loaded definition grants only a capability of RimZ's MCP server
-/// (`Capability::ALL`); the text form takes any `rimz-` name so an exec request written by an
-/// older build still decodes, and a name outside `Capability::ALL` there grants nothing.
+/// capability. A loaded definition grants only a capability a profile list may name
+/// (`Capability::LISTED`); the text form takes any `rimz-` name so an exec request written by
+/// an older build still decodes, and a name outside `Capability::LISTED` there grants nothing.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct RimzEntry {
@@ -49,10 +49,10 @@ impl RimzEntry {
         self.mode
     }
 
-    /// The capability of RimZ's MCP server the entry names; none for a name an older build
-    /// granted that is a skill alone.
+    /// The capability a profile list may name (`Capability::LISTED`) the entry names; none for a
+    /// name an older build granted that is a skill alone or `rimz-blackboard`.
     pub(crate) fn capability(&self) -> Option<Capability> {
-        Capability::from_name(&self.name)
+        Capability::from_listed_name(&self.name)
     }
 }
 

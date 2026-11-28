@@ -121,6 +121,7 @@ pub use loop_::{
     TaskEntry, TaskTarget, Tasks, ThrottleSwitch, WatchSpec, has_absolute_task_root,
 };
 pub use lsp::{LspConfig, LspPolicy, LspServerConfig, LspServerKind};
+pub(crate) use mcps::BOARD_REFUSAL;
 pub use mcps::{McpListErr, McpName, mcp_capabilities, mcps_limit, served_marks, server_mark};
 pub use mux::{MultiplexerConfig, MuxStatusBar, RoomStyle};
 pub(crate) use mux::{MuxConfig, RoomConfig};

@@ -1,7 +1,7 @@
 //! The one table of RimZ MCP tools: each tool's capability, argument schema,
 //! answer schema, and the `rimz` command it stands for; `super::wording` holds
 //! what each tool and the server's instructions say. `rimz mcp serve`, `rimz mcp tools`,
-//! their `--only` values, the profile `mcps` capability names, the reference
+//! their `--only` values, the profile capability names (`Capability::LISTED`), the reference
 //! page's tool table, and the routine-command check all read this table.
 
 use std::collections::BTreeMap;
@@ -22,7 +22,7 @@ use crate::harness::block::{
 /// `mcp__rimz__<tool>`.
 pub const SERVER_NAME: &str = "rimz";
 
-/// One group of tools a profile's `mcps` list and `--only` name.
+/// One group of tools `--only` names; a profile's lists name those of [`Self::LISTED`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Capability {
     Lsp,
@@ -55,6 +55,25 @@ impl Capability {
         Self::Control,
         Self::Notes,
         Self::Blackboard,
+    ];
+
+    /// The groups a profile's `capabilities` or `mcps` entry may name, and what `rimz`, `*`,
+    /// and an absent `mcps` stand for there: every group but `rimz-blackboard`, which a launch
+    /// is served on a staged team's role seat alone (`LaunchReminders::board_seat`), whatever its
+    /// lists say.
+    pub const LISTED: [Capability; 12] = [
+        Self::Lsp,
+        Self::Shell,
+        Self::Watch,
+        Self::Subagents,
+        Self::Agents,
+        Self::Teams,
+        Self::Workflow,
+        Self::Loop,
+        Self::Message,
+        Self::Ask,
+        Self::Control,
+        Self::Notes,
     ];
 
     /// Whether the group's tools start things, which `tasks`, `join`, and `stop` list, await,
@@ -99,6 +118,13 @@ impl Capability {
 
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
+            .into_iter()
+            .find(|capability| capability.name() == name)
+    }
+
+    /// The group of [`Self::LISTED`] named `name`.
+    pub fn from_listed_name(name: &str) -> Option<Self> {
+        Self::LISTED
             .into_iter()
             .find(|capability| capability.name() == name)
     }

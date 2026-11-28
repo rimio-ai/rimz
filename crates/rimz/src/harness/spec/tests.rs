@@ -4381,7 +4381,8 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
          [profiles.own]\ndescription = 'Own'\nagent = 'claude'\nskills = ['rimz']\n\
          [profiles.served]\ndescription = 'Served'\nagent = 'claude'\nmcps = ['rimz']\n\
          [profiles.listed]\ndescription = 'Listed'\nagent = 'claude'\nskills = ['work', 'rimz-watch']\n\
-         [profiles.reflects]\ndescription = 'Reflects'\nagent = 'claude'\nskills = ['work', 'rimz-reflect']\n",
+         [profiles.reflects]\ndescription = 'Reflects'\nagent = 'claude'\nskills = ['work', 'rimz-reflect']\n\
+         [profiles.board]\ndescription = 'Board'\nagent = 'claude'\nskills = ['work', 'rimz-blackboard']\n",
     )
     .unwrap();
     crate::trust::grant_with_roots(project.path(), home.path()).unwrap();
@@ -4429,6 +4430,56 @@ fn a_grant_follows_tools_through_a_chain_and_an_agent_switch_and_refuses_rimz_us
     assert!(
         listed_err.contains("[profiles.listed]") && listed_err.contains("rimz-watch"),
         "{listed_err}"
+    );
+    // The board is served to a staged team's role seats alone, so its name is dropped, never
+    // moved into the kind base's grant.
+    let board_err = launch
+        .definition_failure_for("board")
+        .expect("board refuses at build time");
+    assert!(
+        board_err.contains(
+            "[profiles.board]: sets `capabilities:`, and its `skills:` lists `rimz-blackboard`, \
+             but RimZ serves the board tools to every role seat of a staged team and to no \
+             other launch, so drop the entry"
+        ) && !board_err.contains("list them there instead"),
+        "{board_err}"
+    );
+}
+
+/// A resolved profile whose tools carry a grant is refused a capability in its `skills` with the
+/// advice to list it in the grant, and `rimz-blackboard`, which no grant may name, with the reason
+/// to drop it.
+#[test]
+fn a_grant_refuses_rimz_names_in_the_resolved_lists_and_the_board_with_its_own_reason() {
+    let reason = |skill: &str| {
+        let profiles = profiles([(
+            "worker",
+            Profile {
+                tools: Some(
+                    crate::agents::ToolSet::parse(&["Bash".into()])
+                        .unwrap()
+                        .with_rimz(vec!["rimz-lsp".parse().unwrap()]),
+                ),
+                skills: Some(vec![skill.parse().unwrap()]),
+                ..profile("claude")
+            },
+        )]);
+        match resolve_profile("worker", &profiles) {
+            Err(LayoutErr::InvalidProfile { reason, .. }) => reason,
+            other => panic!("{skill}: {other:?}"),
+        }
+    };
+    assert_eq!(
+        reason("rimz-watch"),
+        "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz-watch`; beside \
+         `capabilities:` RimZ's MCP capabilities go only in the kind base's `capabilities:`, so \
+         list them there instead"
+    );
+    assert_eq!(
+        reason("rimz-blackboard"),
+        "its kind base sets `capabilities:`, and its `skills` or `mcps` list `rimz-blackboard`, \
+         but RimZ serves the board tools to every role seat of a staged team and to no other \
+         launch, so drop the entry"
     );
 }
 

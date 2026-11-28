@@ -923,9 +923,6 @@ pub(super) struct SeatEdits {
 /// The capability every Markdown team seat's built-in consensus names (`rimz(message)`).
 const CONSENSUS_SKILL: &str = "rimz-message";
 
-/// The capability whose tools the Board writes fragment after the consensus names.
-const BOARD_CAPABILITY: &str = "rimz-blackboard";
-
 #[derive(Clone, Copy, Default)]
 struct SeatSkillEdits {
     added_consensus: bool,
@@ -961,29 +958,24 @@ impl SeatEdits {
             if !self.leader {
                 capabilities.retain(|entry| entry.trim() != "ask");
             }
-            // Every Markdown team runs the built-in consensus, which names `rimz(message)`,
-            // and its Board writes fragment, which names the blackboard tools (a project TOML
-            // team may replace the consensus with `consensus-file`, and its seats get no seat
-            // edits). Beside `capabilities:`, RimZ capabilities go only in the grant, even
-            // beside `skills: []` where adding one implies `Skill`.
-            for granted in [CONSENSUS_SKILL, BOARD_CAPABILITY] {
-                if !capabilities.iter().any(|entry| {
-                    let name = frontmatter::marked_name(entry);
-                    name == granted || name == SERVER_NAME
-                }) {
-                    capabilities.push(granted.to_owned());
-                }
+            // Every Markdown team runs the built-in consensus, which names `rimz(message)` (a
+            // project TOML team may replace the consensus with `consensus-file`, and its seats
+            // get no seat edits). Beside `capabilities:`, RimZ capabilities go only in the
+            // grant, even beside `skills: []` where adding one implies `Skill`.
+            if !capabilities.iter().any(|entry| {
+                let name = frontmatter::marked_name(entry);
+                name == CONSENSUS_SKILL || name == SERVER_NAME
+            }) {
+                capabilities.push(CONSENSUS_SKILL.to_owned());
             }
         } else {
-            if let Some(mcps) = &mut fm.mcps {
-                for granted in [CONSENSUS_SKILL, BOARD_CAPABILITY] {
-                    if !mcps.iter().any(|entry| {
-                        let name = frontmatter::marked_name(entry);
-                        name == granted || matches!(name, SERVER_NAME | "*")
-                    }) {
-                        mcps.push(granted.to_owned());
-                    }
-                }
+            if let Some(mcps) = &mut fm.mcps
+                && !mcps.iter().any(|entry| {
+                    let name = frontmatter::marked_name(entry);
+                    name == CONSENSUS_SKILL || matches!(name, SERVER_NAME | "*")
+                })
+            {
+                mcps.push(CONSENSUS_SKILL.to_owned());
             }
             if let Some(skills) = &fm.skills
                 && !skills.iter().any(|skill| skill.trim() == CONSENSUS_SKILL)
@@ -1630,10 +1622,21 @@ fn finish_profile(
                 ("skills", fm.skills.as_deref()),
                 ("mcps", fm.mcps.as_deref()),
             ] {
-                let rimz: Vec<String> = listed
-                    .into_iter()
-                    .flatten()
-                    .map(|entry| entry.trim())
+                let entries = listed.into_iter().flatten().map(|entry| entry.trim());
+                // No list may name the board, so its entry goes rather than into the grant.
+                if let Some(board) = entries.clone().find(|entry| {
+                    Capability::from_name(frontmatter::marked_name(entry))
+                        == Some(Capability::Blackboard)
+                }) {
+                    return Err(DefinitionErr::new(
+                        path,
+                        format!(
+                            "sets `capabilities:`, and its `{key}:` lists `{board}`, but {}",
+                            crate::config::BOARD_REFUSAL
+                        ),
+                    ));
+                }
+                let rimz: Vec<String> = entries
                     .filter(|entry| {
                         let name = frontmatter::marked_name(entry);
                         Capability::from_name(name).is_some()
@@ -2126,11 +2129,11 @@ const RETIRED_WAIT: &str = "rimz-wait";
 
 /// Lowers a resolved `capabilities:` list to the tools value it stands for: each word's tool
 /// bases in written order, then `Skill` where [`skill_implied`], carrying each listed
-/// capability with its own mark as the RimZ grant. `rimz` adds every capability left unlisted
-/// whose native tool the words do not name, since a named tool outranks it
-/// (`crate::agents::contest`), then itself with its mark, which marks each capability that has
-/// none of its own (`ExecRequest::served_marks`) and reaches a provider's MCP code as it does
-/// from `mcps`.
+/// capability with its own mark as the RimZ grant. `rimz` adds every capability of
+/// `Capability::LISTED` left unlisted whose native tool the words do not name, since a named tool
+/// outranks it (`crate::agents::contest`), then itself with its mark, which marks each capability
+/// that has none of its own (`ExecRequest::served_marks`) and reaches a provider's MCP code as it
+/// does from `mcps`.
 fn lower_capabilities(
     path: &Path,
     kind: &str,
@@ -2139,7 +2142,7 @@ fn lower_capabilities(
 ) -> Result<ToolSet, DefinitionErr> {
     let mut bases: Vec<String> = Vec::new();
     let mut listed: Vec<(&str, Option<LoadMode>)> = Vec::new();
-    let names: Vec<&str> = Capability::ALL
+    let names: Vec<&str> = Capability::LISTED
         .iter()
         .map(|capability| capability.name())
         .collect();
@@ -2165,7 +2168,7 @@ fn lower_capabilities(
         }
         let parsed = (name == SERVER_NAME)
             .then_some(name)
-            .or_else(|| Capability::from_name(name).map(Capability::name));
+            .or_else(|| Capability::from_listed_name(name).map(Capability::name));
         let mode = match entry.rsplit_once(':') {
             Some((_, mark)) => LoadMode::from_name(mark.trim()),
             None => None,
@@ -2178,6 +2181,15 @@ fn lower_capabilities(
                     "lists `{entry}` in `capabilities:`, a capability RimZ split in two: list \
                      `rimz-shell` to run a command outside your turn, `rimz-watch` to wake on a \
                      condition, or both"
+                ),
+            ));
+        }
+        if Capability::from_name(name) == Some(Capability::Blackboard) {
+            return Err(DefinitionErr::new(
+                path,
+                format!(
+                    "lists `{entry}` in `capabilities:`, but {}",
+                    crate::config::mcps::BOARD_REFUSAL
                 ),
             ));
         }
@@ -2220,13 +2232,13 @@ fn lower_capabilities(
         .iter()
         .filter_map(|(name, own)| {
             Some(crate::config::RimzEntry::new(
-                Capability::from_name(name)?,
+                Capability::from_listed_name(name)?,
                 *own,
             ))
         })
         .collect();
     if let Some(mark) = wildcard {
-        let rest = Capability::ALL
+        let rest = Capability::LISTED
             .into_iter()
             .filter(|capability| !listed.iter().any(|(name, _)| *name == capability.name()))
             .filter(|capability| {

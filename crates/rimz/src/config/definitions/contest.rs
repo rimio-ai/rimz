@@ -324,7 +324,7 @@ impl Contested<'_> {
 /// tool at launch.
 pub(super) fn settle(contested: &Contested<'_>) -> Result<Vec<NativeWin>, String> {
     let mut wins = Vec::new();
-    for capability in Capability::ALL {
+    for capability in Capability::LISTED {
         let Some(entry) = contested.native(capability) else {
             continue;
         };

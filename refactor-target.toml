@@ -6080,12 +6080,12 @@ allowed-dependencies = [
 # ExecRequest is the one reader of a `capabilities:` grant: skill_callable, served_marks,
 # mcp_list, and skill_grant serve the reminder, the plan, and both skill enforcers (+4).
 # ENV_SELF_COMPACT_TOOL tells the hook-context hook its launch serves the self-compaction tool (+1).
-# ExecRequest::default_always is the one consensus-layer load rule that served_marks and both
-# McpLaunch builders read (+1).
 # CompiledAgentProcess::argv_with_provider_args appends a resume continue after every wrapping of the provider command (+1).
 # PreflightCheckout names the checkout whose project skills an entry-point preflight reads (+1).
 # Launch reminders and the plan warning read `ExecRequest::yields_to_native` (+1).
-surface-budget = 71
+# ExecRequest::default_always left with the consensus-layer load rule, which the seat rule in
+# LaunchReminders::up_front replaced (-1).
+surface-budget = 70
 
 [[verdict]]
 kind = "item"
