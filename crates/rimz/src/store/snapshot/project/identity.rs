@@ -242,6 +242,9 @@ impl CardIdentityAllocator {
         self.next_ordinal.clear();
     }
 
+    /// After a swap, two rows of one launch carry its handle, and the owner need not be
+    /// the launch's holder: `Self::from_map_and_state` re-adds a handle whose owner
+    /// left the map from the first row in key order that carries it.
     pub(super) fn owner_for_name(&self, name: &str) -> Option<(AgentKind, AgentSessionId)> {
         self.names.get(name).cloned()
     }
