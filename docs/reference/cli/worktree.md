@@ -4,7 +4,7 @@
 
 ```sh
 rimz worktree new [NAME] [--base <BASE>] [--branch <BRANCH>] [--json]
-rimz worktree new [NAME] --from-pr <PR> [--branch <BRANCH>] [--json]
+rimz worktree new [NAME] --from-pr <PR> [--branch <BRANCH>] [--allow-external] [--json]
 rimz worktree list [--json]
 rimz worktree cd <NAME>
 rimz worktree path <NAME>
@@ -63,6 +63,7 @@ The `branch` line gives the recorded base branch and the base commit's first sev
 | `base_branch` | The branch or ref the tree was cut from, or `null` when there is none to name, such as a detached `HEAD`. |
 | `base_ref` | The full commit the tree was cut from. |
 | `reused` | `true` when a [pull request checkout](#check-out-a-pull-request) reused an existing tree. |
+| `external` | How the checkout of an [external pull request](#check-out-a-pull-request) was confirmed, as `{"confirmed_by", "agent"}`: `confirmed_by` is `prompt` or `flag`, and `agent` is the calling agent's name, else its kind, or `null` when no agent ran the command. `null` on every other tree. |
 
 Warnings stay on stderr. Whether the tree's work has landed is later measured against `base_branch` ([choosing the comparison ref](../../internals/harness/worktrees.md#choosing-the-comparison-ref)).
 
@@ -110,6 +111,10 @@ What the branch tracks depends on whether RimZ can ask the forge who owns the he
 
 When a fork checkout's local branch name differs from the PR's head branch, the report adds a `push   :` line with the exact command to push back, such as `git push <fork-url> HEAD:<branch>`.
 
+A review-only or fork checkout also checks where the PR head comes from. After fetching it, RimZ lists the branches of `origin` (`git ls-remote --heads origin`), and a head commit that is the tip of none of them makes the PR external. So does a listing that cannot be read, a timeout after 120 seconds included: the warning then reads ``PR #N is external: origin's branches could not be read (REASON), so its head COMMIT from OWNER/REPO was not checked and its code is not verified``. Before creating anything, RimZ then prints ``rimz: warning: PR #N is external: its head COMMIT from OWNER/REPO is on no branch of origin, so its code is not verified`` on stderr, with the commit's first seven characters, and `from OWNER/REPO` on a fork checkout only. At a terminal it asks `Check out PR #N anyway? [y/N]`, and only `y` or `yes` proceeds. `--allow-external` proceeds without asking and adds `  checking it out on --allow-external` under the warning; it needs `--from-pr`. Without a terminal and without the flag, the checkout refuses. A same-repository checkout takes the head branch from `origin` itself and is never external, and reusing a tree that already records the PR checks nothing.
+
+An external tree is an ordinary tree once created. Its marker records how the checkout was confirmed and, when an agent ran the command, that agent's name, else its kind. The report adds `  source : external, confirmed at the prompt` or `  source : external, allowed by --allow-external`, followed by ` from @NAME` when an agent ran it, and `list` marks the tree ` · external`.
+
 Every pull request tree records the trunk (`main`, `master`, or the `origin/HEAD` branch, the first that resolves) as its base branch, so `merge` and the landed check compare against the trunk.
 
 A same-repository checkout reuses the marked worktree holding the PR's head branch, including a tree created with `-w` and no recorded PR number. Otherwise it adopts an existing local branch into a fresh tree, or creates a tracking branch when none exists. A marker recording another PR number refuses. An explicit name must match the tree holding the branch; omit the name to find that tree automatically. Reuse records the PR number when missing, preserves the tree's creation time, and prints `reused NAME` with only the `path`, `branch`, and `next` lines. It does not seed the tree, rerun its created hook, or archive channel messages.
@@ -128,6 +133,7 @@ Without terminal stdin, only a behind branch advances automatically, with a `fas
 | ``PR URL targets `REPO` but origin is `ORIGIN` `` | The URL names another host or repository. |
 | ``could not parse git output: could not fetch PR #N: git remote `origin` is not configured`` | The repository has no `origin` remote. |
 | `PR must be a number or a GitHub, Gitea, Forgejo, or GitLab PR URL` | The value is neither a number nor a URL with a `pull`, `pulls`, or `merge_requests` segment. This is a usage error and exits 2. |
+| ``PR #N was not checked out; pass --allow-external to check it out anyway`` | The PR is [external](#check-out-a-pull-request), stdin is not a terminal, and `--allow-external` was not given. The warning precedes it on stderr. |
 | ``could not fetch PR #N from REMOTE: ...`` | The fetch failed or ran past 120 seconds. Git never prompts for credentials here. |
 
 ## List worktrees
@@ -147,7 +153,7 @@ feat-a    feat-a  landed            -
 | --- | --- |
 | `WORKTREE` | The name, which is also the channel. |
 | `BRANCH` | The branch checked out now, or `-` on a detached `HEAD`. |
-| `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included. |
+| `STATE` | `landed`, `unlanded`, or `unknown`, with ` · dirty` when `git status` shows any change, untracked files included, then ` · external` on a tree checked out from an [external pull request](#check-out-a-pull-request). |
 | `HOLDERS` | Holders using the sweep's occupancy rules, so an agent RimZ cannot prove dead still counts: at most three handles then `+N`, `pane` when open panes hold the tree and no agent does, `loop task NAME` for each holding task, `team NAME` for each holding board, then `workflow run ADDRESS` for each unfinished run, or `-`. Ended agents are omitted. |
 
 `--json` prints an array of objects in the same order, `[]` when there are none.
@@ -163,6 +169,7 @@ feat-a    feat-a  landed            -
 | `landed` | `true`, `false`, or `null` when unknown. |
 | `reasons` | All keep reason ids in precedence order: `in_use`, `uncommitted_changes`, `unlanded`, `unknown`. Empty means removable. |
 | `holders` | `agents` (full handles), `panes` (the count of protected panes with no agent), `loop_tasks` (deduplicated task names), `teams` (deduplicated team names), then `workflow_runs` (`{id, address}` objects, deduplicated by id). Arrays are `[]` when none. |
+| `external` | The same object as [`new --json`](#create-a-worktree) prints, or `null`. |
 
 ## Open a shell in a worktree
 
