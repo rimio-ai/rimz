@@ -48,18 +48,18 @@ A provider subagent (a child the agent spawned inside its own session) that rais
 
 ```sh
 rimz asks show @planner
-rimz asks show ask_0123456789abcdef --json
+rimz asks show ask_89abcdef --json
 ```
 
-The target is an agent address or an ask id. An address resolves in the current channel, as everywhere else ([addressing agents](./agents.md#addressing-agents)); an ask id matches in any channel.
+The target is an agent address or an ask id. An address resolves in the current channel, as everywhere else ([addressing agents](./agents.md#addressing-agents)); an ask id matches in any channel. An ask id is `ask_` and the last 8 characters of the stored id, as every human row and answer command prints it. The stored 16-character id that `--json` prints as `ask_id` works too, and a short id that several open asks share selects the newest of them.
 
 Omitting `show`, as in `rimz asks @planner`, exits `2` and suggests `rimz asks show @planner`. The same redirect applies to a bare handle or ask id.
 
 The human form prints a header line, the agent's context message when present, and each question with its numbered options:
 
 ```console
-$ rimz --tmux asks show ask_06gh3qs0ee47p7o0
-ask_06gh3qs0ee47p7o0  @coder#probe  question · 0s
+$ rimz --tmux asks show ask_3si4haeh
+ask_3si4haeh  @coder#probe (@light-compass)  question · 6s
 
 Choose a rollout
   1. safe
@@ -137,8 +137,8 @@ rimz answer @planner 2
 rimz answer @planner safe
 rimz answer @planner 1,3
 rimz answer @planner --text "Use the staged route"
-rimz answer ask_0123456789abcdef --json answers.json
-rimz answer ask_0123456789abcdef --json < answers.json
+rimz answer ask_89abcdef --json answers.json
+rimz answer ask_89abcdef --json < answers.json
 ```
 
 The target is an agent address or an ask id, resolved as for [`show`](#show-one-ask). One command answers the whole ask, every question at once.

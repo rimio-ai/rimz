@@ -290,6 +290,8 @@ A follow-up waiting for a resumed child says `waiting for @child's resumed provi
 
 ### Change a queued message
 
+Each `<id>` is a message id as receipts and rows print it: `msg_` and the last 8 characters of the stored id. The stored 16-character id that `--json` prints as `message_id` works too, a short id that several messages share selects the newest of them, and an id of any other length is a usage error (exit 2).
+
 | Command | Accepts | Prints |
 | --- | --- | --- |
 | `message edit <id>` | A `queued` message | `edited msg_… (<fields>)` |

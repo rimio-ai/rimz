@@ -39,7 +39,7 @@ const LONG_ABOUT: &str = r#"Send text to an agent, and manage what you have sent
   rimz message --interrupt @coder "stop"         stop its turn, then type
   rimz message --reply-wanted @coder "landed?"   ask for a message back
   rimz message                                   what you sent in this lane
-  rimz message show msg_0123456789abcdef         why a message has not landed"#;
+  rimz message show msg_89abcdef                 why a message has not landed"#;
 
 #[derive(Debug, Args)]
 #[command(

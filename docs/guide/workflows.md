@@ -208,7 +208,7 @@ rimz loop add run-news --signal 'workflow.ended' --repeat --overlap queue -- \
   sh -c 'rimz message --no-from @lead "$RIMZ_LOOP_TRIGGER"'
 ```
 
-Each fire hands its command the trigger line, `Rule `run-news` fired here. workflow.ended wf_… · failed`, which names the run, so the agent can run `rimz workflow show` on it. `--overlap queue` keeps the signals that arrive while a fire's command still runs and fires for each in turn, where the default skips them. Use `'workflow.*'` for every signal, or `--match workflow=<name>` for one workflow's runs. The task belongs to the project, not to the agent: it keeps firing after the agent ends, so remove it with `rimz loop remove run-news` when the agent is done. A session step hears the same signals through [`subscribe`](#hand-signals-to-a-session), and never its own run's.
+Each fire hands its command the trigger line, `Rule `run-news` fired here. workflow.ended review#feat-x · failed`, which names the run, so the agent can run `rimz workflow show` on it. `--overlap queue` keeps the signals that arrive while a fire's command still runs and fires for each in turn, where the default skips them. Use `'workflow.*'` for every signal, or `--match workflow=<name>` for one workflow's runs. The task belongs to the project, not to the agent: it keeps firing after the agent ends, so remove it with `rimz loop remove run-news` when the agent is done. A session step hears the same signals through [`subscribe`](#hand-signals-to-a-session), and never its own run's.
 
 ## What a run does on your machine
 
