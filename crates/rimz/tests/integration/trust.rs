@@ -537,18 +537,22 @@ fn antigravity_grant_saves_the_project_root_and_a_subfolder_launch_bridges_it() 
     assert_eq!(std::fs::read_to_string(&settings).unwrap(), granted);
 }
 
-/// A pull-request worktree takes agy trust only from an entry naming it, so an agent-started
-/// `--from-pr` launch from a trusted primary checkout refuses once the worktree exists, rather
-/// than opening on agy's trust prompt.
+/// A worktree already holding a same-repository pull request's head branch, reused by an
+/// agent-started `--from-pr` launch (which backfills the pull request into its marker), inherits
+/// agy trust from its trusted primary checkout, so the launch opens its pane.
 #[cfg(unix)]
 #[test]
-fn antigravity_agent_started_from_pr_launch_refuses_the_untrusted_pr_worktree() {
+fn antigravity_agent_started_from_pr_launch_reuses_the_holder_with_inherited_trust() {
     if crate::common::git::git_missing() {
         return;
     }
     let env = Env::new();
     env.record(&env.project_root);
-    crate::common::git::publish_pr_ref(&env, "refs/pull/1/head");
+    let (head, _) = crate::common::git::publish_pr_ref(&env, "refs/pull/1/head");
+    env.rimz()
+        .args(["worktree", "new", "feature", "--base", &head])
+        .assert()
+        .success();
     crate::common::git::configure_github_origin_rewrite(&env);
     let forge = crate::common::write_gh_pr_head_shim(&env, crate::common::gh_same_repo_head());
     let agy = write_env_dump_shim(&env, "agy");
@@ -605,6 +609,116 @@ fn antigravity_agent_started_from_pr_launch_refuses_the_untrusted_pr_worktree() 
         .bounded_output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{stderr}");
+    assert!(!stderr.contains("refused"), "{stderr}");
+    let worktree = env.home_root.join("project-worktrees/feature");
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&worktree)
+            .unwrap()
+            .unwrap()
+            .from_pr,
+        Some(1),
+        "the reuse backfills the pull request"
+    );
+    assert!(
+        !env.home_root.join("project-worktrees/pr-1").exists(),
+        "the holder is reused, not a second tree cut"
+    );
+    let trust = env
+        .rimz()
+        .current_dir(&worktree)
+        .args(["trust", "--json"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(trust.status.success(), "{trust:?}");
+    let report: serde_json::Value = serde_json::from_slice(&trust.stdout).unwrap();
+    let state = report["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "antigravity")
+        .map(|row| row["state"].clone());
+    assert_eq!(state, Some("decided".into()), "{report}");
+    let trace = std::fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        trace.contains("new-pane"),
+        "the launch opens its pane: {trace}"
+    );
+}
+
+/// Qoder keys trust on the launch directory alone, so a grant on the primary checkout leaves a
+/// fresh pull-request worktree beside it undecided. Only the launcher's check at the settled
+/// worktree can see that, and an agent-started `--from-pr` launch refuses there before any pane.
+#[cfg(unix)]
+#[test]
+fn qoder_agent_started_from_pr_launch_refuses_the_untrusted_pr_worktree() {
+    if crate::common::git::git_missing() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::git::publish_pr_ref(&env, "refs/pull/1/head");
+    crate::common::git::configure_github_origin_rewrite(&env);
+    let forge = crate::common::write_gh_pr_head_shim(&env, crate::common::gh_same_repo_head());
+    let qoder = env.home_root.join("qoder-bin");
+    std::fs::create_dir_all(&qoder).unwrap();
+    let stub = qoder.join("qodercli");
+    std::fs::write(&stub, "#!/bin/sh\necho 'qodercli 1.1.72'\n").unwrap();
+    std::fs::set_permissions(&stub, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        forge.display(),
+        path_with_front(&qoder).to_string_lossy()
+    );
+    let install = env
+        .rimz()
+        .args(["hooks", "install", "qoder"])
+        .env("PATH", &path)
+        .output()
+        .unwrap();
+    assert!(install.status.success(), "{install:?}");
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    let settings = env.agent_config_path("qoder");
+    let mut saved: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+    let root = env.project_root.canonicalize().unwrap();
+    saved["permissions"] = serde_json::json!({"trustDirectories": [root]});
+    std::fs::write(&settings, saved.to_string()).unwrap();
+    let workspace = env.resolve_workspace(&env.project_root);
+    env.store().record_workspace(&workspace).unwrap();
+    crate::common::wait::register_calling_agent(&env);
+    let log = env.home_root.join("mux.log");
+    let output = env
+        .rimz()
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-session")
+        .args([
+            "--mux",
+            "zellij",
+            "agents",
+            "qoder",
+            "--from-pr",
+            "1",
+            "--bg",
+            "--new-pane",
+        ])
+        .env("PATH", &path)
+        .env("ZELLIJ_PANE_ID", "1")
+        .env("ZELLIJ_SESSION_NAME", &workspace.session_name)
+        .env("RIMZ_ZELLIJ_BIN", crate::common::zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+        .env(
+            "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+            format!("{} [Created 1s ago]\n", workspace.session_name),
+        )
+        .bounded_output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
     let worktree = env
         .home_root
         .join("project-worktrees/pr-1")
@@ -615,7 +729,7 @@ fn antigravity_agent_started_from_pr_launch_refuses_the_untrusted_pr_worktree() 
         stderr.lines().find_map(|line| line.strip_prefix("error: ")),
         Some(
             format!(
-                "agent-started launch refused: antigravity has no trust decision for `{0}`; the pane would stop at its folder-trust prompt with nobody watching; ask the user to run `rimz trust grant --agents antigravity` in `{0}`, or answer antigravity's folder-trust prompt once there; launch from a directory the account already trusts: on `rimz agents`, `--cwd <DIR>` chooses one and dropping `--cwd` uses your own checkout",
+                "agent-started launch refused: qoder has no trust decision for `{0}`; the pane would stop at its folder-trust prompt with nobody watching; ask the user to run `rimz trust grant --agents qoder` in `{0}`, or answer qoder's folder-trust prompt once there; launch from a directory the account already trusts: on `rimz agents`, `--cwd <DIR>` chooses one and dropping `--cwd` uses your own checkout",
                 worktree.display()
             )
             .as_str()

@@ -8677,16 +8677,25 @@ mod folder_trust {
             repo,
             "a worktree keys on its primary"
         );
-        assert_eq!(
-            f.gap(&pr, Some(&repo)).key,
-            pr,
-            "a pull request keys on itself"
-        );
+        for cwd in [pr.clone(), pr.join("sub")] {
+            assert_eq!(
+                f.gap(&cwd, Some(&repo)).key,
+                repo,
+                "a pull-request worktree keys on its primary"
+            );
+        }
         let agent = f.path("empty/room/agent");
         assert_eq!(f.gap(&agent, None).key, agent);
 
         f.trust(std::slice::from_ref(&repo));
-        for cwd in [repo.clone(), repo.join("sub"), wt.clone(), wt.join("sub")] {
+        for cwd in [
+            repo.clone(),
+            repo.join("sub"),
+            wt.clone(),
+            wt.join("sub"),
+            pr.clone(),
+            pr.join("sub"),
+        ] {
             assert_eq!(
                 f.decide(&cwd, Some(&repo)),
                 FolderTrust::Decided,
@@ -8700,26 +8709,19 @@ mod folder_trust {
                 cwd.display()
             );
         }
-        let gap = f.gap(&pr, Some(&repo));
+
+        f.trust(std::slice::from_ref(&pr));
+        assert_eq!(f.decide(&pr, Some(&repo)), FolderTrust::Decided);
+        assert_eq!(f.decide(&pr.join("sub"), Some(&repo)), FolderTrust::Decided);
+        let gap = f.gap(&wt, Some(&repo));
         assert_eq!(
             candidate(&gap),
-            json!({"theme": "dark", "trustedWorkspaces": [repo, pr]})
-        );
-        assert_eq!(f.gap(&pr.join("sub"), Some(&repo)).key, pr.join("sub"));
-
-        f.trust(&[repo.clone(), pr.clone()]);
-        assert_eq!(f.decide(&pr, Some(&repo)), FolderTrust::Decided);
-        assert!(
-            matches!(
-                f.decide(&pr.join("sub"), Some(&repo)),
-                FolderTrust::Undecided(_)
-            ),
-            "a pull-request worktree inherits nothing, its own root included"
+            json!({"theme": "dark", "trustedWorkspaces": [pr, repo]})
         );
 
         f.trust(&[f.path("worktrees")]);
         assert_eq!(f.decide(&wt, None), FolderTrust::Decided);
-        assert!(matches!(f.decide(&pr, None), FolderTrust::Undecided(_)));
+        assert_eq!(f.decide(&pr, None), FolderTrust::Decided);
 
         f.trust(&[f.path("empty")]);
         assert_eq!(f.decide(&f.path("empty"), None), FolderTrust::Decided);
@@ -8817,6 +8819,7 @@ mod folder_trust {
     fn launch_bridges_inherited_trust_into_the_one_settings_document() {
         let f = Fixture::new();
         let (repo, wt, pr) = (f.repo(), f.path("worktrees/wt"), f.path("worktrees/pr"));
+        let agent = f.path("empty/room/agent");
         f.trust(std::slice::from_ref(&repo));
         assert_eq!(
             settings_arg(&f.bridge(&wt, &[])),
@@ -8839,20 +8842,48 @@ mod folder_trust {
             f.bridge(&repo, &[]).is_empty(),
             "an exact entry needs no bridge"
         );
-        assert!(
-            f.bridge(&pr, &[]).is_empty(),
-            "a pull-request worktree is never bridged"
+        assert_eq!(
+            settings_arg(&f.bridge(&pr, &[])),
+            json!({"trustedWorkspaces": [repo, pr]}),
+            "a pull-request worktree bridges as any worktree does"
         );
-        assert_eq!(f.bridge(&pr, &["--settings", user]), ["--settings", user]);
+        assert_eq!(
+            settings_arg(&f.bridge(&pr, &["--settings", user])),
+            json!({
+                "agentMode": "",
+                "queuedMessages": "queue",
+                "trustedWorkspaces": ["/user", repo, pr],
+            })
+        );
+        assert!(
+            f.bridge(&agent, &[]).is_empty(),
+            "a folder no entry covers is never bridged"
+        );
+        assert_eq!(
+            f.bridge(&agent, &["--settings", user]),
+            ["--settings", user]
+        );
 
         f.trust(&[]);
-        assert!(
-            f.bridge(&wt, &[]).is_empty(),
-            "an untrusted primary bridges nothing"
-        );
+        for cwd in [&wt, &pr] {
+            assert!(
+                f.bridge(cwd, &[]).is_empty(),
+                "an untrusted primary bridges nothing: {}",
+                cwd.display()
+            );
+        }
+
+        f.trust(&[PathBuf::new()]);
+        for cwd in [&repo, &wt, &agent] {
+            assert!(
+                matches!(f.decide(cwd, Some(&repo)), FolderTrust::Undecided(_)),
+                "a blank entry trusts nothing: {}",
+                cwd.display()
+            );
+            assert!(f.bridge(cwd, &[]).is_empty(), "{}", cwd.display());
+        }
 
         f.trust(&[f.path("empty")]);
-        let agent = f.path("empty/room/agent");
         assert_eq!(
             settings_arg(&f.bridge(&agent, &[])),
             json!({"trustedWorkspaces": [f.path("empty"), agent]})
@@ -8890,10 +8921,10 @@ mod folder_trust {
         assert!(f.bridge(&link, &[]).is_empty(), "both spellings are saved");
     }
 
-    /// A worktree whose RimZ marker cannot be read might be a pull request's, so it takes trust
-    /// only from an entry naming it.
+    /// Folder trust reads nothing from the RimZ marker, so a worktree whose marker cannot be read
+    /// keys on, inherits from, and bridges the trust of its primary checkout.
     #[test]
-    fn an_unreadable_marker_reads_as_a_pull_request() {
+    fn an_unreadable_marker_inherits_from_the_primary_checkout() {
         let f = Fixture::new();
         let (repo, wt) = (f.repo(), f.path("worktrees/wt"));
         std::fs::write(
@@ -8901,9 +8932,13 @@ mod folder_trust {
             "invalid marker",
         )
         .unwrap();
+        assert_eq!(f.gap(&wt, Some(&repo)).key, repo);
         f.trust(std::slice::from_ref(&repo));
-        assert_eq!(f.gap(&wt, Some(&repo)).key, wt);
-        assert!(f.bridge(&wt, &[]).is_empty());
+        assert_eq!(f.decide(&wt, Some(&repo)), FolderTrust::Decided);
+        assert_eq!(
+            settings_arg(&f.bridge(&wt, &[])),
+            json!({"trustedWorkspaces": [repo, wt]})
+        );
     }
 
     /// Saved `permissions.allow` rules bridge into the launch's one settings document
@@ -8914,6 +8949,7 @@ mod folder_trust {
     fn saved_allow_rules_bridge_into_the_one_settings_document() {
         let mut f = Fixture::new();
         let (repo, wt, pr) = (f.repo(), f.path("worktrees/wt"), f.path("worktrees/pr"));
+        let agent = f.path("empty/room/agent");
 
         assert!(
             f.bridge(&repo, &[]).is_empty(),
@@ -8929,25 +8965,26 @@ mod folder_trust {
         .to_string();
         f.write_settings(&saved_text);
 
-        // Exact-trusted repo and untrusted PR worktree both carry saved allow rules without
+        // The exact-trusted repo, and a folder no entry covers, carry saved allow rules without
         // bridging trust.
-        assert_eq!(
-            settings_arg(&f.bridge(&repo, &[])),
-            json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
-        );
-        assert_eq!(
-            settings_arg(&f.bridge(&pr, &[])),
-            json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
-        );
+        for cwd in [&repo, &agent] {
+            assert_eq!(
+                settings_arg(&f.bridge(cwd, &[])),
+                json!({"permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}})
+            );
+        }
 
-        // Inherited worktree carries both trustedWorkspaces and permissions.allow in one document.
-        assert_eq!(
-            settings_arg(&f.bridge(&wt, &[])),
-            json!({
-                "trustedWorkspaces": [repo, wt],
-                "permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}
-            })
-        );
+        // Inherited worktrees, a pull request's included, carry both trustedWorkspaces and
+        // permissions.allow in one document.
+        for tree in [&wt, &pr] {
+            assert_eq!(
+                settings_arg(&f.bridge(tree, &[])),
+                json!({
+                    "trustedWorkspaces": [repo, tree],
+                    "permissions": {"allow": ["mcp(rimz_tools/*)", "command(cargo test)"]}
+                })
+            );
+        }
 
         // Existing profile settings keep their own allow rules first, deduplicate, and keep deny.
         let profile = r#"{"queuedMessages":"queue","permissions":{"allow":["command(cargo test)","read_file(docs)"],"deny":["command(rm)"]}}"#;

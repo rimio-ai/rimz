@@ -176,7 +176,7 @@ upward-dependencies = [
     "address",
     "worktree",
 ]
-# agy's folder trust reads a linked worktree's primary checkout and pull-request marker from
+# agy's folder trust reads a linked worktree's primary checkout from
 # `worktree::linked_worktree`, which reads `.git` metadata without spawning git: every launch
 # and preflight caller then agrees on a worktree whatever repository root it passes.
 # The parent-link predicate is shared by store, harness and CLI consumers.
@@ -1090,7 +1090,7 @@ surface-budget = 8
 [[module]]
 path = "crates/rimz/src/agents/adapters/antigravity"
 upward-dependencies = ["worktree"]
-# Folder trust follows a linked worktree to its primary checkout, never a pull-request one.
+# Folder trust follows a linked worktree to its primary checkout.
 surface-budget = 1
 
 [[module]]
