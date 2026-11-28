@@ -198,6 +198,27 @@ fn launch_verb_accepts_hyphen_prompt_and_flags() {
 }
 
 #[test]
+fn a_team_launch_takes_a_timeout_in_both_spellings() {
+    let hour = Some(std::time::Duration::from_secs(3600));
+    assert_eq!(
+        parse_teams(&["rimz", "forge", "ship it", "--timeout", "1h"]).timeout,
+        hour
+    );
+    let Some(TeamsSubcmd::Launch(args)) =
+        parse_teams(&["rimz", "launch", "forge", "--timeout", "1h"]).command
+    else {
+        panic!("launch verb");
+    };
+    assert_eq!(args.timeout, hour);
+    for argv in [
+        &["rimz", "forge", "--timeout", "soon"][..],
+        &["rimz", "--timeout", "1h"],
+    ] {
+        assert!(TeamsHarness::try_parse_from(argv).is_err(), "{argv:?}");
+    }
+}
+
+#[test]
 fn record_accepts_exactly_one_text_source_and_lists_sections() {
     for args in [
         vec!["rimz", "record", "Decisions", "text"],
