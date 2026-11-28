@@ -323,6 +323,36 @@ impl WorkflowPaths {
     }
 }
 
+/// The home of one run of a workflow script, `owned/workflow-runs/<id>/`.
+#[derive(Clone, Debug)]
+pub struct WorkflowRunPaths {
+    pub home: PathBuf,
+    pub record: PathBuf,
+    pub journal: PathBuf,
+}
+
+impl WorkflowRunPaths {
+    /// The answer log of one generation.
+    pub fn answers(&self, generation: u32) -> PathBuf {
+        self.home.join(format!("answers.{generation}.jsonl"))
+    }
+
+    /// The sealed copies of one generation, one directory per script.
+    pub fn files(&self, generation: u32) -> PathBuf {
+        self.home.join("files").join(generation.to_string())
+    }
+
+    /// The directory a command step runs with.
+    pub fn step(&self, number: u64) -> PathBuf {
+        self.home.join("steps").join(number.to_string())
+    }
+
+    /// The results too large for a line of the answer log.
+    pub fn results(&self) -> PathBuf {
+        self.home.join("results")
+    }
+}
+
 pub fn workflows_dir_under(home: &Path) -> PathBuf {
     home.join("workflows")
 }
@@ -439,6 +469,21 @@ impl StatePaths {
     /// live directory, and never leaves but to GC.
     pub fn finished_workflow(&self, id: &crate::ids::WorkflowRunId) -> WorkflowPaths {
         WorkflowPaths::at(self.finished_workflows_dir().join(id.as_str()))
+    }
+
+    /// The home of a run of a workflow script, beside the legacy run roots and never under them.
+    pub fn workflow_run(&self, id: &crate::ids::WorkflowRunId) -> WorkflowRunPaths {
+        let home = self.workflow_runs_dir().join(id.as_str());
+        WorkflowRunPaths {
+            record: home.join("record.json"),
+            journal: home.join("journal.jsonl"),
+            home,
+        }
+    }
+
+    /// The directory that holds every script run's home.
+    pub fn workflow_runs_dir(&self) -> PathBuf {
+        Class::Owned.path_under(&self.root).join("workflow-runs")
     }
 
     fn live_workflows_dir(&self) -> PathBuf {

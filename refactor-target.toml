@@ -1840,7 +1840,9 @@ allowed-dependencies = [
 # `watch_own_stderr`) (+3).
 # RuntimePaths::launched_path names the launched lane's cache for its refresh lane, its enrich
 # join and the pull request lane's demand, as bookings_path does for bookings (+1).
-surface-budget = 351
+# A workflow run's home and the files under it (`WorkflowRunPaths`, its fields and accessors,
+# `StatePaths::workflow_run`, `StatePaths::workflow_runs_dir`) (+7).
+surface-budget = 358
 
 [[verdict]]
 kind = "item"
@@ -4988,7 +4990,10 @@ path = "crates/rimz/src/store"
 # `call`, the durable call record of an `agent` or `team` launch: the record, its seat and
 # answer, its error, and the create, load, list, locked update, and owed-answer read that the
 # harness, the timeout helper, and gc share (+13).
-surface-budget = 722
+# A workflow run's record owns its wire types (`store::workflow_run`): the record, its open
+# steps, their work, stops, endings, answer lines, journal entries, and sealed copies, with the
+# load, create, commit, and seal operations the run engine calls (+32).
+surface-budget = 754
 
 [[verdict]]
 kind = "item"
@@ -5884,7 +5889,8 @@ allowed-dependencies = [
 # The durable raised-attention record module (+1).
 # Store::hook_ingress_at lets the run fold tell a delayed hook from one after a limit park (+1).
 # The durable call record module (+1).
-surface-budget = 45
+# The workflow run record module (+1).
+surface-budget = 46
 
 [[module]]
 path = "crates/rimz/src/utils/time.rs"
