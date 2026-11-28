@@ -147,7 +147,7 @@ Closing a stub's pane ends its row, and its handle then matches no agent.
 Each kind of launch has its own preconditions:
 
 - The room installs hooks for `claude` only. Run `rz hooks install <kind>` before launching any other kind, and before a loop task's supervised launch fires.
-- The room's project has no folder-trust decision, so a loop launch or `a subagents claude ...` refuses with `claude has no trust decision`. Run `rz trust grant --agents claude` first. The same command run as a bare `rimz trust grant --agents claude` from your own shell writes your real provider config.
+- The room's project has no folder-trust decision, so a loop launch, an agent-started launch (`a agents claude ...`), or `a subagents claude ...` refuses with `claude has no trust decision`. Run `rz trust grant --agents claude` first. The same command run as a bare `rimz trust grant --agents claude` from your own shell writes your real provider config.
 - The team runs with `--isolation host`, and `rimz agents restart` keeps a recorded isolation. For a scoped agent, launch a new one: `rz agents launch claude --isolation scoped -w probe`.
 - `rimz agents restart` of a stub prints `restarted <handle> fresh` and resumes nothing, since the stub writes no conversation. Seed a transcript (below) to exercise RimZ's resume path, and use a [host room](#check-against-a-real-provider) to prove the conversation itself comes back.
 
