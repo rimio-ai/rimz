@@ -718,14 +718,14 @@ fn a_launch_woken_across_a_rotation_at_any_point_gains_no_row() {
                     sorted_value(cold),
                     "{case}"
                 );
-                // A replaced session's late end, caught up alone after a rotation,
-                // re-adds the handle from that session in the warm fold, while a
-                // cold fold that loads the holder beside it keeps the holder:
+                // After the replaced session's late end, the warm fold re-adds the
+                // handle from that session at the re-announce, and the cold fold
+                // keeps the holder until the holder's next hook takes it back:
                 // `CardIdentityAllocator::from_map_and_state` drops a handle whose
-                // owner is outside the map. The holder's next hook takes it back.
+                // owner is outside the map.
                 let identity = |cache: &RollupCache| {
                     let mut identity = serde_json::to_value(&cache.agent_identity).unwrap();
-                    if late_end && index + 1 < events.len() {
+                    if late_end && (reannounce..events.len() - 1).contains(&index) {
                         identity.as_object_mut().unwrap().remove("names");
                     }
                     identity
