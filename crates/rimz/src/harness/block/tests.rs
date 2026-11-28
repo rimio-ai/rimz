@@ -532,6 +532,66 @@ fn the_tool_refusals_hold_for_both_callers() {
                                       "arguments": { "profile": "p", "prompt": "x" } }),
             "`value` is blank",
         ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "-w", "prompt": "x" } })),
+            "`arguments.profile` starts with `-`, which a fire's launch reads as a flag",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "@coder", "prompt": "x" } })),
+            "`arguments.profile` is a profile, not an address or scope",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": " logs ", "prompt": "x" } })),
+            "`arguments.profile` `logs` is a `rimz agents` verb, which a fire's launch reads in \
+             place of a profile",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "p", "prompt": "-w now" } })),
+            "`arguments.prompt` starts with `-`, which a fire's launch reads as a flag",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "p", "prompt": "x", "name": "a\u{0}b" } })),
+            "`arguments.name` holds a NUL character, which a fire's launch cannot pass",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "p", "prompt": "x", "stay": false } })),
+            "`arguments.stay`",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "p", "prompt": "x",
+                                           "schema": { "type": "string" } } })),
+            "`arguments.schema`",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "arguments": { "profile": "p", "prompt": "x", "timeout": "1h" } })),
+            "`arguments.timeout`",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "tool": "team", "worktree": "w",
+                            "arguments": { "team": "t", "prompt": "x", "timeout": "1h" } })),
+            "`arguments.timeout`",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "tool": "team", "worktree": "w",
+                            "arguments": { "team": "t#fix", "prompt": "x" } })),
+            "`arguments.team` cannot include `#lane`; pass top-level `worktree` instead",
+        ),
+        (
+            BlockName::Schedule,
+            booking(json!({ "tool": "team",
+                            "arguments": { "team": "t", "prompt": "x", "from_pr": "42" } })),
+            "`arguments.from_pr`",
+        ),
     ];
     let got: Vec<_> = cases
         .iter()
@@ -554,6 +614,44 @@ fn a_booking_parses_its_carried_block_as_a_fresh_start() {
     let object = json!({ "name": "n", "trigger": "cron", "value": "0 9 * * *", "tool": "workflow",
                          "worktree": "pr-1", "arguments": { "source": "name", "value": "land", "detach": true } });
     assert_eq!(refusal::<Schedule>(object, Caller::Script), None);
+}
+
+#[test]
+fn a_booking_takes_what_the_loop_scheduler_takes() {
+    let booking = |trigger: &str, value: &str, extra: Value| {
+        let mut object = json!({ "name": "n", "trigger": trigger, "value": value, "tool": "agent",
+                                 "arguments": { "profile": "p", "prompt": "x" } });
+        for (field, value) in extra.as_object().expect("an object of extra fields") {
+            object = with(object, field, value.clone());
+        }
+        object
+    };
+    let past_a_year = [
+        booking("in", "400d", json!({})),
+        booking("every", "400d", json!({})),
+        booking("when", "ci=passed", json!({ "for": "400d" })),
+    ];
+    let got: Vec<_> = past_a_year
+        .iter()
+        .map(|object| {
+            (
+                refusal::<Schedule>(object.clone(), Caller::Tool),
+                refusal::<Schedule>(object.clone(), Caller::Script),
+            )
+        })
+        .collect();
+    assert_eq!(got, vec![(None, None); 3]);
+
+    // The `schedule` tool books the `workflow` tool's own arguments, which its catalog parses.
+    let tool_workflow = json!({ "name": "n", "trigger": "cron", "value": "0 9 * * *",
+                                "tool": "workflow", "arguments": { "name": "held" } });
+    assert_eq!(
+        (
+            refusal::<Schedule>(tool_workflow.clone(), Caller::Tool),
+            refusal::<Schedule>(tool_workflow, Caller::Script),
+        ),
+        (None, Some("`arguments`".to_owned()))
+    );
 }
 
 #[test]

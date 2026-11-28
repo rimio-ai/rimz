@@ -6165,7 +6165,7 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
         ),
         (
             json!({"name": "bad", "trigger": "in", "value": "0s", "tool": "agent", "arguments": agent}),
-            "invalid in `0s`: must be greater than zero".to_owned(),
+            "invalid arguments: `value`: must be greater than zero".to_owned(),
         ),
         (
             json!({"name": "bad", "trigger": "in", "value": "9999999999d", "tool": "agent", "arguments": agent}),
@@ -6186,7 +6186,8 @@ fn the_schedule_tool_refuses_what_the_command_refuses() {
         ),
         (
             json!({"name": "bad", "trigger": "at", "value": "soon", "tool": "agent", "arguments": agent}),
-            "`at` `soon` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
+            "invalid arguments: `value`: `soon` is not `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD \
+             HH:MM`"
                 .to_owned(),
         ),
         (

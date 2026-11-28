@@ -17,6 +17,7 @@ use crate::config::{LaunchKind, MachineConfig, OverlapPolicy, TaskEntry};
 use crate::harness::ancestry::{
     LaunchAncestryError, booking_chain, resolve_calling_agent, resolve_launch_ancestry,
 };
+use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
 use crate::harness::schedule::{self, ScheduleErr, TaskShape};
@@ -25,9 +26,7 @@ use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
 use crate::launcher::workflow_start;
-use crate::mcp::catalog::{
-    ScheduleArgs, ScheduleOverlap, ScheduleTarget, ScheduleTrigger, WorkflowArgs,
-};
+use crate::mcp::catalog::{Booking, ScheduleTarget, WorkflowArgs};
 use crate::mcp::{Answer, Failure};
 
 /// What a booker hears of a fire: nothing delivers one a message.
@@ -46,8 +45,9 @@ struct Launch {
     warnings: Vec<String>,
 }
 
-/// Book `args` in the caller's room, owned by the caller.
-pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure> {
+/// Book `booking` in the caller's room, owned by the caller.
+pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> {
+    let args = &booking.schedule;
     let room = Room::open(&tools.dir(None)?)?;
     let rows = room
         .store
@@ -62,7 +62,7 @@ pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure
     let booked_by = booking_chain(&rows.agents, booker);
     crate::harness::name::validate_name(&args.name).map_err(anyhow::Error::from)?;
     let root = room.workspace.project_root.clone();
-    let launch = launch(tools, &room, &machine, args)?;
+    let launch = launch(tools, &room, &machine, booking)?;
     let mut entry = TaskEntry {
         kind: Some(launch.kind),
         target: Some(launch.target.clone()),
@@ -110,7 +110,7 @@ pub(super) fn book(tools: &Tools, args: &ScheduleArgs) -> Result<Answer, Failure
     refuse_held_name(&catalog, &args.name, &entry.booked_by)?;
     catalog.replace_machine(&args.name, &entry)?;
     let mut warnings = launch.warnings;
-    warnings.extend(idle_warning(args));
+    warnings.extend(idle_warning(booking));
     if !launch.has_place && room.workspace.worktree_root != root {
         warnings.push(format!(
             "runs at the project root {}, not {}; set `worktree` to run each fire in a \
@@ -166,8 +166,9 @@ fn launch(
     tools: &Tools,
     room: &Room,
     machine: &MachineConfig,
-    args: &ScheduleArgs,
+    booking: &Booking,
 ) -> Result<Launch, Failure> {
+    let args = &booking.schedule;
     let root = &room.workspace.project_root;
     if let Some(worktree) = &args.worktree {
         crate::worktree::parse_requested_name(worktree).map_err(anyhow::Error::from)?;
@@ -176,7 +177,7 @@ fn launch(
     // there; without `--fresh` an unattended launch refuses it. Emit it once even if the caller
     // also set `arguments.fresh`.
     let fresh = args.worktree.as_ref().map(|_| "--fresh".to_owned());
-    match &args.target {
+    match &booking.target {
         ScheduleTarget::Agent(agent) => {
             let profile = agent.profile.trim();
             let effective = effective::load(machine, root).map_err(anyhow::Error::from)?;
@@ -402,7 +403,7 @@ fn workflow_launch(
 
 fn set_trigger(
     entry: &mut TaskEntry,
-    args: &ScheduleArgs,
+    args: &Schedule,
     machine: &MachineConfig,
 ) -> Result<(), Failure> {
     let now = Timestamp::now().to_zoned_datetime(machine.time_zone());
@@ -460,11 +461,11 @@ fn window_account(kinds: &[String], entry: &TaskEntry) -> anyhow::Result<WindowA
 }
 
 /// The note `rimz loop add` owes a repeating agent or team booking with no overlap policy.
-fn idle_warning(args: &ScheduleArgs) -> Option<String> {
-    if !args.repeats() || args.overlap.is_some() {
+fn idle_warning(booking: &Booking) -> Option<String> {
+    if !booking.schedule.repeats() || booking.schedule.overlap.is_some() {
         return None;
     }
-    let choices = match args.target {
+    let choices = match booking.target {
         ScheduleTarget::Team(_) => "`replace`",
         ScheduleTarget::Agent(_) => "`replace` or `allow`",
         ScheduleTarget::Workflow(_) => return None,
