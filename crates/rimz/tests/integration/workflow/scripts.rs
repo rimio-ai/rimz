@@ -59,16 +59,16 @@ fn land_repairs_a_red_gate_and_lands() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/team.py close",
-            "2 shell uv run --script checks/send.py",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/team.py close",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py",
             "3 now",
             "4 watch FORGE (timeout 259200s)",
             "5 agent fixer",
-            "6 shell uv run --script checks/send.py resend",
+            "6 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py resend",
             "7 now",
             "8 watch FORGE (timeout 259200s)",
             "9 shell cargo clean",
-            "10 shell uv run --script checks/notes.py sift",
+            "10 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -82,8 +82,8 @@ fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/team.py close",
-            "2 shell uv run --script checks/send.py",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/team.py close",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py",
             "3 now",
             "4 watch FORGE (timeout 259200s)",
             "5 now",
@@ -91,11 +91,11 @@ fn land_holds_a_green_pr_then_reads_the_forge_again_before_the_fixer_goes() {
             "7 now",
             "8 watch FORGE (timeout 257340s)",
             "9 agent fixer",
-            "10 shell uv run --script checks/send.py resend",
+            "10 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py resend",
             "11 now",
             "12 watch FORGE (timeout 259200s)",
             "13 shell cargo clean",
-            "14 shell uv run --script checks/notes.py sift",
+            "14 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -109,8 +109,8 @@ fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/team.py close",
-            "2 shell uv run --script checks/send.py",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/team.py close",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py",
             "3 now",
             "4 watch FORGE (timeout 259200s)",
             "5 now",
@@ -118,7 +118,7 @@ fn land_sends_no_fixer_to_a_pr_merged_mid_hold() {
             "7 now",
             "8 watch FORGE (timeout 258480s)",
             "9 shell cargo clean",
-            "10 shell uv run --script checks/notes.py sift",
+            "10 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -131,8 +131,8 @@ fn land_repairs_a_pr_whose_hold_broke_on_a_red_ci() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/team.py close",
-            "2 shell uv run --script checks/send.py",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/team.py close",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py",
             "3 now",
             "4 watch FORGE (timeout 259200s)",
             "5 now",
@@ -140,11 +140,11 @@ fn land_repairs_a_pr_whose_hold_broke_on_a_red_ci() {
             "7 now",
             "8 watch FORGE (timeout 258660s)",
             "9 agent fixer",
-            "10 shell uv run --script checks/send.py resend",
+            "10 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/send.py resend",
             "11 now",
             "12 watch FORGE (timeout 259200s)",
             "13 shell cargo clean",
-            "14 shell uv run --script checks/notes.py sift",
+            "14 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/notes.py sift",
         ]
     );
     assert_eq!(end, r#"returns {"pr":"merged"}"#);
@@ -163,14 +163,14 @@ fn ralph_replans_out_of_an_item() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/ralph.py todo",
-            "2 shell uv run --script checks/ralph.py start",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py todo",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py start",
             "3 agent opus",
-            "4 shell uv run --script checks/ralph.py gate",
+            "4 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py gate",
             "5 agent judge",
-            "6 shell uv run --script checks/ralph.py todo",
+            "6 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py todo",
             "7 agent fable",
-            "8 shell uv run --script checks/ralph.py todo",
+            "8 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py todo",
             "9 agent judge",
             "10 agent opus",
         ]
@@ -191,21 +191,21 @@ fn ralph_sweeps_a_change_request_then_waits_for_the_merge() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/ralph.py todo",
-            "2 shell uv run --script checks/ralph.py start",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py todo",
+            "2 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py start",
             "3 agent opus",
-            "4 shell uv run --script checks/ralph.py gate",
-            "5 shell uv run --script checks/ralph.py changed",
+            "4 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py gate",
+            "5 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py changed",
             "6 agent judge",
-            "7 shell uv run --script checks/ralph.py pr",
+            "7 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py pr",
             "8 now",
             "9 watch PR (timeout 604800s)",
-            "10 shell uv run --script checks/ralph.py trouble",
+            "10 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py trouble",
             "11 agent opus",
             "12 now",
             "13 watch PR (timeout 604800s)",
-            "14 shell uv run --script checks/ralph.py advance",
-            "15 shell uv run --script checks/ralph.py todo",
+            "14 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py advance",
+            "15 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/ralph.py todo",
             "16 agent judge",
             "17 agent opus",
         ]
@@ -230,13 +230,13 @@ fn steward_halts_one_lane_and_the_other_goes_on() {
     assert_eq!(
         calls,
         [
-            "1 shell uv run --script checks/steward.py lanes",
+            "1 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/steward.py lanes",
             "2 agent opus",
             "3 agent opus",
             "4 agent judge",
-            "5 shell uv run --script checks/steward.py gate",
-            "6 shell uv run --script checks/steward.py halt",
-            "7 shell uv run --script checks/steward.py due",
+            "5 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/steward.py gate",
+            "6 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/steward.py halt",
+            "7 shell uv run --script \"$RIMZ_WORKFLOW_FILES\"/checks/steward.py due",
             "8 agent opus",
         ]
     );

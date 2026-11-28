@@ -66,7 +66,7 @@ const told = failure => ({
 
 // A fact about the work, from ralph.py.
 const ralph = async (entry, input, timeout = '10m') => JSON.parse(
-  (await shell({ command: 'uv run --script checks/ralph.py ' + entry, input, timeout })).stdout)
+  (await shell({ command: 'uv run --script "$RIMZ_WORKFLOW_FILES"/checks/ralph.py ' + entry, input, timeout })).stdout)
 
 // A judge: an agent that answers one of the words it is given. Its prompt sits under checks/.
 const judge = (name, words, data, timeout = '2h') => agent({
