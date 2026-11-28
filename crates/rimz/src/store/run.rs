@@ -408,6 +408,12 @@ pub struct RunRecord {
     pub peer: Option<PeerRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<TeamRun>,
+    /// A peer or team run's turn among the answers its reader holds under its agent name, 1 for
+    /// the first, set once when the record is created; `harness::run::response_path` names the
+    /// answer's file by it. Absent on a record written before turns were stored, whose file
+    /// keeps its run id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<u32>,
     /// Time at which the caller claimed the current answer, either by printing
     /// it to a human shell or to its launcher during the launcher's open turn
     /// (`harness::run::report::may_claim`), or by discarding it through
@@ -715,6 +721,7 @@ impl RunRecord {
             earlier_answers: Vec::new(),
             peer: None,
             team: None,
+            turn: None,
             joined_at: None,
             report_message_id: None,
             budget: None,

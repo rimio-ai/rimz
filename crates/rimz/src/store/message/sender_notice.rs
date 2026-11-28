@@ -77,17 +77,18 @@ pub(crate) fn undelivered(record: &MessageRecord, close_reason: Option<&str>) ->
         .collect();
     format!(
         "Message {} to {receiver} ended {status}.\n{reason}Tried: {} claims; {} unconfirmed writes{last_write}.\nText: {preview}\nThe text was not delivered. Check the receiver with `rimz agents show {receiver}` and decide whether to resend.",
-        record.message_id, record.attempts, record.unconfirmed_sends,
+        record.message_id.shown(),
+        record.attempts,
+        record.unconfirmed_sends,
     )
 }
 
 pub(crate) fn still_queued(record: &MessageRecord, cause: &str, waited: Duration) -> String {
     let receiver = receiver_label(record);
     format!(
-        "Message {} to {receiver} has waited {}: {cause}.\nIt stays queued and will deliver at the receiver's next boundary. Withdraw it with `rimz message cancel {}`.",
-        record.message_id,
+        "Message {shown} to {receiver} has waited {}: {cause}.\nIt stays queued and will deliver at the receiver's next boundary. Withdraw it with `rimz message cancel {shown}`.",
         super::format_dwell(waited.as_secs()),
-        record.message_id,
+        shown = record.message_id.shown(),
     )
 }
 

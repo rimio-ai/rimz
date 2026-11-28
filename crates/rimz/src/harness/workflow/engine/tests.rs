@@ -629,13 +629,12 @@ fn active_and_parked_duplicates_return_the_existing_run_as_a_typed_outcome() {
         assert_eq!(
             error.to_string(),
             format!(
-                "workflow review already has run {} for {}",
-                record.id,
+                "workflow review already has run review#main for {}",
                 home.path().display()
             )
         );
         assert!(
-            matches!(&error, WorkflowErr::Exists { run, workflow, scope, task, kind }
+            matches!(&error, WorkflowErr::Exists { run, workflow, scope, task, kind, .. }
             if run == &record.id && workflow == &record.workflow && scope == home.path()
                 && task == &record.task && kind == &record.scope.kind),
             "{error:?}"

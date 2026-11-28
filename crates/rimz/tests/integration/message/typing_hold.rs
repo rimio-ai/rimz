@@ -249,7 +249,7 @@ fn boundary_hold_keeps_the_claim_budget_and_is_explained_without_mux_reads() {
     assert!(
         receipt.contains("held")
             && receipt.contains("someone is using")
-            && receipt.contains(record.message_id.as_str()),
+            && receipt.contains(&record.message_id.shown()),
         "{receipt}"
     );
     assert_eq!(fixture.writes(), 0);
@@ -504,7 +504,7 @@ fn a_held_hard_join_keeps_the_continue_owed_before_it() {
         format!(
             "compaction {} is already queued for {}; delivers at its next turn boundary, \
              then continues it if nothing else is waiting",
-            command.message_id,
+            command.message_id.shown(),
             rimz::address::handle_with_name("@claude", command.agent_name.as_deref())
         )
     );

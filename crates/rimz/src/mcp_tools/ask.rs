@@ -37,7 +37,7 @@ pub(super) fn arm(tools: &Tools, args: &AskArgs) -> Result<Answer, Failure> {
     let id = raised::raise_audited(&room.store, &room.workspace.session_name, ask)
         .map_err(anyhow::Error::from)?;
     Ok(Answer::data(&Armed {
-        id: id.to_string(),
+        id: id.shown(),
         status: "armed",
     }))
 }

@@ -1116,6 +1116,66 @@ fn peer_responses_preserve_each_turn() {
             .join("peer.output")
             .exists()
     );
+
+    // Records that store their turn name their files by it, each turn its own file.
+    let mut peer = AgentState::stub("claude", "session", AgentStatus::Idle);
+    peer.launch_id = Some("peer-launch".into());
+    peer.name = Some("peer".into());
+    peer.launched_by = Some(crate::agents::LaunchedBy {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: "launcher".into(),
+    });
+    let adapter = crate::agents::definition_by_kind("claude").unwrap();
+    let turn = |answer: &str| {
+        let mut record = create_peer_prompt(
+            &paths,
+            &peer,
+            Some("launcher"),
+            adapter,
+            "task",
+            Path::new("/repo"),
+            crate::store::run::ReportTo::Launcher,
+        )
+        .unwrap()
+        .unwrap();
+        record.last_message = Some(answer.into());
+        crate::store::run::write(&paths.runs_dir, &record).unwrap();
+        cancel(&paths, &runtime_for(&paths), &record.run_id).unwrap();
+        record
+    };
+    let turns = [turn("turn one"), turn("turn two")];
+    // A collected first turn leaves the second the highest, so the count goes on past it.
+    std::fs::remove_file(paths.runs_dir.join(format!("{}.json", turns[0].run_id))).unwrap();
+    let third = turn("turn three");
+    for (record, file, answer) in [
+        (&turns[0], "peer.output", "turn one"),
+        (&turns[1], "peer.2.output", "turn two"),
+        (&third, "peer.3.output", "turn three"),
+    ] {
+        let path = paths.out_reader_dir(Some("launcher")).join(file);
+        assert_eq!(response_path(&paths, record), Some(path.clone()));
+        assert_eq!(
+            std::fs::read_to_string(path).unwrap(),
+            format!("{answer}\n")
+        );
+    }
+
+    // An agent's own run under that reader holds its first answers: a peer turn follows them.
+    let mut own = RunRecord::new(
+        paths.workspace_id.clone(),
+        AgentKind::new_unchecked("claude"),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/repo").to_path_buf(),
+    );
+    own.agent_name = Some("solo".into());
+    own.reader = Some("launcher".into());
+    own.follow_ups = 1;
+    create(&paths, &own).unwrap();
+    let mut next = own.clone();
+    next.follow_ups = 0;
+    next.peer = first.peer.clone();
+    assert_eq!(next_turn(&paths, &next).unwrap(), 3);
     #[cfg(unix)]
     for dir in [
         paths.out_dir.clone(),
@@ -3340,6 +3400,7 @@ fn team_record(paths: &StatePaths, instance: &str) -> RunRecord {
         launch_id: "lead-launch".into(),
         instance: instance.parse().unwrap(),
     });
+    record.turn = Some(next_turn(paths, &record).unwrap());
     create(paths, &record).unwrap();
     record
 }
@@ -3496,10 +3557,8 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
             .unwrap()
             .is_none()
     );
-    let response = paths
-        .out_reader_dir(Some("launcher"))
-        .join(format!("lead.{}.output", first.run_id));
-    assert_eq!(std::fs::read_to_string(response).unwrap(), "done\n");
+    let response = paths.out_reader_dir(Some("launcher")).join("lead.output");
+    assert_eq!(std::fs::read_to_string(&response).unwrap(), "done\n");
     assert!(
         open_team_run_for(
             &paths,
@@ -3520,6 +3579,8 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
     assert_eq!(reopened.prompt, first.prompt);
     assert_eq!(reopened.reader.as_deref(), Some("launcher"));
     assert_eq!(reopened.last_message, None);
+    // `other` took turn 2 under the same reader and name.
+    assert_eq!(reopened.turn, Some(3));
     assert_eq!(
         open_team_run_for(
             &paths,
@@ -3527,7 +3588,28 @@ fn team_run_settles_once_per_done_and_reopens_for_the_next() {
         )
         .unwrap()
         .map(|run| run.run_id),
-        Some(reopened.run_id)
+        Some(reopened.run_id.clone())
+    );
+    record_assistant_message(
+        &paths,
+        &reopened.run_id,
+        "claude",
+        &"lead-1".into(),
+        "done again".into(),
+    )
+    .unwrap();
+    settle_team_run(&paths, &reopened.run_id, None, None)
+        .unwrap()
+        .expect("the next Done settles the reopened run");
+    assert_eq!(
+        std::fs::read_to_string(paths.out_reader_dir(Some("launcher")).join("lead.3.output"))
+            .unwrap(),
+        "done again\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&response).unwrap(),
+        "done\n",
+        "the queued report's file outlives the next stretch"
     );
     assert_eq!(
         open_team_run_for(

@@ -237,7 +237,8 @@ fn raise(first: Option<String>, text: Option<String>, globals: &GlobalFlags) -> 
     };
     render::finish(writeln!(
         render::out(),
-        "raised {ask_id} on {handle}{suffix}"
+        "raised {} on {handle}{suffix}",
+        ask_id.shown()
     ))
 }
 
@@ -266,7 +267,7 @@ fn withdraw(target: Option<&str>, globals: &GlobalFlags) -> Result<()> {
     render::finish(writeln!(
         render::out(),
         "withdrew {} from {}",
-        ask.ask_id,
+        ask.ask_id.shown(),
         rimz::address::named_handle(agent, &peers, true)
     ))
 }
@@ -380,7 +381,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let agent = resolve_open_ask(&ctx.store, &snapshot, target, &ctx.address_context())?
+    let (agent, ask_id) = resolve_open_ask(&ctx.store, &snapshot, target, &ctx.address_context())?
         .ok_or_else(|| anyhow::anyhow!(ask_commands::unknown_ask(target)))?;
     if agent.actionable_asks().next().is_none() {
         bail!(
@@ -388,10 +389,6 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
             rimz::address::named_handle(agent, &peers, true)
         );
     }
-    let ask_id = target
-        .starts_with("ask_")
-        .then(|| AskId::parse(target))
-        .transpose()?;
     let view = view_for_agent(
         store.paths(),
         agent,
@@ -409,7 +406,7 @@ fn show(target: &str, json: bool, globals: &GlobalFlags) -> Result<()> {
     write!(
         out,
         "{}  {}  {}",
-        render::paint(render::palette::accent(), view.detail.open.id.as_str()),
+        render::paint(render::palette::accent(), &view.detail.open.id.shown()),
         view.agent.display_name(),
         render::paint(
             render::palette::muted(),
@@ -522,9 +519,9 @@ impl OpenAskView {
             detail: &self.detail,
             pane: &self.agent.handle,
             target: if self.agent.name.is_some() || self.detail.delivery == AskDelivery::Raised {
-                self.detail.open.id.as_str()
+                self.detail.open.id.shown()
             } else {
-                &self.agent.handle
+                self.agent.handle.clone()
             },
         }
     }

@@ -383,6 +383,55 @@ fn ask_ids_are_short_time_sortable_tokens() {
 }
 
 #[test]
+fn shown_ids_keep_the_last_8_and_tokens_take_the_newest_match() {
+    let older = MessageId::parse("msg_06gc05m0d327d1d0").unwrap();
+    let newer = MessageId::parse("msg_06gc05m1d327d1d0").unwrap();
+    let other = MessageId::parse("msg_06gc05m2aaaaaaaa").unwrap();
+    assert_eq!(older.shown(), "msg_d327d1d0");
+    assert_eq!(older.to_string(), "msg_06gc05m0d327d1d0");
+    assert_eq!(
+        serde_json::to_string(&older).unwrap(),
+        "\"msg_06gc05m0d327d1d0\""
+    );
+    let ids = [older.clone(), newer.clone(), other.clone()];
+    let shown = MessageToken::parse("msg_d327d1d0").unwrap();
+    assert_eq!(shown.newest(&ids), Some(&newer));
+    let stored = MessageToken::parse(older.as_str()).unwrap();
+    assert_eq!(stored.newest(&ids), Some(&older));
+    assert_eq!(
+        MessageToken::parse("msg_00000000").unwrap().newest(&ids),
+        None
+    );
+    assert_eq!(shown.to_string(), "msg_d327d1d0");
+    for refused in [
+        "msg_d327d1d",
+        "msg_d327d1d0a",
+        "msg_D327D1D0",
+        "msg_d327d1dw",
+        "ask_d327d1d0",
+    ] {
+        assert!(MessageToken::parse(refused).is_err(), "{refused}");
+    }
+
+    let ask = AskId::parse("ask_06h1sqjigu0ulfg4").unwrap();
+    let later = AskId::parse("ask_06h1sqjjgu0ulfg4").unwrap();
+    assert_eq!(ask.shown(), "ask_gu0ulfg4");
+    assert_eq!(ask.to_string(), "ask_06h1sqjigu0ulfg4");
+    let asks = [later.clone(), ask.clone()];
+    assert_eq!(
+        AskToken::parse("ask_gu0ulfg4").unwrap().newest(&asks),
+        Some(&later)
+    );
+    assert_eq!(
+        AskToken::parse(ask.as_str()).unwrap().newest(&asks),
+        Some(&ask)
+    );
+    for refused in ["ask_gu0ulfg", "ask_0123456789ab", "msg_gu0ulfg4"] {
+        assert!(AskToken::parse(refused).is_err(), "{refused}");
+    }
+}
+
+#[test]
 fn uuid_prefixed_ids_reject_bad_json_values() {
     let parsed: Result<RunId, _> = serde_json::from_str("\"run_0123456789abcdef0123456789abcdef\"");
     assert!(parsed.is_ok());

@@ -261,8 +261,8 @@ Trailing lines report what the view left out:
 
 | Line | When |
 | --- | --- |
-| `... N older messages hidden (--limit 0 for all)` | N messages fall beyond the shown rows, counting every member of each hidden fold. |
-| `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. |
+| `... N older messages hidden (--limit 0 for all)` | N messages fall beyond the shown rows, counting every member of each hidden fold. At 1 it reads `message`. |
+| `... N system messages hidden (--system shows them)` | System messages matched the lane, status, and target filters. Printed even when no conversation rows remain. At 1 it reads `message`. |
 | `no messages in #cli-docs — rimz message list --all shows every channel` | Nothing matched. It reads `no messages in #main` at the project root, bare `no messages` with `--all`, and names the status with `--status` (`no queued messages …`). |
 
 `--json` applies the same filters and prints no hidden counts. Each row carries `message_id`, `kind`, `agent_id`, `sender`, `body` (`prompt` or `command`), `gate`, `force`, `status`, `enqueued_at`, `updated_at`, `attempts`, and `unconfirmed_sends`. `gate` is `done`, `any`, or `resume` (an auto-continue or budget continuation RimZ queues for a `paused` agent, which opens only while the agent reads `paused`). When set, a row adds `about_run` (the run a subagent restart or stall notice, a subagent deadline stop, a verify re-prompt, or a signal forwarded to a workflow step's leader, is about), `address` (the recipient's handle at send time), `agent_name`, `channel`, `text`, `pane_id` (the pane a delivery attempt wrote to; a queued row carries none, so delivery writes to the pane the agent holds then), `register_by`, `last_attempt_at`, `last_error`, `delivered_at`, `not_before`, `after`, `when`, `retry_after`, `auto_compact`, `soft_compact` (`wrap_up` for the mid-turn compaction reminder an older binary steered, or `continue` for the continue queued behind a compaction command), `compacted_context_tokens`, and `premises` (each an object whose `premise` is `lifespan`, `not_prompted_since`, `stage_visit`, `provider_park`, or `still_queued`).
@@ -289,6 +289,8 @@ Adjacent `queued` timeline events fold when they agree on attempt number and on 
 A follow-up waiting for a resumed child says `waiting for @child's resumed provider to start a session`, with its absolute UTC deadline. The JSON message row and delivery check include `register_by` while it waits. Registration expiry applies only while the card is absent, ended no later than enqueue, or resumed without a session start from a provider whose kind reports one on resume; once reconciled, `show` names the registration failure instead. A later end shows the ordinary receiver-ended reason.
 
 ### Change a queued message
+
+Each `<id>` is a message id as receipts and rows print it: `msg_` and the last 8 characters of the stored id. The stored 16-character id that `--json` prints as `message_id` works too, a short id that several messages share selects the newest of them, and an id of any other length is a usage error (exit 2).
 
 | Command | Accepts | Prints |
 | --- | --- | --- |

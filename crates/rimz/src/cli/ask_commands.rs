@@ -5,7 +5,8 @@ use rimz::agents::{AskKind, AskReply, AskRoute, OpenAskDetail};
 pub(super) struct AskCommands<'a> {
     pub(super) detail: &'a OpenAskDetail,
     pub(super) pane: &'a str,
-    pub(super) target: &'a str,
+    /// What the printed commands name: the agent's handle, or the ask's shown id.
+    pub(super) target: String,
 }
 
 impl AskCommands<'_> {

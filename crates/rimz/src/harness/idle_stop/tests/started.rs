@@ -15,6 +15,18 @@ fn read(
     agent: &AgentState,
     you: bool,
 ) -> Started {
+    read_as(store, root, agents, agent, you, false)
+}
+
+/// The read from a seat that names messages and runs by their stored ids when `stored_ids`.
+fn read_as(
+    store: &Store,
+    root: &std::path::Path,
+    agents: &[AgentState],
+    agent: &AgentState,
+    you: bool,
+    stored_ids: bool,
+) -> Started {
     let snapshot = SidebarSnapshot::build_with_agents(
         store.paths().workspace_id.clone(),
         agents.to_vec(),
@@ -30,6 +42,7 @@ fn read(
         reader: &reader,
         you,
         rimz: "rimz",
+        stored_ids,
     };
     started(store, &snapshot, shown, &seat, ts(DUE)).expect("started")
 }
@@ -452,8 +465,11 @@ fn messages_and_runs_on_their_way_hold_as_their_own_rows() {
         // Listing them ends nothing, so their row offers no command.
         let (name, command) = if message.sender.is_conversation() {
             (
-                message.message_id.to_string(),
-                Some(format!("rimz message cancel {}", message.message_id)),
+                message.message_id.shown(),
+                Some(format!(
+                    "rimz message cancel {}",
+                    message.message_id.shown()
+                )),
             )
         } else {
             ("1 system message".to_owned(), None)
@@ -485,7 +501,7 @@ fn messages_and_runs_on_their_way_hold_as_their_own_rows() {
     assert!(matches!(verdict, Verdict::Hold(_)), "{verdict:?}");
     assert_eq!(
         rows(&read.holding),
-        [(RowKind::Message, sent.message_id.as_str())]
+        [(RowKind::Message, sent.message_id.shown().as_str())]
     );
     assert_eq!(read.holding[0].command, None);
     drop(dir);
@@ -889,6 +905,7 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
     let recurring = fired_run(&store, dir.path(), "nightly", &agent);
     // A one-shot task's row is consumed at its fire; only its run is left.
     let one_shot = fired_run(&store, dir.path(), "gate", &agent);
+    let runs = crate::store::workflow::RunNames::new(store.paths());
     let read = read(
         &store,
         dir.path(),
@@ -900,7 +917,7 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
         rows(&read.outliving),
         [
             (RowKind::Booked, "nightly"),
-            (RowKind::Workflow, one_shot.id.as_str())
+            (RowKind::Workflow, runs.shown(&one_shot.id).as_str())
         ]
     );
     let task = &read.outliving[0];
@@ -911,13 +928,16 @@ fn a_booked_task_fires_from_its_last_fire_and_carries_its_run() {
     assert!(
         task.detail
             .iter()
-            .any(|fact| fact.contains(recurring.id.as_str())),
+            .any(|fact| fact == &format!("run {}", runs.shown(&recurring.id))),
         "{:?}",
         task.detail
     );
     assert_eq!(
         read.outliving[1].command,
-        Some(format!("rimz workflow cancel {}", one_shot.id))
+        Some(format!(
+            "rimz {}",
+            crate::store::workflow::workflow_command("cancel", &runs.shown(&one_shot.id), &[])
+        ))
     );
 }
 
@@ -1013,16 +1033,28 @@ fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_out
         ),
     ] {
         let (dir, store) = fixture();
-        let (agent, _) = rested();
+        let (mut agent, _) = rested();
         register(&store, "session-1", None);
         register(&store, "session-2", None);
         let id = started_run(&store, &agent, launch, run);
-        let (verdict, read) = both(
+        let (verdict, _) = both(
             &store,
             dir.path(),
             std::slice::from_ref(&agent),
             &agent,
             DUE,
+        );
+        // The wait the snapshot projects on the starter of a run that owes it a report, which
+        // lists as the run's own row.
+        if launch == "session-1" && run.1 == "owed" {
+            agent.pending_waits.push(workflow_wait(id.as_str()));
+        }
+        let read = read(
+            &store,
+            dir.path(),
+            std::slice::from_ref(&agent),
+            &agent,
+            true,
         );
         if holds {
             assert_eq!(
@@ -1033,7 +1065,7 @@ fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_out
         } else {
             assert_eq!(verdict, Verdict::Stop { idle_secs: 180 }, "{case}");
         }
-        let listed = [(RowKind::Workflow, id.as_str())];
+        let listed = [(RowKind::Workflow, "review#main")];
         let (holding, outliving): (&[_], &[_]) = match group {
             Some("holding") => (&listed, &[]),
             Some(_) => (&[], &listed),
@@ -1044,9 +1076,131 @@ fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_out
         let row = read.holding.iter().chain(&read.outliving).next();
         assert_eq!(
             row.and_then(|row| row.command.clone()),
-            cancel.then(|| format!("rimz workflow cancel {id}")),
+            cancel.then(|| "rimz workflow cancel 'review#main'".to_owned()),
             "{case}"
         );
+        // The address names the workflow, so the facts carry only what the name does not.
+        let owed = (run.0 == "done").then_some("report owed");
+        assert_eq!(
+            row.map(|row| row.detail.clone()),
+            group.map(|_| owed.into_iter().map(str::to_owned).collect::<Vec<_>>()),
+            "{case}"
+        );
+        let json = read_as(
+            &store,
+            dir.path(),
+            std::slice::from_ref(&agent),
+            &agent,
+            true,
+            true,
+        );
+        let stored = [(RowKind::Workflow, id.as_str())];
+        let listed: &[_] = if group.is_some() { &stored } else { &[] };
+        let json_rows = [rows(&json.holding), rows(&json.outliving)].concat();
+        assert_eq!(json_rows, listed, "{case}");
+        // A stored id names no workflow, so the facts name it. A loop-fired run the agent
+        // does not hold lists under its booking chain, whose facts are the task's.
+        let workflow = (group == Some("holding") || !run.2).then_some("review");
+        let row = json.holding.iter().chain(&json.outliving).next();
+        assert_eq!(
+            row.map(|row| row.detail.clone()),
+            group.map(|_| workflow
+                .into_iter()
+                .chain(owed)
+                .map(str::to_owned)
+                .collect()),
+            "{case}"
+        );
+    }
+}
+
+fn workflow_wait(run: &str) -> PendingWait {
+    PendingWait {
+        class: crate::agents::PendingWaitClass::Working,
+        name: run.to_owned(),
+        trigger: PendingWaitTrigger::Workflow {
+            workflow: "review".to_owned(),
+        },
+        armed_at: Some(ts(900)),
+    }
+}
+
+#[test]
+fn a_workflow_wait_whose_run_is_not_on_record_lists_as_a_wait() {
+    let (dir, store) = fixture();
+    let (mut agent, _) = rested();
+    let run = crate::ids::WorkflowRunId::new();
+    agent.pending_waits.push(workflow_wait(run.as_str()));
+    let read = read(
+        &store,
+        dir.path(),
+        std::slice::from_ref(&agent),
+        &agent,
+        true,
+    );
+    assert_eq!(rows(&read.holding), [(RowKind::Wait, run.as_str())]);
+    // No `rimz watch` row holds a run's wait, and the run is not one this seat can cancel.
+    assert_eq!(read.holding[0].command, None);
+}
+
+/// Each wait row the agent's own seat reads offers the command that ends that wait: `rimz watch
+/// cancel` for a wait the agent armed, and none for a launched agent or team no row names,
+/// whose wait no `rimz watch` row holds.
+#[test]
+fn a_wait_row_offers_the_cancel_of_its_own_kind_or_none() {
+    for (trigger, command) in [
+        (
+            PendingWaitTrigger::Timer {
+                due: ts(DUE + 60),
+                delay: None,
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Condition {
+                when: "ci.green".to_owned(),
+                hold: None,
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Subagent {
+                active_at: ts(900),
+                target: None,
+                deadline_at: None,
+                settled: None,
+            },
+            None,
+        ),
+        (PendingWaitTrigger::Team { stage: None }, None),
+    ] {
+        let (dir, store) = fixture();
+        let (mut agent, _) = rested();
+        agent.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
+            name: "wait-x".to_owned(),
+            trigger: trigger.clone(),
+            armed_at: Some(ts(900)),
+        });
+        let read = read(
+            &store,
+            dir.path(),
+            std::slice::from_ref(&agent),
+            &agent,
+            true,
+        );
+        assert_eq!(
+            rows(&read.holding),
+            [(RowKind::Wait, "wait-x")],
+            "{trigger:?}"
+        );
+        assert_eq!(read.holding[0].command.as_deref(), command, "{trigger:?}");
     }
 }
 

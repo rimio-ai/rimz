@@ -949,6 +949,46 @@ impl MessageId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The form an agent reads: `msg_` and the last 8 characters of the stored token.
+    pub fn shown(&self) -> String {
+        shown_short_id(MESSAGE_ID_PREFIX, &self.0)
+    }
+}
+
+/// A message id typed back: the stored `msg_` token or its [`MessageId::shown`] form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MessageToken(String);
+
+impl MessageToken {
+    pub fn parse(value: &str) -> Result<Self, InvalidIdToken> {
+        parse_short_token(MESSAGE_ID_PREFIX, value).map(Self)
+    }
+
+    /// The newest of `ids` this token names: a stored token names itself, a shown one every id
+    /// that ends in its 8 characters.
+    pub fn newest<'a>(
+        &self,
+        ids: impl IntoIterator<Item = &'a MessageId>,
+    ) -> Option<&'a MessageId> {
+        ids.into_iter()
+            .filter(|id| names_short_id(&self.0, &id.0))
+            .max()
+    }
+}
+
+impl fmt::Display for MessageToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl FromStr for MessageToken {
+    type Err = InvalidIdToken;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::parse(s)
+    }
 }
 
 /// Per-blocking-prompt identifier.
@@ -964,6 +1004,13 @@ pub struct AskId(String);
 pub struct InvalidAskId(String);
 
 const ASK_ID_PREFIX: &str = "ask_";
+
+/// A typed-back ask or message token that is neither a stored id nor its shown form.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "invalid id `{0}`; expected `{1}` followed by 16 lowercase base32hex characters, or their last 8"
+)]
+pub struct InvalidIdToken(String, &'static str);
 
 impl AskId {
     pub fn new() -> Self {
@@ -986,6 +1033,34 @@ impl AskId {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// The form an agent reads: `ask_` and the last 8 characters of the stored token.
+    pub fn shown(&self) -> String {
+        shown_short_id(ASK_ID_PREFIX, &self.0)
+    }
+}
+
+/// An ask id typed back: the stored `ask_` token or its [`AskId::shown`] form.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AskToken(String);
+
+impl AskToken {
+    pub fn parse(value: &str) -> Result<Self, InvalidIdToken> {
+        parse_short_token(ASK_ID_PREFIX, value).map(Self)
+    }
+
+    /// The newest of `ids` this token names, as [`MessageToken::newest`] reads one.
+    pub fn newest<'a>(&self, ids: impl IntoIterator<Item = &'a AskId>) -> Option<&'a AskId> {
+        ids.into_iter()
+            .filter(|id| names_short_id(&self.0, &id.0))
+            .max_by(|left, right| left.0.cmp(&right.0))
+    }
+}
+
+impl fmt::Display for AskToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
     }
 }
 
@@ -1026,6 +1101,31 @@ impl<'de> Deserialize<'de> for AskId {
         let raw = String::deserialize(deserializer)?;
         Self::parse(&raw).map_err(serde::de::Error::custom)
     }
+}
+
+const SHOWN_LEN: usize = 8;
+
+fn shown_short_id(prefix: &str, stored: &str) -> String {
+    format!("{prefix}{}", &stored[stored.len() - SHOWN_LEN..])
+}
+
+fn parse_short_token(prefix: &'static str, value: &str) -> Result<String, InvalidIdToken> {
+    value
+        .strip_prefix(prefix)
+        .filter(|token| matches!(token.len(), MESSAGE_ID_LEN | SHOWN_LEN))
+        .filter(|token| {
+            token
+                .bytes()
+                .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'v'))
+        })
+        .map(|_| value.to_owned())
+        .ok_or_else(|| InvalidIdToken(value.to_owned(), prefix))
+}
+
+/// Both carry the same prefix, so a stored token names only itself and a shown one every stored
+/// id that ends in its 8 characters.
+fn names_short_id(token: &str, stored: &str) -> bool {
+    stored.ends_with(token.split_once('_').map_or(token, |(_, tail)| tail))
 }
 
 fn new_short_id(prefix: &str) -> String {

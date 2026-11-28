@@ -18,8 +18,8 @@ fn machine_repeats_keep_the_newest_id_age_and_snippet() {
 
     assert_eq!(output.matches(" → ").count(), 1, "{output}");
     assert!(output.contains("delivered ×2  3m ago"), "{output}");
-    assert!(output.contains(newest.message_id.as_str()), "{output}");
-    assert!(!output.contains(oldest.message_id.as_str()), "{output}");
+    assert!(output.contains(&newest.message_id.shown()), "{output}");
+    assert!(!output.contains(&oldest.message_id.shown()), "{output}");
     assert!(output.contains("over 14m · newest keepalive"), "{output}");
     assert!(!output.contains("older keepalive"), "{output}");
 }
@@ -282,7 +282,7 @@ fn message_limit_keeps_a_whole_repeat_and_counts_hidden_messages() {
     assert!(output.contains("queued ×2"), "{output}");
     assert!(!output.contains("hidden conversation"), "{output}");
     assert!(
-        output.ends_with("... 1 older messages hidden (--limit 0 for all)\n"),
+        output.ends_with("... 1 older message hidden (--limit 0 for all)\n"),
         "{output}"
     );
 }
@@ -642,20 +642,25 @@ fn retain_conversation_keeps_human_and_agent_rows() {
 
 #[test]
 fn message_digest_reports_hidden_system_rows() {
-    for rows in [Vec::new(), vec![message_row("sess-coder", None, "task")]] {
-        let mut out = Vec::new();
-        render_message_digest(
-            &mut out,
-            rows,
-            &[],
-            &LaneScope::Root,
-            0,
-            2,
-            &empty_message_digest(&LaneScope::Root, None),
-        )
-        .unwrap();
-        let output = String::from_utf8(out).unwrap();
-        assert!(output.ends_with("... 2 system messages hidden (--system shows them)\n"));
+    for (hidden, line) in [
+        (1, "... 1 system message hidden (--system shows them)\n"),
+        (2, "... 2 system messages hidden (--system shows them)\n"),
+    ] {
+        for rows in [Vec::new(), vec![message_row("sess-coder", None, "task")]] {
+            let mut out = Vec::new();
+            render_message_digest(
+                &mut out,
+                rows,
+                &[],
+                &LaneScope::Root,
+                0,
+                hidden,
+                &empty_message_digest(&LaneScope::Root, None),
+            )
+            .unwrap();
+            let output = String::from_utf8(out).unwrap();
+            assert!(output.ends_with(line), "{output}");
+        }
     }
     assert!(!render_digest(Vec::new(), LaneScope::Root, None).contains("system messages hidden"));
 }

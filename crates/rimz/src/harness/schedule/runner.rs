@@ -1127,7 +1127,8 @@ impl<'a> Fire<'a> {
             prompt::Evidence::Scheduled
         };
         if self.entry.launch_kind().is_some() && self.entry.watch.is_none() {
-            body = prompt::compose_launch(&self.name, &evidence, &body);
+            body =
+                prompt::compose_launch(&self.name, &evidence, &body, &self.entry.resolved_root());
         } else if self.entry.wait.is_some()
             || signal_trigger
             || self.signal.is_some()

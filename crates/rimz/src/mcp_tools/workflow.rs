@@ -82,7 +82,11 @@ pub(super) fn start(tools: &Tools, args: &WorkflowArgs) -> Result<Answer, Failur
             let report = if args.detach { DETACHED_REPORT } else { REPORT };
             return Ok(Answer::data(&Start {
                 warnings,
-                ..Start::running(TaskKind::Workflow, &record.id.to_string(), report)
+                ..Start::running(
+                    TaskKind::Workflow,
+                    &crate::store::workflow::RunNames::new(room.store.paths()).shown(&record.id),
+                    report,
+                )
             }));
         }
         Ok(None) => Failure::new("the worktree was declined; nothing started"),

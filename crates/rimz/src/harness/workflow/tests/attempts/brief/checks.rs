@@ -74,7 +74,13 @@ fn a_judge_note_hides_its_prompt_file_and_rest_checks_stay_ordered() {
     let (_dir, state, record) = setup(definition);
     let paths = state.workflow(&record.id);
     let spec = crate::harness::workflow::load(&record.definition_dir(&paths)).unwrap();
-    let text = crate::harness::workflow::brief::step(&paths, &spec, &record);
+    let text = crate::harness::workflow::brief::step(
+        &paths,
+        &spec,
+        &record,
+        None,
+        &crate::store::workflow::RunNames::new(&state),
+    );
     assert!(!text.contains("private-judge.md"), "{text}");
     assert!(
         text.contains("The check `review` tests `the diff is clean`."),

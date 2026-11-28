@@ -92,7 +92,13 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
             ("then".into(), "build".into())
         ]
     );
-    let brief = super::super::brief::step(&state.workflow(&record.id), &spec, &next);
+    let brief = super::super::brief::step(
+        &state.workflow(&record.id),
+        &spec,
+        &next,
+        None,
+        &crate::store::workflow::RunNames::new(&state),
+    );
     assert!(
         brief.contains("slept at") && !brief.contains("answered `then`"),
         "{brief}"
@@ -106,7 +112,13 @@ fn plain_sleep_waits_until_its_entry_based_end_and_preserves_input_and_routed_ou
     update(&state, &waiting);
     let next = advance_sleep(&state, &record);
     assert_eq!(next.node, "build");
-    let brief = super::super::brief::step(&state.workflow(&record.id), &spec, &next);
+    let brief = super::super::brief::step(
+        &state.workflow(&record.id),
+        &spec,
+        &next,
+        None,
+        &crate::store::workflow::RunNames::new(&state),
+    );
     assert!(
         brief.contains("The `deadline` route from `cooldown` sent the run here.")
             && !brief.contains("slept at"),

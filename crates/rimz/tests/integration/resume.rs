@@ -801,7 +801,14 @@ mod agent_ref {
                 output.status.success(),
                 card.workflow.is_some(),
                 stdout.contains(&format!("outside run `{}`", pin.run)),
-                stderr.contains(&format!("rimz workflow restart {} --continue", pin.run)),
+                stderr.contains(&format!(
+                    "rimz {}",
+                    rimz::store::workflow::workflow_command(
+                        "restart",
+                        &rimz::store::workflow::RunNames::new(store.paths()).shown(&pin.run),
+                        &["--continue"]
+                    )
+                )),
                 stderr.contains("keeping its workflow pin"),
                 !fixture.trace().contains("layout-json\t"),
             ));

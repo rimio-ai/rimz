@@ -360,6 +360,7 @@ fn request_idle_stop(reference: &str, when_idle: WhenIdle, globals: &GlobalFlags
             reader: &reader,
             you,
             rimz: &prefix,
+            stored_ids: false,
         };
         Ok(rimz::harness::idle_stop::started::started(
             &ctx.store, &booked, shown, &seat, now,

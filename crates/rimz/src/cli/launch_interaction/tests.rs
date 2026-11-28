@@ -107,9 +107,8 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
         opened_by: Vec::new(),
     });
     run.reader = Some("launcher".into());
-    let expected = paths
-        .out_reader_dir(Some("launcher"))
-        .join(format!("peer.{}.output", run.run_id));
+    run.turn = Some(1);
+    let expected = paths.out_reader_dir(Some("launcher")).join("peer.output");
     let receipt = |run: &RunRecord, channel| {
         let mut receipt = Vec::new();
         write_peer_receipt(&mut receipt, &[], Some(run), channel, &paths).unwrap();
@@ -128,6 +127,21 @@ fn peer_receipt_names_the_host_out_path_under_its_reader() {
             && unlaned.contains("rimz message @peer '<text>'\n"),
         "{unlaned}"
     );
+    let mut later = run.clone();
+    later.turn = Some(2);
+    let mut legacy = run.clone();
+    legacy.turn = None;
+    for (run, file) in [
+        (&later, "peer.2.output".to_owned()),
+        (&legacy, format!("peer.{}.output", legacy.run_id)),
+    ] {
+        let path = paths.out_reader_dir(Some("launcher")).join(file);
+        let receipt = receipt(run, None);
+        assert!(
+            receipt.contains(&format!("lands at {} ", path.display())),
+            "{receipt}"
+        );
+    }
     let mut empty = Vec::new();
     write_peer_receipt(
         &mut empty,

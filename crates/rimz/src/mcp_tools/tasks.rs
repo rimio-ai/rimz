@@ -119,7 +119,7 @@ impl Sources<'_> {
                     .description
                     .as_deref()
                     .or(agent.first_prompt.as_deref());
-                let name = agent.name.clone().unwrap_or_else(|| launch.to_string());
+                let name = super::owned::agent_name(self.agents.iter().copied(), agent);
                 (
                     task_kind,
                     name,
@@ -142,9 +142,10 @@ impl Sources<'_> {
                 (TaskKind::Team, instance.to_string(), "running", about, None)
             }
             RowKey::Workflow(id) => {
-                let found = crate::ids::WorkflowRunId::parse(id)
-                    .ok()
-                    .and_then(|run| crate::store::workflow::find(self.state, &run).ok()?);
+                let run = crate::ids::WorkflowRunId::parse(id).ok();
+                let found = run
+                    .as_ref()
+                    .and_then(|run| crate::store::workflow::find(self.state, run).ok()?);
                 let header = found.as_ref().and_then(|found| found.class.header());
                 let ended = header.as_ref().is_some_and(|header| header.is_terminal());
                 let prompt = match found.as_ref().map(|found| &found.class) {
@@ -155,7 +156,11 @@ impl Sources<'_> {
                 };
                 let status = if ended { "done" } else { "running" };
                 let created = header.and_then(|header| header.created_at);
-                (TaskKind::Workflow, id.clone(), status, prompt, created)
+                let name = run.map_or_else(
+                    || id.clone(),
+                    |run| super::owned::run_name(&self.owners, &run),
+                );
+                (TaskKind::Workflow, name, status, prompt, created)
             }
             RowKey::Task(name) => {
                 let status = if row.status == "disabled" {

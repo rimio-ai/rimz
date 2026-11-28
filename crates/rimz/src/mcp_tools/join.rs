@@ -160,7 +160,7 @@ pub(super) fn join(
             &room,
             &snapshot,
             id,
-            (row, live),
+            (row, live, owned::agent_name(owners.rows(), row)),
             timeout,
             (&mut interrupt, cancelled),
         )?,
@@ -244,8 +244,12 @@ pub(super) fn join(
                 }
                 (_, Reading::NeedsYou { .. }) => Joined {
                     hint: Some(format!(
-                        "the run waits on a person; `rimz workflow show {}` says why",
-                        target.id
+                        "the run waits on a person; `rimz {}` says why",
+                        crate::store::workflow::workflow_command(
+                            "show",
+                            &owned::run_name(&owners, &target.id),
+                            &[]
+                        )
                     )),
                     ..Joined::new(id, "running")
                 },
@@ -437,15 +441,11 @@ fn join_agent(
     room: &Room,
     snapshot: &SidebarSnapshot,
     id: &str,
-    (row, live): (&AgentState, Option<&AgentState>),
+    (row, live, name): (&AgentState, Option<&AgentState>, String),
     timeout: Duration,
     (interrupt, cancelled): (&mut dyn FnMut() -> Option<Interrupt>, &dyn Fn() -> bool),
 ) -> Result<Joined, Failure> {
     let store = &room.store;
-    let name = row
-        .name
-        .clone()
-        .unwrap_or_else(|| row.launch_key().to_string());
     let run = crate::launcher::stop::newest_run_for_agent(store, row)?;
     let latest_turn = |run: &crate::store::run::RunRecord| -> Result<bool, Failure> {
         let Some(peer) = live.filter(|_| run.peer.is_some()) else {

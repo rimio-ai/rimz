@@ -177,6 +177,7 @@ fn started_runs(run: &resolve::Located, out: &mut impl Write) -> Result<()> {
         .as_ref()
         .and_then(|attempt| attempt.runs.as_ref())
         .map_or(&run.record.joined, |started| &started.runs);
+    let names = records::RunNames::new(&run.state);
     for started in runs {
         let (state, checkout) =
             match records::find(&run.state, &started.id)?.map(|found| found.class) {
@@ -197,7 +198,12 @@ fn started_runs(run: &resolve::Located, out: &mut impl Write) -> Result<()> {
                 ),
                 None => ("not started", None),
             };
-        write!(out, "started {} {} {state}", started.id, started.workflow)?;
+        write!(
+            out,
+            "started {} {} {state}",
+            names.shown(&started.id),
+            started.workflow
+        )?;
         if let Some(checkout) = checkout {
             write!(out, " · {}", render::home_relative_path(&checkout))?;
         }

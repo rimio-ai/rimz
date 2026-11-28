@@ -99,7 +99,8 @@ fn text(state: &crate::StatePaths, run: &WorkflowRunId, header: &RunHeader) -> S
         },
     };
     let workflow = header.workflow.as_deref().unwrap_or("unnamed workflow");
-    let mut lines = vec![format!("workflow run {run} ({workflow}) ended {ending}")];
+    let shown = crate::store::workflow::RunNames::new(state).shown(run);
+    let mut lines = vec![format!("workflow run {shown} ({workflow}) ended {ending}")];
     if let Some(reason) = header.reason.as_deref().or(cause) {
         lines.push(format!("reason {reason}"));
     }
@@ -113,6 +114,9 @@ fn text(state: &crate::StatePaths, run: &WorkflowRunId, header: &RunHeader) -> S
         let notes = state.notes_run(crate::disk::paths::Class::AutomationNotes, notes);
         lines.push(format!("notes {}", notes.display()));
     }
-    lines.push(format!("history: rimz workflow show {run} --history"));
+    lines.push(format!(
+        "history: rimz {}",
+        crate::store::workflow::workflow_command("show", &shown, &["--history"])
+    ));
     lines.join("\n")
 }

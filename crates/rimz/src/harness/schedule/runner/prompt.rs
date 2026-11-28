@@ -1,5 +1,7 @@
 //! Self-explaining wait headlines, evidence, and verbatim notes.
 
+use std::path::Path;
+
 use jiff::Timestamp;
 
 use crate::config::{TaskEntry, WaitMeta, WatchSpec};
@@ -72,7 +74,12 @@ pub(super) fn compose_wait(
 /// the rule, then the prompt. A fire with no event is the prompt alone, since
 /// the launch reminder's Loop section already carries the standing frame, and
 /// an empty prompt leaves the event alone.
-pub(super) fn compose_launch(name: &str, evidence: &Evidence<'_>, prompt: &str) -> String {
+pub(super) fn compose_launch(
+    name: &str,
+    evidence: &Evidence<'_>,
+    prompt: &str,
+    project_root: &Path,
+) -> String {
     let event = match evidence {
         Evidence::Condition(condition) => condition
             .readings
@@ -85,7 +92,7 @@ pub(super) fn compose_launch(name: &str, evidence: &Evidence<'_>, prompt: &str) 
             })
             .collect::<Vec<_>>(),
         Evidence::Signal(signal) => {
-            let mut event = vec![signal_headline(signal)];
+            let mut event = vec![signal_headline(signal, project_root)];
             event.extend(signal_details(signal));
             event
         }
@@ -111,7 +118,10 @@ fn wait_line(task: &TaskEntry, meta: Option<&WaitMeta>, evidence: &Evidence<'_>)
         return spec.headline();
     }
     if let Evidence::Signal(signal) = evidence {
-        return format!("waited on {}", signal_headline(signal));
+        return format!(
+            "waited on {}",
+            signal_headline(signal, &task.resolved_root())
+        );
     }
     if let Some(selector) = &task.signal {
         return format!("waited on {selector}{}", subscription_scope(task));
@@ -184,8 +194,9 @@ fn fired_after(meta: Option<&WaitMeta>, now: Timestamp) -> String {
     format!("fired after {}", elapsed_label(elapsed_ms))
 }
 
-fn signal_headline(signal: &Signal) -> String {
-    let subject = signal_subject(&signal.name, &signal.payload);
+fn signal_headline(signal: &Signal, project_root: &Path) -> String {
+    let runs = crate::store::workflow::RunNames::of_project(project_root);
+    let subject = signal_subject(&signal.name, &signal.payload, &runs);
     if subject.is_empty() {
         signal.name.to_string()
     } else {

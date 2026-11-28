@@ -65,6 +65,7 @@ fn collect_show_report(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
     capture: Option<CaptureRequest>,
+    json: bool,
 ) -> Result<(ShowReport, Option<anyhow::Error>)> {
     let agent_result = resolve_live_or_audit(
         store,
@@ -156,6 +157,7 @@ fn collect_show_report(
             reader: &reader,
             you: super::report::is_me(store, snapshot, &reader, agent),
             rimz: &prefix,
+            stored_ids: json,
         };
         let mut started =
             rimz::harness::idle_stop::started::started(store, snapshot, agent, &seat, now)?;
@@ -289,12 +291,7 @@ fn render_show_sections(
         render_run_section(w, run, now)?;
     }
     if !report.messages.is_empty() || report.system_messages_hidden > 0 {
-        render_messages_section(
-            w,
-            &report.messages,
-            report.system_messages_hidden,
-            &agent.id,
-        )?;
+        render_messages_section(w, &report.messages, report.system_messages_hidden, agent)?;
     }
     if let Some(started) = report
         .started
@@ -341,7 +338,7 @@ fn show_ask_next_step(
             crate::cli::ask_commands::AskCommands {
                 detail: &detail,
                 pane: handle,
-                target: handle,
+                target: handle.to_owned(),
             }
             .next_step()
         }),
@@ -368,6 +365,7 @@ pub(super) fn show_agent(
             ansi,
             mux: ctx.mux(),
         }),
+        json,
     )?;
     if let Some(read) = &report.started_unread {
         super::report::warn_started_unread(&mut render::err(), "", read)?;
@@ -871,13 +869,16 @@ fn render_messages_section(
     w: &mut impl Write,
     messages: &[ShowMessage],
     system_messages_hidden: usize,
-    agent_id: &rimz::ids::AgentSessionId,
+    agent: &AgentReportEntry,
 ) -> std::io::Result<()> {
     section(w, "Messages")?;
     let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
     for message in messages {
         table.row([
-            render::cell(message.id.as_str()),
+            render::cell(
+                rimz::ids::MessageId::parse(&message.id)
+                    .map_or_else(|_| message.id.clone(), |id| id.shown()),
+            ),
             render::cell(message.status.as_str()).fg(render::status::message(message.status)),
             render::cell(message.from.as_str()).fg(render::palette::meta()),
             render::cell(message.age.as_str()),
@@ -888,13 +889,15 @@ fn render_messages_section(
         table.render(w)?;
     }
     if system_messages_hidden > 0 {
+        let plural = if system_messages_hidden == 1 { "" } else { "s" };
         writeln!(
             w,
             "{}",
             render::paint(
                 render::palette::faint(),
                 &format!(
-                    "{system_messages_hidden} system messages hidden — rimz message list --all --system @{agent_id}"
+                    "{system_messages_hidden} system message{plural} hidden — rimz message list --all --system {}",
+                    agent.handle
                 ),
             )
         )?;

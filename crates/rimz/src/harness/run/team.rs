@@ -62,6 +62,7 @@ pub(super) fn create_team_run(
         launch_id: launch_id.clone(),
         instance,
     });
+    record.turn = Some(super::next_turn(paths, &record)?);
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
 }
@@ -149,6 +150,7 @@ pub fn reopen_team_run(paths: &StatePaths, instance: &TeamInstanceId) -> Result<
     record.team.clone_from(&newest.team);
     record.report_to = newest.report_to;
     record.status = RunStatus::Running;
+    record.turn = Some(super::next_turn(paths, &record)?);
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
 }

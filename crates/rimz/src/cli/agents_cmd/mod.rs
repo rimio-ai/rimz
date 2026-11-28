@@ -178,6 +178,8 @@ enum WorkflowPin {
     None,
     Current {
         run: rimz::ids::WorkflowRunId,
+        /// How the agent reads the run: its address where that selects it, else its id.
+        shown: String,
         step: String,
         role: rimz::agents::WorkflowAttemptRole,
     },
@@ -189,15 +191,18 @@ impl WorkflowPin {
     fn former(self) -> Result<Option<rimz::agents::WorkflowAttemptRef>> {
         match self {
             Self::Current {
-                run,
+                shown,
                 step,
                 role: rimz::agents::WorkflowAttemptRole::Judge,
+                ..
             } => bail!(
-                "agent is still owned by run `{run}`, judging check {step}; wait for its \
-                 answer or cancel the run with `rimz workflow cancel {run}`"
+                "agent is still owned by run `{shown}`, judging check {step}; wait for its \
+                 answer or cancel the run with `rimz {}`",
+                rimz::store::workflow::workflow_command("cancel", &shown, &[])
             ),
-            Self::Current { run, .. } => bail!(
-                "agent is still owned by run `{run}`; use `rimz workflow restart {run} --continue`"
+            Self::Current { shown, .. } => bail!(
+                "agent is still owned by run `{shown}`; use `rimz {}`",
+                rimz::store::workflow::workflow_command("restart", &shown, &["--continue"])
             ),
             Self::Former(pin) => Ok(Some(pin)),
             Self::None | Self::Unreadable => Ok(None),
@@ -254,6 +259,7 @@ fn workflow_pin(store: &rimz::Store, agent: &AgentState) -> Result<WorkflowPin> 
     {
         return Ok(WorkflowPin::Current {
             run: pin.run.clone(),
+            shown: workflow::RunNames::new(store.paths()).shown(&pin.run),
             step: attempt.node.clone(),
             role: pin.role,
         });

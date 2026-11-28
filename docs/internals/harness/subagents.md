@@ -287,7 +287,10 @@ Every file sits under `out/<reader>/` (`StatePaths::out_reader_dir`), where `Run
 | --- | --- |
 | subagent, first answer | `<agent_name>.output` |
 | subagent, answer to follow-up N | `<agent_name>.<N + 1>.output` (`run::earlier_response_path` builds the same path for an earlier ordinal) |
-| peer turn or team run | `<agent_name>.<run_id>.output`, so a later turn cannot overwrite an unreported answer |
+| peer turn or team run, turn N | `<agent_name>.output` for turn 1, `<agent_name>.<N>.output` after, so a later turn cannot overwrite an unreported answer |
+| peer turn or team run without a stored turn | `<agent_name>.<run_id>.output` |
+
+`RunRecord.turn` is set once, under the workspace lock, when a peer or team record is created (`crates/rimz/src/harness/run/peer.rs::new_peer_record`, `crates/rimz/src/harness/run/team.rs::create_team_run`, `crates/rimz/src/harness/run/team.rs::reopen_team_run`): one past the highest turn any retained record of the same reader and agent name holds, else 1 (`crates/rimz/src/harness/run.rs::next_turn`). A record without a stored turn counts the answers it publishes itself, `follow_ups + 1` for a subagent or an agent's own `-p` run, whose first answer is `<agent_name>.output` too, and none for a peer or team record written before turns were stored. GC removes a terminal record 7 days after it ends, so the count goes on past a collected turn while a later one is retained. An older RimZ that rewrites the record drops `turn` and publishes that answer at `<agent_name>.<run_id>.output`, while the receipt already named `<agent_name>.output` or `<agent_name>.<N>.output`, so a reader that follows the receipt finds no answer there.
 
 Every path is the host path. Reading a response file does not count as a join, and response files die with the room: the run record stays the truth.
 

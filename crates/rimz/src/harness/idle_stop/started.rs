@@ -47,6 +47,9 @@ pub struct Seat<'a> {
     /// What each printed command starts with: `rimz`, with `--root` when the agent's room is
     /// not the one the reader's commands resolve.
     pub rimz: &'a str,
+    /// The reader parses the rows (`--json`), so a row names a message or a run by its stored
+    /// id; else by the form an agent reads and types back.
+    pub stored_ids: bool,
 }
 
 /// One agent's started work, each row in the first group that takes it.
@@ -173,6 +176,7 @@ pub fn started(
         now,
         seen: HashSet::new(),
         started: Started::default(),
+        runs: crate::store::workflow::RunNames::new(store.paths()),
     };
     // An ended agent holds and closes nothing: only what outlives it is left.
     if agent.ended_at.is_none() {
@@ -192,6 +196,7 @@ struct List<'a> {
     now: Timestamp,
     seen: HashSet<String>,
     started: Started,
+    runs: crate::store::workflow::RunNames,
 }
 
 fn agent_key(row: &AgentState) -> String {
@@ -229,6 +234,33 @@ fn board_status(root: &Path) -> Option<String> {
 }
 
 impl<'a> List<'a> {
+    /// How the rows name message `id`, as the seat reads it.
+    fn message_name(&self, id: &crate::ids::MessageId) -> String {
+        if self.seat.stored_ids {
+            id.to_string()
+        } else {
+            id.shown()
+        }
+    }
+
+    /// How the rows name run `id`, as the seat reads it; an id this RimZ cannot parse as it
+    /// is written.
+    fn run_name(&self, id: &str) -> String {
+        match crate::ids::WorkflowRunId::parse(id) {
+            Ok(run) if !self.seat.stored_ids => self.runs.shown(&run),
+            _ => id.to_owned(),
+        }
+    }
+
+    /// The command that cancels the run the rows name as `target`.
+    fn cancel_command(&self, target: &str) -> String {
+        format!(
+            "{} {}",
+            self.seat.rimz,
+            crate::store::workflow::workflow_command("cancel", target, &[])
+        )
+    }
+
     fn rows(&self) -> &'a [AgentState] {
         let snapshot: &'a SidebarSnapshot = self.snapshot;
         &snapshot.agents
@@ -394,7 +426,8 @@ impl<'a> List<'a> {
                 command: None,
             });
         }
-        self.waits(store);
+        let workflows = live_runs(store)?;
+        self.waits(store, &workflows);
         for shell in &agent.background_shells {
             self.started.holding.push(StartedRow {
                 kind: RowKind::Shell,
@@ -420,7 +453,7 @@ impl<'a> List<'a> {
             self.natives();
         }
         let runs = crate::harness::run::listing(store.paths())?;
-        self.owed(store, &runs)?;
+        self.owed(&runs, &workflows);
         let messages = store.list_messages()?;
         let (conversation, system): (Vec<_>, Vec<_>) = messages
             .iter()
@@ -429,7 +462,7 @@ impl<'a> List<'a> {
         for message in conversation {
             self.started.holding.push(StartedRow {
                 kind: RowKind::Message,
-                name: message.message_id.to_string(),
+                name: self.message_name(&message.message_id),
                 status: message.status.as_str().to_owned(),
                 tone: AgentStatus::Sleeping,
                 phase: TurnPhase::Idle,
@@ -439,10 +472,13 @@ impl<'a> List<'a> {
                 detail: Vec::new(),
                 // A message on its way into the pane is past canceling.
                 key: None,
-                command: message
-                    .status
-                    .is_open()
-                    .then(|| format!("{} message cancel {}", self.seat.rimz, message.message_id)),
+                command: message.status.is_open().then(|| {
+                    format!(
+                        "{} message cancel {}",
+                        self.seat.rimz,
+                        self.message_name(&message.message_id)
+                    )
+                }),
             });
         }
         // RimZ's own text stays behind one count, as `agents show` lists it.
@@ -508,10 +544,10 @@ impl<'a> List<'a> {
         Ok(())
     }
 
-    /// Each pending wait, as the agent or team it waits on where it names one.
+    /// Each pending wait, as the agent, team, or workflow run it waits on where it names one.
     /// The snapshot's waits and those armed in the catalog, which `decide` reads whether or
     /// not the snapshot carries them.
-    fn waits(&mut self, store: &Store) {
+    fn waits(&mut self, store: &Store, workflows: &[(String, RunHeader)]) {
         let agent = self.agent;
         let rows: Vec<&AgentState> = self.rows().iter().collect();
         let armed = SessionWaits::load(store.paths()).of(&rows, agent);
@@ -541,11 +577,21 @@ impl<'a> List<'a> {
                         continue;
                     }
                 }
+                PendingWaitTrigger::Workflow { .. } => {
+                    if let Some((id, header)) = workflows.iter().find(|(id, _)| *id == wait.name) {
+                        self.push_workflow(Group::Holding, id, header);
+                        continue;
+                    }
+                }
                 _ => {}
             }
+            let name = match wait.trigger {
+                PendingWaitTrigger::Workflow { .. } => self.run_name(&wait.name),
+                _ => wait.name.clone(),
+            };
             self.started.holding.push(StartedRow {
                 kind: RowKind::Wait,
-                name: wait.name.clone(),
+                name,
                 status: AgentStatus::Sleeping.as_str().to_owned(),
                 tone: AgentStatus::Sleeping,
                 phase: TurnPhase::Idle,
@@ -561,14 +607,11 @@ impl<'a> List<'a> {
                         | PendingWaitTrigger::Workflow { .. }
                 ))
                 .then(|| RowKey::Wait(wait.name.clone())),
-                command: self.seat.you.then(|| {
-                    format!(
-                        "{} {} cancel {}",
-                        self.seat.rimz,
-                        wait.trigger.verb(),
-                        wait.name
-                    )
-                }),
+                command: wait
+                    .trigger
+                    .verb()
+                    .filter(|_| self.seat.you)
+                    .map(|verb| format!("{} {verb} cancel {}", self.seat.rimz, wait.name)),
             });
         }
     }
@@ -629,10 +672,10 @@ impl<'a> List<'a> {
     }
 
     /// The launched members and teams the owed wake's fleet and team terms hold on.
-    fn owed(&mut self, store: &Store, runs: &[RunRecord]) -> Result<(), StoreErr> {
+    fn owed(&mut self, runs: &[RunRecord], workflows: &[(String, RunHeader)]) {
         let audit = self.audit;
         let Some(launcher) = audit.find(self.agent.kind.as_str(), &self.agent.agent_id) else {
-            return Ok(());
+            return;
         };
         for (member, _) in owing_members(audit.iter(), runs, launcher) {
             // The launch's live holder, which a molt may have moved to another kind.
@@ -647,12 +690,11 @@ impl<'a> List<'a> {
                 board_status(&run.worktree_path).unwrap_or_else(|| run.status.as_str().to_owned());
             self.push_team(Group::Holding, &team.instance, status);
         }
-        for (id, header) in live_runs(store)? {
-            if owes_report_to(&header, launcher) {
-                self.push_workflow(Group::Holding, &id, &header);
+        for (id, header) in workflows {
+            if owes_report_to(header, launcher) {
+                self.push_workflow(Group::Holding, id, header);
             }
         }
-        Ok(())
     }
 
     /// A workflow run the agent started, cancelable while it has not ended.
@@ -662,23 +704,26 @@ impl<'a> List<'a> {
         }
         let ended = header.state.is_some_and(|state| state.is_terminal());
         let status = header.state.map_or("unknown", |state| state.as_str());
+        let shown = self.run_name(id);
         let row = StartedRow {
             kind: RowKind::Workflow,
-            name: id.to_owned(),
             status: status.to_owned(),
             tone: AgentStatus::Running,
             phase: TurnPhase::Idle,
             provider: None,
             since: header.created_at,
             due: None,
+            // An address names the workflow; a stored id does not.
             detail: header
                 .workflow
                 .iter()
+                .filter(|_| shown == id)
                 .cloned()
                 .chain(ended.then(|| "report owed".to_owned()))
                 .collect(),
             key: Some(RowKey::Workflow(id.to_owned())),
-            command: (!ended).then(|| format!("{} workflow cancel {id}", self.seat.rimz)),
+            command: (!ended).then(|| self.cancel_command(&shown)),
+            name: shown,
         };
         self.group(group).push(row);
     }
@@ -862,14 +907,18 @@ impl<'a> List<'a> {
                     .map(|trigger| trigger.describe())
                     .into_iter()
                     .chain(action)
-                    .chain(own.iter().map(|(run, _)| format!("run {}", run.id)))
+                    .chain(
+                        own.iter()
+                            .map(|(run, _)| format!("run {}", self.run_name(run.id.as_str()))),
+                    )
                     .collect(),
                 key: Some(RowKey::Task(name.clone())),
                 command: Some(format!("{} loop remove {name}", self.seat.rimz)),
             });
         }
         for (run, mut path) in runs {
-            path.push(run.id.to_string());
+            let shown = self.run_name(run.id.as_str());
+            path.push(shown.clone());
             self.started.outliving.push(StartedRow {
                 kind: RowKind::Workflow,
                 name: path.join(PATH_SEPARATOR),
@@ -881,7 +930,7 @@ impl<'a> List<'a> {
                 due: None,
                 key: Some(RowKey::Workflow(run.id.to_string())),
                 detail: run.task.into_iter().collect(),
-                command: Some(format!("{} workflow cancel {}", self.seat.rimz, run.id)),
+                command: Some(self.cancel_command(&shown)),
             });
         }
     }

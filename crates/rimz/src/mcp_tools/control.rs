@@ -73,6 +73,7 @@ pub(super) fn started(room: &Room, agent: &AgentState) -> anyhow::Result<Started
         reader: &reader,
         you: true,
         rimz: "rimz",
+        stored_ids: false,
     };
     Ok(crate::harness::idle_stop::started::started(
         &room.store,

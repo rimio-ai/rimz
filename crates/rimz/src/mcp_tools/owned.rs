@@ -16,7 +16,7 @@ use crate::harness::schedule::catalog::TaskCatalog;
 use crate::ids::{AgentKind, AgentSessionId, TeamInstanceId, WorkflowRunId};
 use crate::mcp::Failure;
 use crate::store::runtime::AuditRows;
-use crate::store::workflow::{FoundRun, RunClass, RunStarter};
+use crate::store::workflow::{FoundRun, RunAddress, RunClass, RunNames, RunStarter};
 
 /// How many links a walk reads before it gives up: a chain is a few links long.
 const MAX_WALK: usize = 64;
@@ -33,6 +33,8 @@ pub(super) struct Owners<'a> {
     live: &'a [AgentState],
     audit: &'a AuditRows,
     state: &'a StatePaths,
+    /// The room's runs, read once for every run a call selects or names.
+    runs: RunNames,
 }
 
 impl<'a> Owners<'a> {
@@ -47,6 +49,7 @@ impl<'a> Owners<'a> {
             live,
             audit,
             state,
+            runs: RunNames::new(state),
         }
     }
 
@@ -58,6 +61,11 @@ impl<'a> Owners<'a> {
                 .into_iter()
                 .next()
         })
+    }
+
+    /// Every row the walks read: the live snapshot's, then the log's.
+    pub(super) fn rows(&self) -> impl Iterator<Item = &'a AgentState> + Clone {
+        self.live.iter().chain(self.audit.iter())
     }
 
     /// The live row of `row`'s launch, while it has not ended.
@@ -273,7 +281,8 @@ pub(super) fn resolve<'a>(
                 .filter(|row| {
                     row.is_launched_child() == subagent
                         && !row.is_provider_subagent()
-                        && (row.name.as_deref() == Some(name) || row.launch_key().as_str() == name)
+                        && (agent_name(owners.rows(), row) == name
+                            || row.launch_key().as_str() == name)
                 })
                 .collect();
             if named.is_empty() {
@@ -310,7 +319,10 @@ pub(super) fn resolve<'a>(
             Ok(Named::Team(cohort))
         }
         TaskKind::Workflow => {
-            let run = WorkflowRunId::parse(name).map_err(|_| unknown())?;
+            let Ok(run) = WorkflowRunId::parse(name) else {
+                let address = RunAddress::from_str(name).map_err(|_| unknown())?;
+                return addressed_run(owners, &address)?.ok_or_else(unknown);
+            };
             let found = crate::store::workflow::find(owners.state, &run)
                 .map_err(anyhow::Error::from)?
                 .ok_or_else(unknown)?;
@@ -356,6 +368,35 @@ pub(super) fn resolve<'a>(
     }
 }
 
+/// The run `address` selects among the room's runs, as `rimz workflow` selects it: none when it
+/// selects no run, refused when another agent started the run it selects.
+fn addressed_run<'a>(
+    owners: &Owners<'a>,
+    address: &RunAddress,
+) -> Result<Option<Named<'a>>, Failure> {
+    let Some(id) = owners.runs.select(address).map(|run| run.id.clone()) else {
+        return Ok(None);
+    };
+    let Some(found) =
+        crate::store::workflow::find(owners.state, &id).map_err(anyhow::Error::from)?
+    else {
+        return Ok(None);
+    };
+    if !owners.started_run(&found) {
+        return Err(refused(&TaskKind::Workflow.id(&address.to_string())));
+    }
+    Ok(Some(Named::Workflow {
+        id,
+        found: Box::new(found),
+    }))
+}
+
+/// The name a workflow run answers to in an id: its address while that address selects it,
+/// else its stored id.
+pub(super) fn run_name(owners: &Owners<'_>, run: &WorkflowRunId) -> String {
+    owners.runs.shown(run)
+}
+
 /// Whether the wake row `entry` is a shell or a watch.
 pub(super) fn wait_kind(entry: &TaskEntry) -> crate::harness::schedule::wait::WaitKind {
     crate::harness::schedule::wait::WaitKind::of(entry)
@@ -372,3 +413,80 @@ pub(super) fn refused(id: &str) -> Failure {
 /// The hint of a thing with no live record.
 pub(super) const GONE: &str = "nothing of this name runs now: it ended, or never existed, and \
      RimZ keeps no record that tells which";
+
+/// The name `row` shows by: its own, else the name another row of its launch carries (the raw
+/// row a rebirth leaves unassigned until the rollup names it), else its launch key.
+pub(super) fn agent_name<'a>(
+    rows: impl IntoIterator<Item = &'a AgentState> + Clone,
+    row: &AgentState,
+) -> String {
+    let launch = crate::agents::state::launch_members(rows, &row.kind, row.launch_key());
+    row.name
+        .iter()
+        .chain(launch.iter().filter_map(|member| member.name.as_ref()))
+        .next()
+        .map_or_else(|| row.launch_key().to_string(), Clone::clone)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unnamed_row_shows_its_launchs_name() {
+        let at = jiff::Timestamp::UNIX_EPOCH;
+        let mut named = crate::testkit::agent_state("claude", "sess-old", at);
+        named.launch_id = Some("launch_calm".into());
+        named.name = Some("calm-otter".into());
+        let mut raw = crate::testkit::agent_state("claude", "sess-new", at);
+        raw.launch_id = Some("launch_calm".into());
+        raw.name = None;
+        let mut stranger = crate::testkit::agent_state("claude", "sess-other", at);
+        stranger.launch_id = Some("launch_other".into());
+        stranger.name = Some("warm-haven".into());
+        let rows = [stranger, named, raw.clone()];
+        assert_eq!(agent_name(rows.iter(), &raw), "calm-otter");
+        assert_eq!(agent_name(rows.iter(), &rows[0]), "warm-haven");
+        assert_eq!(agent_name(std::iter::once(&raw), &raw), "launch_calm");
+    }
+
+    #[test]
+    fn an_agent_id_reaches_the_unnamed_row_its_launchs_name_shows() {
+        let at = jiff::Timestamp::UNIX_EPOCH;
+        let home = tempfile::tempdir().unwrap();
+        let state =
+            StatePaths::for_project_root_under(std::path::Path::new("/project"), home.path())
+                .unwrap();
+        let mut caller = crate::testkit::agent_state("claude", "sess-me", at);
+        caller.launch_id = Some("launch_me".into());
+        let launched = |session: &str, name: Option<&str>, seconds: i64| {
+            let mut row = crate::testkit::agent_state("claude", session, at);
+            row.launch_id = Some("launch_calm".into());
+            row.name = name.map(str::to_owned);
+            row.registered_at = Some(at + jiff::SignedDuration::from_secs(seconds));
+            row.launched_by = Some(LaunchedBy {
+                kind: AgentKind::new_unchecked("claude"),
+                agent_id: "launch_me".into(),
+            });
+            row
+        };
+        let live = [
+            caller,
+            launched("sess-old", Some("calm-otter"), 1),
+            launched("sess-new", None, 2),
+        ];
+        let audit = AuditRows::default();
+        let owners = Owners::new(&live[0], &live, &audit, &state);
+        let named = resolve(&owners, TaskKind::Agent, "calm-otter", || {
+            unreachable!("an agent id reads no loop catalog")
+        });
+        let Ok(Named::Agent { row, .. }) = named else {
+            panic!("agent:calm-otter names the caller's launch");
+        };
+        assert_eq!(
+            row.agent_id.as_str(),
+            "sess-new",
+            "the newest row of the launch"
+        );
+    }
+}

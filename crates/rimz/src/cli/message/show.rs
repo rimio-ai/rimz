@@ -32,20 +32,27 @@ pub(super) struct MessageShowJson {
     delivery: Option<MessageDeliveryJson>,
 }
 
-pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn show_message(token: MessageToken, json: bool, globals: &GlobalFlags) -> Result<()> {
     let ctx = Ctx::open(globals)?;
     let store = &ctx.store;
     let cached_snapshot = ctx.cached_snapshot()?;
-    let Some(message) = projected_messages(store)?
+    let projected = projected_messages(store)?;
+    let Some(message_id) = token
+        .newest(projected.iter().map(|message| &message.message_id))
+        .cloned()
+    else {
+        bail!("message {token} not found");
+    };
+    let Some(message) = projected
         .into_iter()
         .find(|message| message.message_id == message_id)
     else {
-        bail!("message {message_id} not found");
+        bail!("message {token} not found");
     };
     let timeline = message_timeline(store, &message_id)?;
     let live_messages = store.list_messages()?;
     let now = Timestamp::now();
-    let delivery = open_delivery(&ctx, &message, &live_messages, now)?;
+    let delivery = open_delivery(&ctx, &message, &live_messages, now, json)?;
     if json {
         return render::json_pretty(&MessageShowJson {
             message,
@@ -66,7 +73,7 @@ pub(super) fn show_message(message_id: MessageId, json: bool, globals: &GlobalFl
         "{} — {}",
         render::paint(
             render::palette::accent().bold(),
-            message.message_id.as_str()
+            &message.message_id.shown()
         ),
         render::paint(
             render::status::message(message.status),
@@ -102,6 +109,7 @@ fn open_delivery(
     message: &MessageListRow,
     live_messages: &[MessageRecord],
     now: Timestamp,
+    json: bool,
 ) -> Result<Option<MessageDeliveryJson>> {
     if !message.status.is_open() {
         return Ok(None);
@@ -152,7 +160,7 @@ fn open_delivery(
         verdict = check.verdict();
     }
     Ok(Some(MessageDeliveryJson {
-        verdict: render_verdict(&verdict, &target, audit_receiver.as_ref(), now),
+        verdict: render_verdict(&verdict, &target, audit_receiver.as_ref(), now, json),
         check,
     }))
 }
@@ -313,7 +321,7 @@ fn premise_label(premise: &rimz::store::message::Premise, now: Timestamp) -> Str
             "provider-limit park since {} still open",
             time_with_absolute(*parked_since, now)
         ),
-        Premise::StillQueued { message_id } => format!("{message_id} still queued"),
+        Premise::StillQueued { message_id } => format!("{} still queued", message_id.shown()),
         Premise::OverHandOffLimit { threshold } => {
             format!("still over the {threshold}-token hand-off limit, cache warm")
         }
@@ -450,9 +458,10 @@ pub(super) fn steer_failure(
     target: &str,
     message_id: &MessageId,
 ) -> String {
+    let message_id = message_id.shown();
     let verdict = check.verdict();
     if matches!(verdict, deliver::DeliveryVerdict::Expired { .. }) {
-        return render_verdict(&verdict, target, None, Timestamp::now());
+        return render_verdict(&verdict, target, None, Timestamp::now(), false);
     }
     if check.ask.waiting {
         let reason = if check.ask.permission_review {
@@ -475,7 +484,7 @@ pub(super) fn steer_failure(
             "{message_id} has a recent delivery attempt in progress; retry in a few seconds"
         );
     }
-    render_verdict(&verdict, target, None, Timestamp::now())
+    render_verdict(&verdict, target, None, Timestamp::now(), false)
 }
 
 pub(super) fn time_with_absolute(ts: Timestamp, now: Timestamp) -> String {
@@ -679,7 +688,7 @@ fn fifo_detail(check: &deliver::DeliveryCheck) -> (bool, String) {
             .fifo
             .blocker
             .as_ref()
-            .map(|blocker| format!("behind {blocker}"))
+            .map(|blocker| format!("behind {}", blocker.shown()))
             .unwrap_or_else(|| "head unavailable".to_owned())
     };
     (check.fifo.head, detail)
@@ -744,11 +753,13 @@ pub(super) fn condition_cell(ok: bool, text: String) -> render::Cell {
     render::cell(text).fg(style)
 }
 
+/// The verdict's line; `stored_ids` names a blocker by its stored id, for text built for JSON.
 pub(super) fn render_verdict(
     verdict: &deliver::DeliveryVerdict,
     target: &str,
     audit_receiver: Option<&AgentState>,
     now: Timestamp,
+    stored_ids: bool,
 ) -> String {
     match verdict {
         deliver::DeliveryVerdict::TypingHeld { until } => format!(
@@ -815,7 +826,14 @@ pub(super) fn render_verdict(
         }
         deliver::DeliveryVerdict::BehindFifo { blocker } => blocker
             .as_ref()
-            .map(|blocker| format!("blocked: behind {blocker}"))
+            .map(|blocker| {
+                let name = if stored_ids {
+                    blocker.to_string()
+                } else {
+                    blocker.shown()
+                };
+                format!("blocked: behind {name}")
+            })
             .unwrap_or_else(|| "blocked: FIFO head unavailable".to_owned()),
         deliver::DeliveryVerdict::ReceiverGone => audit_receiver.map_or_else(
             || format!("stuck: receiver {target} is gone"),
@@ -874,6 +892,7 @@ pub(super) fn delivery_action_hint(
     message_id: &MessageId,
     target: &str,
 ) -> Option<String> {
+    let message_id = message_id.shown();
     match verdict {
         deliver::DeliveryVerdict::Scheduled { .. } => Some(format!(
             "force now: rimz message steer {message_id}  ·  or: rimz message edit {message_id} --no-schedule"
@@ -1093,7 +1112,7 @@ mod tests {
         assert_eq!(
             delivery_action_hint(&deliver::DeliveryVerdict::PaneHeld, &id, "@coder").as_deref(),
             Some(
-                "check it: rimz pane capture @coder      send now: rimz message steer msg_0000000000000001 --force"
+                "check it: rimz pane capture @coder      send now: rimz message steer msg_00000001 --force"
             )
         );
     }
@@ -1132,7 +1151,7 @@ mod tests {
                 format!("no turn since {}", time_with_absolute(now, now)),
                 "compaction continue still owed".to_owned(),
                 "linked runs not all joined".to_owned(),
-                "msg_0000000000000001 still queued".to_owned(),
+                "msg_00000001 still queued".to_owned(),
                 "still over the 160000-token hand-off limit, cache warm".to_owned(),
                 "open turn still at or over the 272000-token auto-compact ceiling".to_owned(),
             ]
@@ -1146,13 +1165,25 @@ mod tests {
         let mut receiver = rimz::testkit::agent_state("claude", "child", Timestamp::UNIX_EPOCH);
         receiver.ended_at = Some(Timestamp::UNIX_EPOCH);
         assert_eq!(
-            render_verdict(&verdict, "@otter", Some(&receiver), Timestamp::UNIX_EPOCH),
+            render_verdict(
+                &verdict,
+                "@otter",
+                Some(&receiver),
+                Timestamp::UNIX_EPOCH,
+                false
+            ),
             "stuck: receiver @otter has ended"
         );
         receiver.parent_agent_id = Some("parent".into());
         receiver.launch_depth = Some(1);
         assert_eq!(
-            render_verdict(&verdict, "@otter", Some(&receiver), Timestamp::UNIX_EPOCH),
+            render_verdict(
+                &verdict,
+                "@otter",
+                Some(&receiver),
+                Timestamp::UNIX_EPOCH,
+                false
+            ),
             "stuck: receiver @otter has ended; rimz message @otter resumes it"
         );
         assert_eq!(delivery_action_hint(&verdict, &id, "@otter"), None);
@@ -1163,12 +1194,12 @@ mod tests {
         let verdict = deliver::DeliveryVerdict::ProviderStarting;
         let id = MessageId::parse("msg_0000000000000001").unwrap();
         assert_eq!(
-            render_verdict(&verdict, "@otter", None, Timestamp::UNIX_EPOCH),
+            render_verdict(&verdict, "@otter", None, Timestamp::UNIX_EPOCH, false),
             "waiting: @otter is resuming; delivers once its provider starts or the provider-start hold ends"
         );
         assert_eq!(
             delivery_action_hint(&verdict, &id, "@otter"),
-            Some(format!("force now: rimz message steer {id}"))
+            Some(format!("force now: rimz message steer {}", id.shown()))
         );
     }
 
@@ -1232,7 +1263,7 @@ mod tests {
         });
         assert!(!check.passes());
         assert_eq!(
-            render_verdict(&check.verdict(), "@claude", None, Timestamp::now()),
+            render_verdict(&check.verdict(), "@claude", None, Timestamp::now(), false),
             "waiting on @planner to finish (@planner not running)"
         );
 
@@ -1242,7 +1273,7 @@ mod tests {
         check.gate.open = false;
         assert_eq!(
             delivery_action_hint(&check.verdict(), &message_id, "@claude"),
-            Some("force now: rimz message steer msg_0000000000000001".to_owned())
+            Some("force now: rimz message steer msg_00000001".to_owned())
         );
         check.expiry = deliver::ExpiryCheck {
             expired: true,
@@ -1316,6 +1347,7 @@ mod tests {
                 "@coder#lane",
                 Some(&receiver),
                 now,
+                false,
             ),
             "stuck: receiver @coder#lane is gone; its session record survives (last seen 1m ago (1970-01-01T00:01:00Z)), but no live process claims it; try `rimz agents resume`"
         );
@@ -1325,6 +1357,7 @@ mod tests {
                 "@coder#lane",
                 None,
                 now,
+                false,
             ),
             "stuck: receiver @coder#lane is gone"
         );

@@ -48,9 +48,10 @@ pub(super) fn compact_agent(
         send::sender_for(caller.as_ref(), ctx.channel(), false),
     )?;
     let message_id = receipt.message_id;
+    let shown = message_id.shown();
     match receipt.outcome {
         ReceiptOutcome::Sent { continues: false } => {
-            writeln!(render::out(), "compacting {handle} ({message_id})")?;
+            writeln!(render::out(), "compacting {handle} ({shown})")?;
         }
         // A kind whose command takes the continue as its next prompt sent it on the same line.
         ReceiptOutcome::Sent { continues: true }
@@ -61,16 +62,16 @@ pub(super) fn compact_agent(
         {
             writeln!(
                 render::out(),
-                "compacting {handle} now ({message_id}) with its continue on the same line"
+                "compacting {handle} now ({shown}) with its continue on the same line"
             )?;
         }
         ReceiptOutcome::Sent { continues: true } => writeln!(
             render::out(),
-            "compacting {handle} now ({message_id}), then continues it if nothing else is waiting"
+            "compacting {handle} now ({shown}), then continues it if nothing else is waiting"
         )?,
         ReceiptOutcome::Queued { continues } => writeln!(
             render::out(),
-            "queued compaction for {handle} ({message_id}) — {handle} is {}; delivers at its next turn boundary, {}",
+            "queued compaction for {handle} ({shown}) — {handle} is {}; delivers at its next turn boundary, {}",
             agent.effective_status(jiff::Timestamp::now()).as_str(),
             if continues {
                 "then continues it if nothing else is waiting"
@@ -80,7 +81,7 @@ pub(super) fn compact_agent(
         )?,
         ReceiptOutcome::Joined { continues } => writeln!(
             render::out(),
-            "compaction {message_id} is already queued for {handle}; delivers at its next turn boundary, {}",
+            "compaction {shown} is already queued for {handle}; delivers at its next turn boundary, {}",
             if continues {
                 "then continues it if nothing else is waiting"
             } else {

@@ -82,7 +82,7 @@ use anyhow::{Context, Result};
 use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
 
 use rimz::agents::AgentState;
-use rimz::ids::{AskId, MuxName, WorkspaceId};
+use rimz::ids::{AskId, AskToken, MuxName, WorkspaceId};
 use rimz::launcher::checkout::pinned_room_root;
 use rimz::store::snapshot::SidebarSnapshot;
 use rimz::{RuntimePaths, StatePaths, Store};
@@ -501,7 +501,8 @@ fn resolution_missed(error: &anyhow::Error) -> bool {
     )
 }
 
-/// Resolve an ask id or agent ref while preserving each caller's ask scope.
+/// Resolve an ask id or agent ref while preserving each caller's ask scope: the agent, and for
+/// an `ask_` target the stored id of the newest open ask it names.
 ///
 /// `asks show` folds the awaiting state into ask-id lookup; `answer` may target
 /// a stale agent and reports a matched-but-stale ask as "not asking" instead.
@@ -510,12 +511,12 @@ pub(crate) fn resolve_open_ask<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     current_channel: &rimz::address::AddressContext,
-) -> Result<Option<&'a AgentState>> {
+) -> Result<Option<(&'a AgentState, Option<AskId>)>> {
     if raw.starts_with("ask_") {
-        let ask_id = AskId::parse(raw)?;
-        return Ok(find_open_ask(snapshot, &ask_id));
+        let token = AskToken::parse(raw)?;
+        return Ok(find_open_ask(snapshot, &token));
     }
-    resolve_agent_one(store, snapshot, raw, None, current_channel).map(Some)
+    resolve_agent_one(store, snapshot, raw, None, current_channel).map(|agent| Some((agent, None)))
 }
 
 fn ask_pane_owner<'a>(
@@ -546,11 +547,19 @@ fn ask_pane_owner<'a>(
     Some((parent, Some(name)))
 }
 
-fn find_open_ask<'a>(snapshot: &'a SidebarSnapshot, ask_id: &AskId) -> Option<&'a AgentState> {
-    snapshot
+fn find_open_ask<'a>(
+    snapshot: &'a SidebarSnapshot,
+    token: &AskToken,
+) -> Option<(&'a AgentState, Option<AskId>)> {
+    let open = snapshot
         .agents
         .iter()
-        .find(|agent| agent.actionable_asks().any(|(ask, _)| &ask.id == ask_id))
+        .flat_map(|agent| agent.actionable_asks().map(move |(ask, _)| (agent, ask.id)))
+        .collect::<Vec<_>>();
+    let ask_id = token.newest(open.iter().map(|(_, id)| id))?;
+    open.iter()
+        .find(|(_, id)| id == ask_id)
+        .map(|(agent, id)| (*agent, Some(id.clone())))
 }
 
 /// Turn a clean target miss into the launch-profile/command/layout hint when

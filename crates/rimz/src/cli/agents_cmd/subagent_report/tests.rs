@@ -806,8 +806,11 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
     });
     first.prompt = "first task".into();
     first.last_message = Some("first answer".into());
+    first.turn = Some(1);
+    first.reader = Some("launcher".into());
     let mut second = first.clone();
     second.run_id = rimz::RunId::new();
+    second.turn = Some(2);
     second.prompt = "second task".into();
     second.last_message = Some("second answer".into());
     let child = child_run(&workspace.workspace_id, "child", RunStatus::Running);
@@ -820,6 +823,9 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
     );
     let first_path = response_path(store.paths(), &first).unwrap();
     let second_path = response_path(store.paths(), &second).unwrap();
+    let launcher_out = store.paths().out_reader_dir(Some("launcher"));
+    assert_eq!(first_path, launcher_out.join("peer.output"));
+    assert_eq!(second_path, launcher_out.join("peer.2.output"));
     assert_eq!(
         std::fs::read_to_string(&first_path).unwrap(),
         "first answer\n"
@@ -845,6 +851,13 @@ fn two_peer_turns_survive_a_running_sibling_and_share_one_digest() {
     assert!(messages[0].text.contains("first task"));
     assert!(messages[0].text.contains("second task"));
     assert_eq!(messages[0].text.matches("- @peer:").count(), 2);
+    for path in [&first_path, &second_path] {
+        assert!(
+            messages[0].text.contains(&path.display().to_string()),
+            "{}",
+            messages[0].text
+        );
+    }
     assert_eq!(
         std::fs::read_to_string(first_path).unwrap(),
         "first answer\n"

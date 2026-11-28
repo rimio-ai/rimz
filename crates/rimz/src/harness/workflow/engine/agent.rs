@@ -411,7 +411,11 @@ pub(super) fn launch(
     let record = &record;
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
-    let launched = match prompt.and_then(|prompt| step_launch(paths, spec, record, prompt)) {
+    let runs = crate::store::workflow::RunNames::new(state);
+    let starter = super::super::brief::starter_name(state, &runs, record);
+    let launched = match prompt
+        .and_then(|prompt| step_launch(paths, spec, record, (prompt, starter.as_deref()), &runs))
+    {
         Ok(launch) => host
             .launch(StepLaunch {
                 throttle_turn,
@@ -575,7 +579,8 @@ fn step_launch(
     paths: &WorkflowPaths,
     spec: &Definition,
     record: &RunRecord,
-    prompt: String,
+    (prompt, starter): (String, Option<&str>),
+    runs: &crate::store::workflow::RunNames,
 ) -> std::result::Result<StepLaunch, String> {
     // Preparation publishes the attempt before entering this off-lock launch.
     let attempt = record.attempt.as_ref().expect("prepared agent launch");
@@ -607,7 +612,7 @@ fn step_launch(
             keep: false,
             resume: None,
             prompt,
-            workflow_note: super::super::brief::judge(spec, record),
+            workflow_note: super::super::brief::judge(spec, record, starter),
             cwd: record.scope.path.clone(),
             throttle_turn: None,
             overrides: super::super::LaunchOverrides::default(),
@@ -636,7 +641,7 @@ fn step_launch(
             .as_ref()
             .and_then(|restart| restart.resume.clone()),
         prompt,
-        workflow_note: super::super::brief::step(paths, spec, record),
+        workflow_note: super::super::brief::step(paths, spec, record, starter, runs),
         cwd: record.scope.path.clone(),
         throttle_turn: None,
         overrides,

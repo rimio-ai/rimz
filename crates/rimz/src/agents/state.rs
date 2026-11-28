@@ -328,11 +328,14 @@ impl PendingWait {
 }
 
 impl PendingWaitTrigger {
-    /// The command that lists and cancels this wait: `shell` for a command, else `watch`.
-    pub(crate) fn verb(&self) -> &'static str {
+    /// The command that lists and cancels this wait: `shell` for a command, `watch` for a wait
+    /// armed as a watch. None for a launched agent, team, or workflow run, whose wait RimZ
+    /// projects from its run and no `rimz watch` row holds.
+    pub(crate) fn verb(&self) -> Option<&'static str> {
         match self {
-            Self::Command { .. } => "shell",
-            _ => "watch",
+            Self::Command { .. } => Some("shell"),
+            Self::Timer { .. } | Self::Signal { .. } | Self::Condition { .. } => Some("watch"),
+            Self::Subagent { .. } | Self::Team { .. } | Self::Workflow { .. } => None,
         }
     }
 

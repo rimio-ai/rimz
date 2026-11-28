@@ -3425,24 +3425,22 @@ fn render_message_row(
     stuck: bool,
     now: Timestamp,
 ) {
+    let shown = rimz::ids::MessageId::parse(&row.message_id)
+        .map_or_else(|_| row.message_id.clone(), |id| id.shown());
     table.row([
         if stuck {
             counted(
                 tally,
                 Severity::Warning,
+                format!("{shown} to {} is stuck: {}", row.target, row.problem),
                 format!(
-                    "{} to {} is stuck: {}",
-                    row.message_id, row.target, row.problem
-                ),
-                format!(
-                    "inspect `rimz message show {}` and resolve the reported delivery problem",
-                    row.message_id
+                    "inspect `rimz message show {shown}` and resolve the reported delivery problem"
                 ),
             )
         } else {
             badge(Health::Info)
         },
-        cell(row.message_id.as_str()).fg(palette::accent()),
+        cell(shown).fg(palette::accent()),
         cell(row.status.as_str()).fg(if stuck {
             palette::warn()
         } else {

@@ -118,8 +118,10 @@ fn delegated_wait_show_activity_names_subagent_and_focuses_answering_pane() {
             now,
         )
         .with_live_panes(panes, None);
-        let (report, error) =
-            collect_show_report(&store, &workspace, &runtime, &snapshot, "@parent", None).unwrap();
+        let (report, error) = collect_show_report(
+            &store, &workspace, &runtime, &snapshot, "@parent", None, false,
+        )
+        .unwrap();
         assert!(error.is_none());
         assert_eq!(
             report.ask_next_step.as_deref(),
@@ -234,8 +236,10 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane.clone()], None);
-    let (report, error) =
-        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
+    let (report, error) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", None, false,
+    )
+    .unwrap();
     assert!(error.is_none());
     assert_eq!(report.agent.as_ref().unwrap().status, AgentStatus::Running);
     assert!(report.ask_next_step.is_none(), "{:?}", report.ask_next_step);
@@ -258,8 +262,10 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane], None);
-    let (report, _) =
-        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
+    let (report, _) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", None, false,
+    )
+    .unwrap();
     assert!(report.ask_next_step.is_some());
 }
 
@@ -1142,4 +1148,22 @@ fn show_parked_launched_child_prints_phase_in_text_and_json() {
     let parent_json = serde_json::to_value(&parent_entry).unwrap();
     assert_eq!(parent_json["sub_agents"][0]["status"], "success");
     assert_eq!(parent_json["sub_agents"][0]["phase"], "parked");
+}
+
+#[test]
+fn hidden_system_messages_count_in_number_and_name_the_agent_by_its_handle() {
+    let agent = entry();
+    for (hidden, line) in [
+        (
+            1,
+            "1 system message hidden — rimz message list --all --system @coder",
+        ),
+        (
+            2,
+            "2 system messages hidden — rimz message list --all --system @coder",
+        ),
+    ] {
+        let text = strip(|w| render_messages_section(w, &[], hidden, &agent));
+        assert!(text.contains(line), "{text}");
+    }
 }

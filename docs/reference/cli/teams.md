@@ -356,7 +356,7 @@ Type: TEAM_REPORT
 From: @rimz
 Content:
 Team forge#feat-rate-limits reached Done; its leader reports:
-- @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /home/me/.rimz/ws/myrepo-f89e/out/boss/planner.<run_id>.output (~1.2k tokens, 31 lines)
+- @planner: completed in 2h14m, task: "Add rate limiting to the public API", response: /home/me/.rimz/ws/myrepo-f89e/out/boss/planner.output (~1.2k tokens, 31 lines)
 Memory: /home/me/.rimz/ws/myrepo-f89e/team-notes/<yyyymmdd>/<run>/blackboard.md
 ```
 
@@ -364,7 +364,7 @@ Memory: /home/me/.rimz/ws/myrepo-f89e/team-notes/<yyyymmdd>/<run>/blackboard.md
 | --- | --- |
 | Elapsed | From the launch, or from the flip that last left `Done`, to this `Done` |
 | Task | The launch `--description`, falling back to the first line of the launch prompt |
-| Response | The leader's last final message, as a file the launcher can read, with its size; `no response` when the leader never finished a turn |
+| Response | The leader's last final message, as a file the launcher can read, with its size: `<name>.output` for the first report, then `<name>.2.output` and so on, so an earlier report's file stays; `no response` when the leader never finished a turn |
 | Memory | The archived run's absolute board path; the checkout's `.rimz/team/blackboard.md` spelling if the link no longer resolves |
 
 The launching agent's receipt names the leader's response file and `rimz teams wait <team>#<lane>`, and, unless the launch is detached, `rimz teams stop <team>#<lane>` for once the report arrives. The report is parked and delivered at the launcher's next turn boundary. The flip receipt adds a [`report` row](#the-receipt) naming the launcher. A flip out of `Done` prints `report   TEAM_REPORT again at the next Done`, and the next `Done` sends a new report.

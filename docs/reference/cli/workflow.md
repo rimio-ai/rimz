@@ -34,7 +34,7 @@ A run is active (a node is working or waiting), parked (stopped at a node until 
 
 | Target | Example | Selects |
 | --- | --- | --- |
-| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout. `show` falls back to the newest finished run that this RimZ's record version wrote when none is unfinished. Any finished run, whatever version wrote it, is reached by the id `rimz workflow list --all` prints. |
+| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout, the most recently started when several share the address. `show` also reaches a finished run that this RimZ's record version wrote, in this order: the caller's room first, then an unfinished run over a finished one, a real run over a [one-node run](#running-one-node), then the most recently started. Any finished run, whatever version wrote it, is reached by the id `rimz workflow list --all` prints. |
 | Workflow name | `babysit-pr` | In `show`, the definition and its live runs. In `resume`, `extend`, `restart`, and `cancel`, the caller's run (below). |
 | Run id | `wf_` and 32 hexadecimal digits | That run, finished or not, in any room. |
 
@@ -42,9 +42,10 @@ The checkout name is the basename of the run's recorded scope path, kept after t
 
 - A target with `#` but an empty workflow or checkout name, or with a second `#`, is a usage error (exit 2). When a target begins with `-`, put options before `--` and the target after it.
 - `resume`, `extend`, `restart`, and `cancel` reach a finished run only by its id.
-- Two unfinished runs sharing an address refuse and list each id and checkout with a command for it. A real run and a [one-node run](#running-one-node) sharing one do not: the address selects the real run.
+- Unfinished runs sharing an address select the most recently started, except that a real run is selected over a [one-node run](#running-one-node) sharing its address, whichever started later.
 - For `resume`, `extend`, `restart`, and `cancel`, a workflow name selects the run in the caller's checkout, or its project's project-scoped run, then the only unfinished run. Otherwise it lists commands to choose one.
-- Matching runs in the caller's room take precedence. Without a local match, matches in several rooms refuse with `--root` commands. Each listed command names its run by address, or by id where another candidate in the same room shares that address or the run is a one-node run, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room.
+- Text RimZ prints about a run (signal subjects, step messages and briefs, run reports, receipts, refusals, and the MCP tools' ids) names it by its address only while that address, typed in the run's room, selects it among that room's runs: an unfinished run sharing the address ranks first, then a real run over a one-node run, then the most recently started, and finished runs count only when no unfinished run shares the address. A one-node run, a run another run outranks at its address, and a run no longer on record are named by id. A printed command quotes an address for the shell (`rimz workflow show 'review#main'`). `--json` output and the text a record stores keep the id.
+- Matching runs in the caller's room take precedence, a finished run that `show` reaches there over an unfinished run in another room. Without a local match, an address selects among the matches in every room in the same order, and a workflow name that matches in several rooms refuses with `--root` commands. Each listed command names its run by address, or by id where another candidate in the same room shares that address or the run is a one-node run, and carries `--root` when the run is outside the current directory's room. The global `--root` chooses the caller's room.
 
 ## Run a workflow
 
@@ -76,7 +77,7 @@ A loop task's fire refused this way records an errored fire carrying this text a
 
 With `scope = "worktree"`, nodes run in the selected checkout. With `scope = "project"`, they run at the project root, even when invoked from an owned worktree. `-w` on a project-scoped workflow refuses before anything is created, with `<workflow> has scope = project, so it runs at <project root>; start it without -w` (exit 1). A loop task's fire into a worktree is not a `-w` start and runs at the project root.
 
-One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run, a start given `--at` or `--input` included. A one-node run (`--once`) holds no slot: it starts beside any run, and any run starts beside it. A loop task's tail refuses all three flags, each naming the flag, since a task's run always runs the whole workflow from its start, and refuses `--detach` too, since a task's run owes the task its report. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
+One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run by its address, a start given `--at` or `--input` included. A one-node run (`--once`) holds no slot: it starts beside any run, and any run starts beside it. A loop task's tail refuses all three flags, each naming the flag, since a task's run always runs the whole workflow from its start, and refuses `--detach` too, since a task's run owes the task its report. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
 
 A run records who started it and how deep it sits ([starters and depth](#starters-and-depth)). A start past the depth limit refuses before a worktree, a home, or a record is created.
 
@@ -879,7 +880,7 @@ The compact view of an unfinished run prints, in order:
 5. The origin line: when and how the run started (its [origin](#workflow-list): by hand, by loop task, by an agent, or by another run), the number of attempts started (`1 attempt` while the first one runs, `0 attempts` for a run that has started none), and the known total cost of the ended ones, including judge evaluations. It omits cost when none is recorded, and never estimates a live attempt's spend.
 6. The block below the origin: the full ask text when asking, `takeover:` lines naming the agents that hold the checkout (`blockers unavailable` when the roster or the project's worktrees cannot be read), and for a parked run why and the `you can` commands (resume, grant more bounds, choose another node, or cancel).
 7. The definition rail ([below](#the-definition-rail)) on an active run, or the horizontal rail after `you can` on a parked run.
-8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, its grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row. After the visits rows, a run at a [runs step](#runs-steps), or one that has joined its started runs, prints one row per started run: `started <id> <workflow> <state>[ · <checkout>]`, where the state is the started run's own (`unreadable` when its record cannot be read, `ended` once its home is gone, `not started` before it exists).
+8. `visits  <step> <used>[ of <max>][ · key <key>: <n>]` for each visited step that is capped or has visits under the run's current key: ` of <max>` for a capped step, its grant included, and ` · key <key>: <n>` for the visits charged under the current key. Counts run since the step's last manual restart. An uncapped step with no visit under the current key prints no row. After the visits rows, a run at a [runs step](#runs-steps), or one that has joined its started runs, prints one row per started run: `started <run> <workflow> <state>[ · <checkout>]`, the run named as [run addresses](#run-addresses) say, where the state is the started run's own (`unreadable` when its record cannot be read, `ended` once its home is gone, `not started` before it exists).
 9. The `trail`: routing decisions projected from the definition and journal, consecutive matching check answers folded as `×N`, with resumes, restarts, parks, and termination. It keeps the newest eight hops with `+N earlier` for the rest, and ends in `now` while live.
 10. The home-relative work directory, then `sign <path>` in the same style while the run is at an agent, message or runs step whose definition loads: the step's sign file ([prompts](#agent-steps)), printed whether or not it exists, and left out on an `asked` park, whose `you can` lines name it. Then the absolute notes folder when the run has one, and the command for full history.
 
@@ -1010,13 +1011,13 @@ A loop task, a check's `wake`, and a session's `subscribe` hear these signals as
 
 Without `--any` it returns once every run has ended, and with `--any` once the first has: among runs one look finds ended, the one with the earliest end stamp, and an ended run ranks before a run the same look finds needing a person. A run whose home is deleted under the wait reads as ended `done`, since only a quiet loop task run's home is deleted, and only once it ended `done`. It also returns as soon as any run needs a person, with or without `--any`: a parked run, an agent of the run asking, a step held on an error waiting will not clear, a capacity hold that needs a fix, or a `trust` wait (the runs `workflow list` puts under NEEDS YOU). From an agent, it returns when a prompt for that agent is queued, printing the stop line `rimz teams wait` prints. `--timeout` bounds the wait, and the runs still going are left running.
 
-It prints one line per awaited run (only the ended one under `--any`):
+It prints one line per awaited run (only the ended one under `--any`), each run named as [run addresses](#run-addresses) say:
 
 | Run | Line |
 | --- | --- |
-| Ended | `<address> (<id>): <state> · checkout <path> · notes <path>` |
-| Needs a person | `<address> (<id>): needs you: <detail>` |
-| Still going | `<address> (<id>): still <state> at <node>` |
+| Ended | `<run>: <state> · checkout <path> · notes <path>` |
+| Needs a person | `<run>: needs you: <detail>` |
+| Still going | `<run>: still <state> at <node>` |
 
 `--json` prints an array of `{id, address, outcome, exit}`, `outcome` one of `ended`, `needs_you`, or `running`. An ended run adds `state`, `ending`, `checkout`, and `notes`, a run that needs a person `reason`, and a running one `state` and `node`; a running run's `exit` is the exit the wait stops with (`3`, `75`, or `124`).
 
@@ -1059,9 +1060,9 @@ The command waits up to 30 seconds for the replacement to launch, park, or end t
 
 ### `cancel`
 
-`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell command, judge, command step's process group, or every cell of an agent step's layout and its subagents, whether or not the run's definition is missing, unreadable, or refused by validation. It prints `canceled <address>`, and, at a runs step, `its started runs were left running: <ids>` for the started runs that had not ended: a cancel never stops them. An already-finished run id prints `<address> is already <state>; unchanged` and exits 0. Both receipts end with a `workflow show` hint. The checkout's commits and edits, and the run directory, stay. A cancellation journal row may carry `reason`.
+`rimz workflow cancel <RUN>` ends a run as `canceled` and stops its live script, shell command, judge, command step's process group, or every cell of an agent step's layout and its subagents, whether or not the run's definition is missing, unreadable, or refused by validation. It prints `canceled <address>`, and, at a runs step, `its started runs were left running: <runs>` for the started runs that had not ended, each named as [run addresses](#run-addresses) say: a cancel never stops them. An already-finished run id prints `<address> is already <state>; unchanged` and exits 0. Both receipts end with a `workflow show` hint. The checkout's commits and edits, and the run directory, stay. A cancellation journal row may carry `reason`.
 
-An unfinished run holds its worktree against removal and automatic cleanup, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints the run id's `rimz workflow cancel` command.
+An unfinished run holds its worktree against removal and automatic cleanup, even while parked with no agent. `rimz worktree remove NAME --force` removes the checkout and then cancels its unfinished runs with reason `worktree removed`. A failed cancellation leaves the removal standing, exits non-zero, and prints a `rimz workflow cancel` command that names the run as [run addresses](#run-addresses) say.
 
 ### `resume`
 

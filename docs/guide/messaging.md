@@ -72,14 +72,14 @@ rimz message --on any @coder "report back either way"     # also delivers after 
 Either way you get a receipt. It says whether the text went in now or is queued, and when a busy agent caused the queue it names the status and hands you the command that overrides it:
 
 ```console
-$ rimz message @coder#auth "open a PR summary once tests pass"
-queued for @coder#auth (@round-binder) (msg_06gc05m0d327d1d0) — @coder#auth (@round-binder) is running; send now: rimz message steer msg_06gc05m0d327d1d0
+$ rimz message @coder#probe "open a PR summary once tests pass"
+queued for @coder#probe (@spry-ridge) (msg_4foffo1a) — @coder#probe (@spry-ridge) is running; send now: rimz message steer msg_4foffo1a
 
-$ rimz message @planner#auth "draft the follow-up plan"
-sent to @planner#auth (@stable-haven) (msg_06gc05nhj9q2b4t7)
+$ rimz message @reviewer#probe "draft the follow-up plan"
+sent to @reviewer#probe (@upbeat-ridge) (msg_n3h2s33g)
 ```
 
-Nothing is locked in until it lands: `rimz message cancel msg_06gc05m0d327d1d0` stops a message still waiting, and `rimz message steer msg_06gc05m0d327d1d0` promotes that exact record past its gate.
+Nothing is locked in until it lands: `rimz message cancel msg_4foffo1a` stops a message still waiting, and `rimz message steer msg_4foffo1a` promotes that exact record past its gate.
 
 Other receipts name the opening time, the first unmet `--after` or `--when` condition, the blocking message id, or the missing live pane. A resumed provider gets a receipt saying it is starting. A parent's follow-up to its ended child instead names the registration deadline and says it is queued while the child resumes; the three-second pane-bind check never discards it. When a prompt owns the input, the receipt says your text will not be read until that prompt is answered and points to `rimz asks show @coder` and `rimz answer @coder <choice>`. `message show` gives the same pair of commands for that blocker.
 
@@ -129,29 +129,29 @@ A parked message delivers the moment the agent can take it, which means all of t
 `rimz message show` names the first unmet condition and the command that clears it, so you never have to guess why a message is still sitting there:
 
 ```console
-$ rimz message show msg_06gc05m0d327d1d0
-msg_06gc05m0d327d1d0 — queued
+$ rimz message show msg_4foffo1a
+msg_4foffo1a — queued
   from:    user
-  to:      @coder
-  channel: auth
-  created: 2m ago (2026-07-08T15:41:06Z)
+  to:      @coder (@spry-ridge)
+  channel: probe
+  created: 3s ago (2026-11-28T17:56:43Z)
 
 TEXT
   open a PR summary once tests pass
 
 TIMELINE
   EVENT   WHEN
-  queued  2m ago (2026-07-08T15:41:06Z)
+  queued  3s ago (2026-11-28T17:56:43Z)
 
 DELIVERY CHECK
-  schedule: ok
+  schedule: ok; retry wait in 27s (2026-11-28T17:57:14Z)
   fifo:     ok
   agent:    ok
   gate:     closed (status running, gate done)
   ask:      ok
-  pane:     ok (zellij:terminal_3)
-  waiting: @coder#auth is running; gate 'done' opens at next turn end
-  force now: rimz message steer msg_06gc05m0d327d1d0
+  pane:     ok (tmux:%6)
+  waiting: @coder#probe is running; gate 'done' opens at next turn end
+  force now: rimz message steer msg_4foffo1a
 ```
 
 ## Hold a message until a condition is met
@@ -219,23 +219,23 @@ An empty inbox can still have messages elsewhere. Without a target or status fil
 rimz message list                       # this channel's inbox, newest first
 rimz message list --all                 # every channel, grouped by #channel
 rimz message list --system              # include waits, signals, subagent digests, and nudges
-rimz message show msg_06gc05m0d327d1d0  # full text, timeline, and the first delivery blocker
-rimz message edit msg_06gc05m0d327d1d0 --text "…"   # revise a queued message before it lands
-rimz message steer msg_06gc05m0d327d1d0             # deliver now, past schedule, conditions, and gate
-rimz message requeue msg_06gc05m0d327d1d0           # send a finished message again as a fresh record
-rimz message cancel msg_06gc05m0d327d1d0            # cancel a queued message; the record stays
+rimz message show msg_4foffo1a          # full text, timeline, and the first delivery blocker
+rimz message edit msg_4foffo1a --text "…"  # revise a queued message before it lands
+rimz message steer msg_4foffo1a         # deliver now, past schedule, conditions, and gate
+rimz message requeue msg_4foffo1a       # send a finished message again as a fresh record
+rimz message cancel msg_4foffo1a        # cancel a queued message; the record stays
 rimz message clear @coder               # cancel every open message for one agent
 ```
 
 ```console
 $ rimz message list
-user → @reviewer  queued  1m ago  msg_06gc05nhj9q2b4t7
-  read plan.md and start the review · after @coder
-user → @coder  queued  2m ago  msg_06gc05m0d327d1d0
+user → @reviewer (@upbeat-ridge)  queued  3s ago  msg_aedpnhc2
+  read plan.md and start the review · after @coder#probe
+user → @reviewer (@upbeat-ridge)  sent  3s ago  msg_n3h2s33g
+  draft the follow-up plan
+user → @coder (@spry-ridge)  queued  3s ago  msg_4foffo1a
   open a PR summary once tests pass
-user → @planner  delivered  12m ago  msg_06gc04t1kkr7c0h9
-  draft the implementation plan
-... 6 system messages hidden (--system shows them)
+... 1 system message hidden (--system shows them)
 ```
 
 The inbox shows conversation by default: your sends and attributed agent sends. The trailing line counts what the view left out, and `--system` brings in system traffic, including `--no-from` text, so you can see what woke or nudged an agent. Repeated keepalives, compaction commands, and restarted or stalled notices about the same child run can fold into one row with their count and span, leaving the newest notice visible ([fold key](../reference/cli/message.md#list-messages)). Other notices and system prompts keep their own rows. `--limit` and `--status` narrow it further; the limit counts rows, a folded repeat as one, or individual messages with `--json`.
@@ -313,7 +313,7 @@ rimz asks                          # open prompts in this channel; --all for eve
 rimz asks --json                   # the same prompts as structured data
 rimz asks show @planner            # one prompt with its context and choices
 rimz answer @planner allow         # submit a choice by label
-rimz answer ask_06gc05m0d327d1d0 2 # or by position, against one exact prompt
+rimz answer ask_m40cg6m6 2         # or by position, against one exact prompt
 ```
 
 With no open asks, `rimz asks` says so in one line and names `--all` when the list was scoped to your channel. `rimz answer` drives the agent's own prompt UI with the keys you would press in the pane. One command submits the whole ask: a positional selector per question, commas inside one for a multi-select, and `--text` for free text. Each async question is a separate ask, answered in the Codex pane: focus it and press Shift+Left. `rimz answer` refuses these questions without sending input. See [async questions](../reference/cli/asks.md#questions-while-codex-works) for when an answered question leaves the list. An ask with several questions can take mixed choices and text through `--json`. The ask id is a compare-and-swap token, so a prompt that was already answered or superseded receives no stale keystrokes.

@@ -53,11 +53,12 @@ fn a_message_step_queues_one_notice_and_follows_then_without_agent_host_operatio
         panic!("one notice per visit: {messages:?}");
     };
     assert_eq!(target, "@planner");
+    let shown = crate::store::workflow::RunNames::new(&state).shown(&record.id);
     assert_eq!(
         text,
         &format!(
-            "Workflow `test` step `tell` sends you this message (run {id}; `rimz workflow show {id}`).\n\nBuild it\n\nMerged as #42\n\nRun request\n\nRule `nightly` fired here. deploy.done",
-            id = record.id
+            "Workflow `test` step `tell` sends you this message (run {shown}; `rimz {show}`).\n\nBuild it\n\nMerged as #42\n\nRun request\n\nRule `nightly` fired here. deploy.done",
+            show = crate::store::workflow::workflow_command("show", &shown, &[])
         )
     );
     assert_eq!(
@@ -89,14 +90,15 @@ fn a_message_step_without_prompt_text_sends_its_header_line_alone() {
     let host = FakeHost::new();
     advance(&state, &record.id, &host).unwrap();
     let messages = host.messages.borrow();
+    let shown = crate::store::workflow::RunNames::new(&state).shown(&record.id);
     assert_eq!(
         messages
             .iter()
             .map(|(_, _, text)| text.as_str())
             .collect::<Vec<_>>(),
         vec![format!(
-            "Workflow `test` step `tell` sends you this message (run {id}; `rimz workflow show {id}`).",
-            id = record.id
+            "Workflow `test` step `tell` sends you this message (run {shown}; `rimz {show}`).",
+            show = crate::store::workflow::workflow_command("show", &shown, &[])
         )]
     );
 }

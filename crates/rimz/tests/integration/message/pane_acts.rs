@@ -811,7 +811,7 @@ fn assert_interrupt_withheld(env: &Env, output: &std::process::Output, cause: &s
     assert_eq!(queued.status, MessageStatus::Queued, "{queued:?}");
     assert_eq!(queued.attempts, 0, "{queued:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let id = &queued.message_id;
+    let id = queued.message_id.shown();
     let (said, denied) = if pressed {
         (
             format!("interrupted, text not sent: {cause}; send it: rimz message steer {id}"),
@@ -981,7 +981,7 @@ fn a_fresh_interrupt_parked_on_an_unreadable_listing_names_the_listing() {
     assert!(
         stdout.contains(&format!(
             "({}) — receiver pane unreadable: ",
-            waiting.message_id
+            waiting.message_id.shown()
         )),
         "{stdout}"
     );
@@ -1078,7 +1078,7 @@ fn answer_refuses_when_another_session_of_the_launch_holds_the_pane() {
     assert!(
         stderr(&output).contains(&format!(
             "holds its pane zellij:{NEW}, not the session asking `{}`; no key was sent",
-            ask.id
+            ask.id.shown()
         )),
         "{}",
         stderr(&output)

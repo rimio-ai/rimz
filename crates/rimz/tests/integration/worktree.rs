@@ -692,7 +692,7 @@ fn workflow_runs_hold_listing_sweeps_cleanup_and_removal_but_not_merge() {
         .failure()
         .stderr(
             contains("is in use by workflow run hold#followup")
-                .and(contains(format!("rimz workflow cancel {id}")))
+                .and(contains("rimz workflow cancel 'hold#followup'"))
                 .and(contains("--force")),
         );
     env.rimz()
@@ -875,7 +875,7 @@ fn forced_removal_reports_a_cancel_error_and_still_cancels_other_runs() {
         .args(["worktree", "new", "demo"])
         .assert()
         .success();
-    let (broken_id, broken) = waiting_workflow(&env, "demo", "broken");
+    let (_, broken) = waiting_workflow(&env, "demo", "broken");
     let (_, healthy) = waiting_workflow(&env, "demo", "healthy");
     // Cancel reads no definition, so a journal it cannot append to is what fails it.
     let _ = std::fs::remove_file(&broken.journal);
@@ -889,7 +889,7 @@ fn forced_removal_reports_a_cancel_error_and_still_cancels_other_runs() {
             "canceled workflow run healthy#demo · worktree removed",
         ))
         .stderr(contains("failed to cancel workflow run broken#demo"))
-        .stderr(contains(format!("rimz workflow cancel {broken_id}")))
+        .stderr(contains("rimz workflow cancel 'broken#demo'"))
         .stderr(contains("Is a directory"));
     assert!(!env.home_root.join("project-worktrees/demo").exists());
     assert_worktree_canceled_run(&env, &healthy);
@@ -911,7 +911,7 @@ fn forced_removal_reports_an_unspawnable_cancel_with_a_manual_fix() {
         .args(["worktree", "new", "demo"])
         .assert()
         .success();
-    let (id, paths) = waiting_workflow(&env, "demo", "hold");
+    let (_, paths) = waiting_workflow(&env, "demo", "hold");
     env.rimz()
         .args(["worktree", "remove", "demo", "--force"])
         .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
@@ -919,7 +919,7 @@ fn forced_removal_reports_an_unspawnable_cancel_with_a_manual_fix() {
         .code(1)
         .stdout(contains("removed demo"))
         .stderr(contains("failed to cancel workflow run hold#demo"))
-        .stderr(contains(format!("rimz workflow cancel {id}")))
+        .stderr(contains("rimz workflow cancel 'hold#demo'"))
         .stderr(contains("No such file or directory"));
     assert!(!env.home_root.join("project-worktrees/demo").exists());
     assert_eq!(

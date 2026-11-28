@@ -60,16 +60,12 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let store = &ctx.store;
     let snapshot = ctx.cached_snapshot()?;
     let peers = rimz::address::addressable_agents(&snapshot);
-    let agent = resolve_current_agent(store, &snapshot, &args.target, &ctx.address_context())
-        .unwrap_or_else(|error| {
-            super::render::report(&error);
-            std::process::exit(2);
-        });
-    let target_id = args
-        .target
-        .starts_with("ask_")
-        .then(|| AskId::parse(&args.target))
-        .transpose()?;
+    let (agent, target_id) =
+        resolve_current_agent(store, &snapshot, &args.target, &ctx.address_context())
+            .unwrap_or_else(|error| {
+                super::render::report(&error);
+                std::process::exit(2);
+            });
     let detail = rimz::agents::read_open_ask(store.paths(), agent, target_id.as_ref())
         .unwrap_or_else(|err| answer_exit(2, &err.to_string()))
         .unwrap_or_else(|| {
@@ -82,10 +78,11 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
             )
         });
     let ask_id = detail.open.id.clone();
+    let shown = ask_id.shown();
     let kind = agent.kind.clone();
     let agent_id = agent.agent_id.clone();
     let (owner, child_name) = ask_pane_owner(agent, &snapshot.agents)
-        .unwrap_or_else(|| answer_exit(2, &format!("ask `{ask_id}` has no live bound pane")));
+        .unwrap_or_else(|| answer_exit(2, &format!("ask `{shown}` has no live bound pane")));
     let handle = rimz::address::agent_handle(owner, &peers, true);
     let named = rimz::address::handle_with_name(&handle, owner.name.as_deref());
     let who = child_name
@@ -96,9 +93,9 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         detail: &detail,
         pane: &handle,
         target: if child_name.is_some() || detail.delivery == rimz::agents::AskDelivery::Raised {
-            ask_id.as_str()
+            shown.clone()
         } else {
-            &handle
+            handle.clone()
         },
     };
     if let Some(message) = commands.pane_refusal(&who) {
@@ -132,7 +129,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     if !still_current {
         answer_exit(
             2,
-            &format!("ask `{ask_id}` was answered or replaced before any key was sent"),
+            &format!("ask `{shown}` was answered or replaced before any key was sent"),
         );
     }
 
@@ -154,7 +151,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
         let mut out = super::render::out();
         writeln!(
             out,
-            "sent answer to {who}: {}  {ask_id}",
+            "sent answer to {who}: {}  {shown}",
             ask_commands::choice(&detail, &replies)
         )?;
         return Ok(());
@@ -181,7 +178,7 @@ pub fn run(args: AnswerArgs, globals: &GlobalFlags) -> Result<()> {
     let mut out = super::render::out();
     writeln!(
         out,
-        "answered {who}: {}  {ask_id}",
+        "answered {who}: {}  {shown}",
         ask_commands::choice(&detail, &replies)
     )?;
     Ok(())
@@ -216,8 +213,10 @@ fn owner_writer(
             2,
             &format!(
                 "another session of {handle}, {}, holds its pane {}, not the session asking \
-                 `{ask_id}`; no key was sent",
-                pane.holder.1, pane.pane_id
+                 `{}`; no key was sent",
+                pane.holder.1,
+                pane.pane_id,
+                ask_id.shown()
             ),
         ),
         Err(err @ FindErr::Wake { .. }) => Err(err.into()),
@@ -319,9 +318,10 @@ fn answer_raised(
     }
     writeln!(
         super::render::out(),
-        "answered {handle}: {}  {}  message {message_id}",
+        "answered {handle}: {}  {}  message {}",
         ask_commands::choice(detail, replies),
-        detail.open.id
+        detail.open.id.shown(),
+        message_id.shown()
     )?;
     Ok(())
 }
@@ -331,8 +331,8 @@ fn resolve_current_agent<'a>(
     snapshot: &'a rimz::store::snapshot::SidebarSnapshot,
     target: &str,
     channel: &rimz::address::AddressContext,
-) -> Result<&'a rimz::agents::AgentState> {
-    let agent = resolve_open_ask(store, snapshot, target, channel)?
+) -> Result<(&'a rimz::agents::AgentState, Option<AskId>)> {
+    let (agent, ask_id) = resolve_open_ask(store, snapshot, target, channel)?
         .ok_or_else(|| anyhow::anyhow!(ask_commands::unknown_ask(target)))?;
     if agent.actionable_asks().next().is_none() {
         let peers = rimz::address::addressable_agents(snapshot);
@@ -341,7 +341,7 @@ fn resolve_current_agent<'a>(
             rimz::address::named_handle(agent, &peers, true)
         ));
     }
-    Ok(agent)
+    Ok((agent, ask_id))
 }
 
 fn parse_replies(

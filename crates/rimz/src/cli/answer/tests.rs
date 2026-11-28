@@ -133,11 +133,10 @@ fn ask_id_resolution_includes_waiting_subagents_in_every_scope() {
         now,
     );
 
-    assert_eq!(
-        crate::cli::find_open_ask(&snapshot, &ask_id)
-            .unwrap()
-            .agent_id
-            .as_str(),
-        "child"
-    );
+    for token in ["ask_0123456789abcdef", "ask_89abcdef"] {
+        let token = rimz::ids::AskToken::parse(token).unwrap();
+        let (agent, found) = crate::cli::find_open_ask(&snapshot, &token).unwrap();
+        assert_eq!(agent.agent_id.as_str(), "child");
+        assert_eq!(found.as_ref(), Some(&ask_id));
+    }
 }

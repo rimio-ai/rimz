@@ -19,5 +19,5 @@ Every command here except `list`, `show`, and `wait` needs the user's approval. 
 
 - Inside a step or one of its subagents, leave out `<run>`: `show` and `--history` find that run.
 - To change what a step does from its next launch on, in this run alone, append to its sign, the `sign` path `show` prints while the run is at that step. Each later agent or message launch of that step reads it; to reach the attempt already running, message its agent.
-- `cancel` keeps the commits, the uncommitted edits, and the work directory. `rimz worktree remove --force` on a run's worktree cancels the run too. The runs a runs step started keep running when their parent is canceled; cancel each by its id. When a loop task started the run, `rimz loop disable <task>` keeps the task from starting another.
+- `cancel` keeps the commits, the uncommitted edits, and the work directory. `rimz worktree remove --force` on a run's worktree cancels the run too. The runs a runs step started keep running when their parent is canceled; cancel each by the name the cancel receipt lists it under. When a loop task started the run, `rimz loop disable <task>` keeps the task from starting another.
 - After seven days garbage collection may remove a finished run's work directory, so copy out anything there worth keeping.

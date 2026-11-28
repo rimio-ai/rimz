@@ -112,14 +112,6 @@ enum Picked {
     Workflow(Vec<usize>),
 }
 
-/// Whether a requested address names `record`'s workflow and lane, the
-/// requested lane read through the one lane parser.
-fn address_selects(address: &RunAddress, record: &RunRecord) -> bool {
-    address.workflow == record.workflow
-        && rimz::address::LaneSelector::parse(Some(address.lane.as_str()))
-            .holds_record(Some(&record.address().lane))
-}
-
 pub(in crate::cli) fn caller(globals: &GlobalFlags) -> Option<rimz::ResolvedWorkspace> {
     let workspace =
         rimz::workspace::WorkspaceResolver::resolve_participant(".", globals.root.clone()).ok()?;
@@ -496,13 +488,10 @@ fn pick(
         .map(|run| run.record.address().to_string())
         .collect::<BTreeSet<_>>();
     runs.retain(|run| match target {
-        Target::Address(address) => address_selects(address, &run.record),
+        Target::Address(address) => address.selects(&run.record),
         _ => true,
     });
-    if verb != "show"
-        || matches!(target, Target::Workflow(_))
-        || runs.iter().any(|run| !run.record.state.is_terminal())
-    {
+    if verb != "show" || matches!(target, Target::Workflow(_)) {
         runs.retain(|run| !run.record.state.is_terminal());
     }
     if runs
@@ -515,7 +504,7 @@ fn pick(
         .iter()
         .map(|run| &run.record.project_root)
         .collect::<BTreeSet<_>>();
-    if roots.len() > 1 {
+    if roots.len() > 1 && !matches!(target, Target::Address(_)) {
         let commands = runs
             .iter()
             .map(|run| {
@@ -542,9 +531,14 @@ fn pick(
         }
         return Ok(Picked::Workflow(runs.into_iter().map(index_of).collect()));
     }
-    if verb == "show" && runs.iter().all(|run| run.record.state.is_terminal()) {
-        runs.sort_by_key(|run| std::cmp::Reverse(run.record.terminal_at));
-        runs.truncate(1);
+    if let Target::Address(address) = target
+        && let Some(record) = address.newest(runs.iter().map(|run| &run.record), root)
+    {
+        return Ok(Picked::Run(
+            all.iter()
+                .position(|other| std::ptr::eq(&other.record, record))
+                .expect("every picked run is borrowed from all"),
+        ));
     }
     if matches!(target, Target::Workflow(_))
         && let Some(workspace) = workspace
@@ -656,7 +650,7 @@ mod tests {
         trunk.scope.kind = ScopeKind::Project;
         trunk.scope.path = PathBuf::from("/repo");
         let selects =
-            |raw: &str, record: &RunRecord| address_selects(&raw.parse().unwrap(), record);
+            |raw: &str, record: &RunRecord| raw.parse::<RunAddress>().unwrap().selects(record);
         for raw in ["review#feat-x", "review#feat/x"] {
             assert!(selects(raw, &feat), "{raw}");
             assert!(!selects(raw, &trunk), "{raw}");
@@ -671,6 +665,74 @@ mod tests {
             assert!(!selects(raw, &trunk), "{raw}");
             assert!(!selects(raw, &feat), "{raw}");
         }
+    }
+
+    #[test]
+    fn an_address_several_runs_share_takes_the_most_recently_started() {
+        let older = run("/repo", "feat-x", "active", 10);
+        let newer = run("/repo", "feat-x", "active", 20);
+        let elsewhere = run("/other", "feat-x", "active", 30);
+        let farther = run("/far", "feat-x", "active", 40);
+        let pick_in = |all: &[Located], root: &str| {
+            let picked = pick(
+                &Target::parse("review#feat-x").unwrap(),
+                "review#feat-x",
+                "cancel",
+                Some(&workspace(root)),
+                || Some(root.into()),
+                all,
+                None,
+                None,
+                &[],
+            )
+            .unwrap();
+            let Picked::Run(index) = picked else {
+                panic!("an address names one run");
+            };
+            all[index].record.id.clone()
+        };
+        let ids = |all: &[Located]| {
+            all.iter()
+                .map(|run| run.record.id.clone())
+                .collect::<Vec<_>>()
+        };
+        let all = [older, newer, elsewhere, farther];
+        let id = ids(&all);
+        assert_eq!(
+            pick_in(&all, "/repo"),
+            id[1],
+            "the caller's project first, then the newest"
+        );
+        assert_eq!(
+            pick_in(&all[2..], "/repo"),
+            id[3],
+            "no run here: the newest of the rooms"
+        );
+    }
+
+    #[test]
+    fn showing_an_address_whose_runs_all_ended_takes_the_real_run_over_a_later_try() {
+        let real = run("/repo", "feat-x", "done", 10);
+        let mut tried = run("/repo", "feat-x", "done", 20);
+        tried.record.once = true;
+        tried.record.terminal_at = Some(jiff::Timestamp::from_second(30).unwrap());
+        let all = [real, tried];
+        let picked = pick(
+            &Target::parse("review#feat-x").unwrap(),
+            "review#feat-x",
+            "show",
+            Some(&workspace("/repo")),
+            || Some("/repo".into()),
+            &all,
+            None,
+            None,
+            &[],
+        )
+        .unwrap();
+        let Picked::Run(index) = picked else {
+            panic!("an address names one run");
+        };
+        assert_eq!(all[index].record.id, all[0].record.id);
     }
 
     #[test]

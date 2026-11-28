@@ -108,6 +108,156 @@ impl std::str::FromStr for RunAddress {
     }
 }
 
+impl RunAddress {
+    /// Whether this address names `record`'s workflow and lane, a slash lane name matching its
+    /// dashed form as `address::LaneSelector::holds_record` reads a typed lane.
+    pub fn selects(&self, record: &RunRecord) -> bool {
+        let lane = record.address().lane;
+        self.workflow == record.workflow
+            && (lane == self.lane || lane.as_str() == crate::ids::dashed_name(self.lane.as_str()))
+    }
+
+    /// The run this address names among `runs`, by the one rule `rimz workflow` and the MCP
+    /// tools share: runs of the project at `root` before others', live runs before ended ones,
+    /// real runs before `once` tries, then the most recently started.
+    pub fn newest<'a>(
+        &self,
+        runs: impl IntoIterator<Item = &'a RunRecord>,
+        root: Option<&Path>,
+    ) -> Option<&'a RunRecord> {
+        let mut runs = runs
+            .into_iter()
+            .filter(|run| self.selects(run))
+            .collect::<Vec<_>>();
+        prefer(&mut runs, |run| Some(run.project_root.as_path()) == root);
+        prefer(&mut runs, |run| !run.state.is_terminal());
+        prefer(&mut runs, |run| !run.once);
+        runs.into_iter().max_by_key(|run| run.created_at)
+    }
+}
+
+/// Narrow `runs` to those `keep` holds for, while any does.
+fn prefer(runs: &mut Vec<&RunRecord>, keep: impl Fn(&RunRecord) -> bool) {
+    if runs.iter().any(|run| keep(run)) {
+        runs.retain(|run| keep(run));
+    }
+}
+
+/// `workflow <verb> <target> <flags>` as a shell reads it back, quoted as `rimz workflow` quotes
+/// the commands it prints: a target that starts with `-` follows `--`. The caller puts `rimz`
+/// (and any `--root`) before it.
+pub fn workflow_command(verb: &str, target: &str, flags: &[&str]) -> String {
+    let words: Vec<&str> = if target.starts_with('-') {
+        ["workflow", verb]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .chain(["--", target])
+            .collect()
+    } else {
+        ["workflow", verb, target]
+            .into_iter()
+            .chain(flags.iter().copied())
+            .collect()
+    };
+    // shlex refuses only a NUL byte, which a hand-edited record's workflow name can carry.
+    shlex::try_join(words.iter().copied()).unwrap_or_else(|_| words.join(" "))
+}
+
+/// One room's runs as `rimz workflow` reaches them, its live records and the finished ones this
+/// RimZ reads, each read once on first use: what an address selects, and what an agent reads a
+/// run as. A directory that cannot be read adds no runs, as `rimz workflow` skips it.
+pub struct RunNames {
+    /// None for a project whose state paths could not be resolved, which holds no runs.
+    state: Option<StatePaths>,
+    live: std::cell::OnceCell<Vec<RunRecord>>,
+    finished: std::cell::OnceCell<Vec<RunRecord>>,
+}
+
+impl RunNames {
+    pub fn new(state: &StatePaths) -> Self {
+        Self::read(Some(state.clone()))
+    }
+
+    /// The runs of the room at `project_root`; a root that is not absolute names no room.
+    pub fn of_project(project_root: &Path) -> Self {
+        Self::read(
+            project_root
+                .is_absolute()
+                .then(|| StatePaths::for_project_root(project_root).ok())
+                .flatten(),
+        )
+    }
+
+    fn read(state: Option<StatePaths>) -> Self {
+        Self {
+            state,
+            live: std::cell::OnceCell::new(),
+            finished: std::cell::OnceCell::new(),
+        }
+    }
+
+    fn live(&self) -> &[RunRecord] {
+        self.live.get_or_init(|| {
+            let Some(state) = &self.state else {
+                return Vec::new();
+            };
+            live_runs(state).unwrap_or_else(|error| {
+                tracing::debug!(path = %state.root.display(), %error,
+                    "naming runs without the room's unreadable live workflow homes");
+                Vec::new()
+            })
+        })
+    }
+
+    fn finished(&self) -> &[RunRecord] {
+        self.finished.get_or_init(|| {
+            let homes = self
+                .state
+                .as_ref()
+                .and_then(|state| state.finished_workflow_runs().ok())
+                .unwrap_or_default();
+            homes
+                .iter()
+                .filter_map(|paths| match classify(paths) {
+                    Ok(RunClass::Current(record)) => Some(*record),
+                    _ => None,
+                })
+                .collect()
+        })
+    }
+
+    /// The run `address` selects by [`RunAddress::newest`] among this room's runs, all of its
+    /// project: the finished records are read only when no live run holds the address.
+    pub fn select(&self, address: &RunAddress) -> Option<&RunRecord> {
+        let live = self.live();
+        if live
+            .iter()
+            .any(|run| !run.state.is_terminal() && address.selects(run))
+        {
+            return address.newest(live, None);
+        }
+        address.newest(live.iter().chain(self.finished()), None)
+    }
+
+    /// What an agent reads run `id` as: its address while that address selects it, so the
+    /// address typed back reaches this run, else its stored id. A `once` try keeps its id, since
+    /// a real run started beside it later takes the address, and so does a run this RimZ reads
+    /// no record of.
+    pub fn shown(&self, id: &WorkflowRunId) -> String {
+        let record = self
+            .live()
+            .iter()
+            .find(|run| run.id == *id)
+            .or_else(|| self.finished().iter().find(|run| run.id == *id));
+        match record.filter(|record| !record.once).map(RunRecord::address) {
+            Some(address) if self.select(&address).is_some_and(|run| run.id == *id) => {
+                address.to_string()
+            }
+            _ => id.to_string(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
