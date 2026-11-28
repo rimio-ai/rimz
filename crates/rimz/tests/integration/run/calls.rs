@@ -228,9 +228,8 @@ fn owed_notices(env: &Env) -> Vec<rimz::store::message::MessageRecord> {
 }
 
 /// The host's `call-timeout` helper for launch `launch`, on the tracing Zellij shim listing
-/// terminals `panes`, each running its provider. The helper exits 0 when its stop fails and
-/// leaves the failure as a warning on stderr, so an assertion on what the stop ended prints it.
-fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process::Output {
+/// terminals `panes`, each running its provider.
+fn call_timeout_command(env: &Env, launch: &str, panes: &[(u64, &str)]) -> Command {
     let workspace = env.resolve_workspace(&env.project_root);
     let listing = env.project_root.join("seat-panes.json");
     let rows: Vec<serde_json::Value> = panes
@@ -239,7 +238,8 @@ fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process:
         .collect();
     std::fs::write(&listing, serde_json::to_vec(&rows).unwrap()).unwrap();
     let request = json!({"workspace_id": env.workspace_id, "launch_id": launch});
-    env.rimz()
+    let mut command = env.rimz();
+    command
         .args(["agents", "call-timeout", "--request", &request.to_string()])
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env(
@@ -251,9 +251,13 @@ fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process:
             "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
             format!("{} [Created 1s ago]\n", workspace.session_name),
         )
-        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "2000")
-        .output()
-        .unwrap()
+        .env("RIMZ_TEST_STOP_OWNER_EXIT_MS", "2000");
+    command
+}
+
+/// [`call_timeout_command`] run to completion.
+fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process::Output {
+    call_timeout_command(env, launch, panes).output().unwrap()
 }
 
 /// A process standing in for a seat's provider, which a stop ends when hooks stamp its pid as
@@ -1092,4 +1096,40 @@ fn a_team_timeout_with_its_leader_gone_still_stops_and_reports() {
         let _ = process.kill();
         let _ = process.wait();
     }
+}
+
+/// When `call-timeout` cannot stop a seat, it writes the stop error to stderr and exits 1, even
+/// with tracing silenced, while still settling the timed-out run.
+#[test]
+fn a_failed_call_timeout_stop_writes_stderr_and_exits_one() {
+    let env = room();
+    let mut process = provider();
+    let created = Timestamp::now() - Duration::from_secs(31 * 60);
+    let record = task_run_in(
+        &env,
+        Some(call(None, Some((created, Duration::from_secs(30 * 60))))),
+        Some((7, process.id())),
+    );
+    hook_as(&env, &record, process.id(), "UserPromptSubmit", json!({}));
+
+    let output = call_timeout_command(&env, TASK_LAUNCH, &[(7, "codex")])
+        .env("RIMZ_TEST_ZELLIJ_FAIL_CLOSE_PANE", "1")
+        .env("RUST_LOG", "off")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "failed stop should exit 1: {output:?}"
+    );
+    assert!(
+        stderr.contains("call timeout: could not stop a seat")
+            && stderr.contains("zellij:terminal_7"),
+        "stderr should name the failed seat stop: {stderr}"
+    );
+    let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
+    assert_eq!(settled.status, RunStatus::TimedOut, "{settled:?}");
+    let _ = process.kill();
+    let _ = process.wait();
 }
