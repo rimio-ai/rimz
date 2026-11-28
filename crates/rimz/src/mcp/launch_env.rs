@@ -8,8 +8,8 @@ use std::path::PathBuf;
 use super::catalog::{Capability, LoadMode};
 
 /// The served capabilities by name, comma-separated, each with an optional `:always` or
-/// `:deferred`: the vocabulary of a profile's `mcps` list. Always the explicit list; absent
-/// or empty serves nothing.
+/// `:deferred`: the vocabulary of a profile's `mcps` list, and `rimz-blackboard` on a staged
+/// team's role seat. Always the explicit list; absent or empty serves nothing.
 pub const ENV_SERVE: &str = "RIMZ_MCP_SERVE";
 
 /// The directory the agent launched in, where every tool call runs.

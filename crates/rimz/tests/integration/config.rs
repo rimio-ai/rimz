@@ -823,8 +823,8 @@ fn project_team_consensus_composes_the_kind_base() {
         std::env::var("PATH").unwrap_or_default()
     );
     env.rimz().args(["trust", "grant"]).assert().success();
-    // The Board writes fragment follows the replaced consensus, and the seat, which no seat edit
-    // reaches, loads the blackboard tools it names up front.
+    // The Board writes fragment follows the replaced consensus, and the seat, a staged team's
+    // that no seat edit reaches, is served the blackboard tools it names and loads them up front.
     let composed = format!(
         "Kind base.\n\nConsensus text.\n\n## Board writes\n\nFlip with `blackboard_flip` and \
          record with `blackboard_record`.\n\n{}\n\nHouse rules.\n\nPipeline.",

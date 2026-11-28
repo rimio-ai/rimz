@@ -1107,7 +1107,10 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
     {
         reminders.routine_rimz = Some((inputs.runtime.prompt_dir(), [tmp.clone(), shared.clone()]));
     }
-    let capabilities = request.mcp_capabilities(&reminders.denied_capabilities(&request));
+    let capabilities = request.mcp_capabilities(
+        &reminders.denied_capabilities(&request),
+        reminders.board_seat(&request),
+    );
     // A kind whose prompt rides an agent file takes a passed server only inside the file,
     // which only a fresh launch with a composed prompt writes; a kind that serves from the
     // launch env takes it on every launch.
@@ -1382,7 +1385,7 @@ pub fn compile(inputs: LaunchPlanInputs<'_>) -> Result<LaunchPlan, LaunchPlanErr
                         rendered_tools: request.tools.as_deref(),
                         code_mode: request.identity.params.code_mode,
                         served: &reminders.mcp_served(&request),
-                        always: request.default_always(&mcp_capabilities),
+                        always: reminders.up_front(&request),
                     },
                 })
                 .expect("an agent-file prompt matcher comes with its adapter's agent file")

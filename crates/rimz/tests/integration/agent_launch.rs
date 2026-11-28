@@ -6870,10 +6870,6 @@ fn explain_shows_the_grant_of_the_launch() {
             "mcp(self_stop), mcp(self_compact), mcp(self_tune), mcp(self_molt)",
         ),
         ("rimz-notes", "mcp(notes)"),
-        (
-            "rimz-blackboard",
-            "mcp(blackboard_flip), mcp(blackboard_record)",
-        ),
     ];
     assert_eq!(
         actual,
@@ -7172,8 +7168,7 @@ fn explain_prints_the_plan_without_side_effects() {
           "rimz-message",
           "rimz-ask",
           "rimz-control",
-          "rimz-notes",
-          "rimz-blackboard"
+          "rimz-notes"
         ],
         "host": {
           "Applied": {
@@ -7961,8 +7956,7 @@ fn explain_child_replays_its_subagent_profile_and_child_treatment() {
                 "rimz-workflow",
                 "rimz-message",
                 "rimz-control",
-                "rimz-notes",
-                "rimz-blackboard"
+                "rimz-notes"
             ]),
             serde_json::json!([]),
             true,

@@ -1650,7 +1650,8 @@ pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<Resolved
 /// A profile whose tools carry a `capabilities:` grant, a TOML profile over a Markdown kind
 /// base that writes one included, reaches RimZ's MCP capabilities only through the grant, so a
 /// capability's name in its `skills`, or `rimz` or a capability in its `mcps`, is refused.
-/// `skills` keeps every other skill, a `rimz-*` skill alone included.
+/// `skills` keeps every other skill, a `rimz-*` skill alone included. `rimz-blackboard`, which
+/// no list names, is refused with `BOARD_REFUSAL` in place of the fix to move it.
 fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -> Result<()> {
     if resolved
         .tools
@@ -1664,21 +1665,38 @@ fn refuse_rimz_lists_beside_a_grant(resolved: &ResolvedProfile, profile: &str) -
     let capability = |name: &&str| crate::mcp::catalog::Capability::from_name(name).is_some();
     let skills = resolved.skills.iter().flatten().map(|skill| skill.as_str());
     let mcps = resolved.mcps.iter().flatten().map(|entry| entry.name());
-    let rimz: Vec<String> = skills
+    let rimz: Vec<&str> = skills
         .filter(capability)
         .chain(mcps.filter(|name| *name == "rimz" || capability(name)))
-        .map(|name| format!("`{name}`"))
         .collect();
-    if rimz.is_empty() {
+    // No list may name the board, so its entry goes rather than into the grant.
+    let board: Vec<&str> = rimz
+        .iter()
+        .copied()
+        .filter(|name| {
+            crate::mcp::catalog::Capability::from_name(name)
+                == Some(crate::mcp::catalog::Capability::Blackboard)
+        })
+        .collect();
+    let (named, why) = if board.is_empty() {
+        (
+            rimz,
+            "; beside `capabilities:` RimZ's MCP capabilities go only in the kind base's \
+             `capabilities:`, so list them there instead"
+                .to_owned(),
+        )
+    } else {
+        (board, format!(", but {}", crate::config::BOARD_REFUSAL))
+    };
+    if named.is_empty() {
         return Ok(());
     }
+    let named: Vec<String> = named.iter().map(|name| format!("`{name}`")).collect();
     Err(LayoutErr::InvalidProfile {
         profile: profile.to_owned(),
         reason: format!(
-            "its kind base sets `capabilities:`, and its `skills` or `mcps` list {}; beside \
-             `capabilities:` RimZ's MCP capabilities go only in the kind base's \
-             `capabilities:`, so list them there instead",
-            rimz.join(", ")
+            "its kind base sets `capabilities:`, and its `skills` or `mcps` list {}{why}",
+            named.join(", ")
         ),
     })
 }

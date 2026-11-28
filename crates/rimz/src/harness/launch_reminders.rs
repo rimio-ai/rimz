@@ -122,7 +122,31 @@ impl LaunchReminders {
         if self.mcp_server.is_none() || self.mcp_switched_off.is_some() {
             return Vec::new();
         }
-        request.mcp_capabilities(&self.denied_capabilities(request))
+        request.mcp_capabilities(&self.denied_capabilities(request), self.board_seat(request))
+    }
+
+    /// Whether the launch is a role seat of a staged team (`crate::config::Team::staged`): its
+    /// recorded launch carries a role, and its effective config still holds the team by the name
+    /// that launch carries. Such a seat is served the board tools and loads them up front
+    /// whatever its lists say, and no other launch is served them: a roleless cell of the team's
+    /// layout, whom both tools refuse; a judge, though it sit in a role seat; and a seat whose
+    /// team no longer resolves, or whose effective config fails to load.
+    pub(super) fn board_seat(&self, request: &ExecRequest) -> bool {
+        !request.is_judge()
+            && request.identity.params.role.is_some()
+            && self
+                .team
+                .as_ref()
+                .is_some_and(|reminder| reminder.team.staged())
+    }
+
+    /// The capability the launch loads up front though no list marks it: `rimz-blackboard`
+    /// wherever the launch serves it, which only a board seat is (`Self::board_seat`).
+    pub(super) fn up_front(&self, request: &ExecRequest) -> Option<Capability> {
+        let board = Capability::Blackboard;
+        self.mcp_capabilities(request)
+            .contains(&board)
+            .then_some(board)
     }
 
     /// The launch gets no subagent surface (no `subagent` tool, no `rimz-subagents` skill, no
@@ -163,7 +187,7 @@ impl LaunchReminders {
     pub(super) fn mcp_served(&self, request: &ExecRequest) -> Vec<crate::mcp::launch_env::Served> {
         let served = self.mcp_capabilities(request);
         request
-            .served_marks()
+            .served_marks(self.board_seat(request))
             .into_iter()
             .filter(|(capability, _)| served.contains(capability))
             .collect()

@@ -85,9 +85,9 @@ pub struct McpLaunch<'a> {
     /// Each capability RimZ's server serves the launch, with its load mark; empty when it
     /// serves none.
     pub served: &'a [crate::mcp::launch_env::Served],
-    /// A served capability the launch loads up front though the list marks it nowhere
-    /// (`ExecRequest::default_always`); a provider that cannot load one capability up front
-    /// leaves it as the server loads.
+    /// A served capability the launch loads up front though no list marks it
+    /// (`LaunchReminders::up_front`); a provider that cannot load one capability up front leaves
+    /// it as the server loads.
     pub always: Option<crate::mcp::catalog::Capability>,
 }
 

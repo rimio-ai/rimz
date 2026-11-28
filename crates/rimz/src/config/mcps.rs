@@ -42,8 +42,10 @@ impl McpName {
         self.name == ALL
     }
 
+    /// The group of the profile vocabulary (`Capability::LISTED`) the entry names; none for
+    /// `rimz-blackboard`, which an exec request an older build recorded may still carry.
     pub fn capability(&self) -> Option<Capability> {
-        Capability::from_name(&self.name)
+        Capability::from_listed_name(&self.name)
     }
 
     /// `*` or `rimz`, either of which serves every RimZ capability.
@@ -51,11 +53,11 @@ impl McpName {
         self.is_all() || self.name == crate::mcp::catalog::SERVER_NAME
     }
 
-    /// The user's own server the entry names: not `*`, `rimz`, or a capability.
+    /// The user's own server the entry names: not `*`, `rimz`, or a group of RimZ's server.
     pub fn user_server(&self) -> Option<&str> {
         let rimz = self.is_all()
             || self.name == crate::mcp::catalog::SERVER_NAME
-            || self.capability().is_some();
+            || Capability::from_name(&self.name).is_some();
         (!rimz).then_some(self.name())
     }
 }
@@ -66,16 +68,16 @@ pub fn mcps_limit(mcps: Option<&[McpName]>) -> bool {
     mcps.is_some_and(|entries| !entries.iter().any(McpName::is_all))
 }
 
-/// The RimZ capabilities an `mcps` selection serves: every one when absent
-/// or when it lists `*` or `rimz`.
+/// The RimZ capabilities an `mcps` selection serves, of those a list may name
+/// (`Capability::LISTED`): every one when absent or when it lists `*` or `rimz`.
 pub fn mcp_capabilities(mcps: Option<&[McpName]>) -> Vec<Capability> {
     let Some(entries) = mcps else {
-        return Capability::ALL.to_vec();
+        return Capability::LISTED.to_vec();
     };
     if entries.iter().any(McpName::serves_every_capability) {
-        return Capability::ALL.to_vec();
+        return Capability::LISTED.to_vec();
     }
-    Capability::ALL
+    Capability::LISTED
         .into_iter()
         .filter(|capability| {
             entries
@@ -164,12 +166,13 @@ impl fmt::Display for McpName {
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum McpListErr {
     #[error(
-        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability (rimz-lsp, rimz-shell, \
-         rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, \
-         rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard), or one of your own \
-         MCP servers, each name with an optional `:always` or `:deferred`"
+        "invalid mcps entry `{0}`: list `*`, `rimz`, a RimZ capability ({names}), or one of your \
+         own MCP servers, each name with an optional `:always` or `:deferred`",
+        names = listed_names()
     )]
     InvalidName(String),
+    #[error("invalid mcps entry `{0}`: {BOARD_REFUSAL}")]
+    BoardName(McpName),
     #[error(
         "invalid mcps entry `{0}`: `+` entries add to an inherited list in Markdown definitions only; list the bare name"
     )]
@@ -180,12 +183,24 @@ pub enum McpListErr {
     DuplicateName(McpName),
 }
 
-/// Adds `entry` to `entries`; `false` when the same entry is already there,
-/// and an error when the same name is there with another mark.
+/// The names of the profile vocabulary (`Capability::LISTED`), comma-separated.
+fn listed_names() -> String {
+    Capability::LISTED.map(Capability::name).join(", ")
+}
+
+/// Why a profile list may not name `rimz-blackboard`.
+pub(crate) const BOARD_REFUSAL: &str = "RimZ serves the board tools to every role seat of a \
+                                        staged team and to no other launch, so drop the entry";
+
+/// Adds `entry` to `entries`; `false` when the same entry is already there, and an error when
+/// the same name is there with another mark or the entry names `rimz-blackboard`.
 pub(crate) fn push_mcp_entry(
     entries: &mut Vec<McpName>,
     entry: McpName,
 ) -> Result<bool, McpListErr> {
+    if Capability::from_name(&entry.name) == Some(Capability::Blackboard) {
+        return Err(McpListErr::BoardName(entry));
+    }
     match entries.iter().find(|earlier| earlier.name == entry.name) {
         Some(earlier) if *earlier == entry => Ok(false),
         Some(earlier) => Err(McpListErr::ConflictingMark {
@@ -290,9 +305,21 @@ mod tests {
             "github:eager".parse::<McpName>().unwrap_err().to_string(),
             "invalid mcps entry `github:eager`: list `*`, `rimz`, a RimZ capability \
              (rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, \
-             rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, \
-             rimz-blackboard), or one of your own MCP servers, each name with an optional \
-             `:always` or `:deferred`"
+             rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes), or \
+             one of your own MCP servers, each name with an optional `:always` or `:deferred`"
+        );
+        assert_eq!(
+            parse_mcp_list(&["rimz-blackboard:deferred".to_owned()])
+                .unwrap_err()
+                .to_string(),
+            "invalid mcps entry `rimz-blackboard:deferred`: RimZ serves the board tools to every \
+             role seat of a staged team and to no other launch, so drop the entry"
+        );
+        // An exec request an older build recorded still decodes an entry naming the board.
+        let recorded: McpName = "rimz-blackboard".parse().unwrap();
+        assert_eq!(
+            (recorded.capability(), recorded.user_server()),
+            (None, None)
         );
         assert_eq!(
             parse_mcp_list(&["github".to_owned(), "github".to_owned()]).unwrap_err(),
@@ -349,12 +376,14 @@ mod tests {
 
     #[test]
     fn capabilities_and_limits_follow_the_list() {
-        assert_eq!(mcp_capabilities(None), Capability::ALL.to_vec());
+        assert_eq!(mcp_capabilities(None), Capability::LISTED.to_vec());
         assert_eq!(mcp_capabilities(Some(&[])), Vec::new());
         assert_eq!(
             mcp_capabilities(Some(&list(&["github", "rimz-notes", "rimz-lsp"]))),
             vec![Capability::Lsp, Capability::Notes]
         );
+        let recorded = ["rimz-blackboard".parse().unwrap()];
+        assert_eq!(mcp_capabilities(Some(&recorded)), Vec::new());
         for all in [
             list(&["*"]),
             list(&["rimz"]),
@@ -362,7 +391,7 @@ mod tests {
         ] {
             assert_eq!(
                 mcp_capabilities(Some(&all)),
-                Capability::ALL.to_vec(),
+                Capability::LISTED.to_vec(),
                 "{all:?}"
             );
         }

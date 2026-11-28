@@ -189,7 +189,13 @@ fn claude_entry_carries_the_room_link_and_the_grant_follows_the_switch() {
         .clone();
     let (entry, next) = claude_entry(&argv).expect("entry by default");
     assert_eq!(entry["command"], "/bin/rimz");
-    assert_eq!(entry["args"], serde_json::json!(["mcp", "serve"]));
+    // A solo launch is served every group a list may name, so the board is not among them.
+    assert_eq!(
+        entry["args"],
+        serde_json::json!(crate::mcp::catalog::serve_args(
+            &crate::mcp::catalog::Capability::LISTED
+        ))
+    );
     assert!(next.starts_with('-'), "{argv:?}");
     std::fs::create_dir_all(room.state.room_bin.parent().unwrap()).unwrap();
     std::fs::write(&room.state.room_bin, "").unwrap();
@@ -360,7 +366,14 @@ fn codex_entry_names_the_spawn_env_and_approval_follows_the_switch() {
         assert_eq!(entry["command"].as_str(), Some("/bin/rimz"));
         assert_eq!(
             entry["args"],
-            toml::Value::try_from(["mcp", "serve", "--parent-env"]).unwrap()
+            toml::Value::try_from(
+                [
+                    crate::mcp::catalog::serve_args(&crate::mcp::catalog::Capability::LISTED),
+                    vec!["--parent-env".to_owned()],
+                ]
+                .concat()
+            )
+            .unwrap()
         );
         assert_eq!(entry["tool_timeout_sec"].as_integer(), Some(600));
         assert_eq!(
@@ -517,7 +530,13 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
     let peer = room.compile(&switches(true, true), &launch("opencode", None, &[]));
     assert_eq!(
         command(&peer),
-        Some(serde_json::json!(["/bin/rimz", "mcp", "serve"]))
+        Some(serde_json::json!(
+            [
+                vec!["/bin/rimz".to_owned()],
+                crate::mcp::catalog::serve_args(&crate::mcp::catalog::Capability::LISTED),
+            ]
+            .concat()
+        ))
     );
     let actions: Vec<_> = opencode_config(&peer).unwrap()["permissions"]
         .as_array()
@@ -552,8 +571,6 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
             "rimz_self_tune",
             "rimz_self_molt",
             "rimz_notes",
-            "rimz_blackboard_flip",
-            "rimz_blackboard_record",
             "rimz_guide",
         ]
     );
@@ -590,9 +607,7 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
         "--only",
         "rimz-control",
         "--only",
-        "rimz-notes",
-        "--only",
-        "rimz-blackboard"
+        "rimz-notes"
     ]);
     let judge_limited = serde_json::json!([
         "/bin/rimz",
@@ -613,9 +628,7 @@ fn opencode_serves_through_its_inline_config_within_the_child_and_judge_limits()
         "--only",
         "rimz-control",
         "--only",
-        "rimz-notes",
-        "--only",
-        "rimz-blackboard"
+        "rimz-notes"
     ]);
     assert_eq!(
         command(&room.compile(&switches(true, true), &child)),
@@ -738,7 +751,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
             assert!(process.unset.contains(key), "{key}: {:?}", process.unset);
         }
     };
-    let all = "rimz-lsp,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes,rimz-blackboard";
+    let all = "rimz-lsp,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes";
 
     let limited = prompted(launch("antigravity", Some(&["rimz-lsp", "github"]), &[]));
     let plan = room.compile(&switches(true, true), &limited);
@@ -762,7 +775,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     serves(&plan, all);
     assert_eq!(
         plan.mcp_capabilities,
-        crate::mcp::catalog::Capability::ALL.to_vec()
+        crate::mcp::catalog::Capability::LISTED.to_vec()
     );
 
     let plan = room.compile(&switches(true, false), &limited);
@@ -783,7 +796,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     let marks = "rimz-lsp:always,rimz-shell:deferred,rimz-watch:deferred,rimz-subagents:deferred,\
                  rimz-agents:deferred,rimz-teams:deferred,rimz-workflow:deferred,\
                  rimz-loop:deferred,rimz-message:deferred,rimz-ask:deferred,rimz-control:deferred,\
-                 rimz-notes:deferred,rimz-blackboard:deferred";
+                 rimz-notes:deferred";
     let plan = room.compile(&switches(true, true), &marked);
     assert_eq!(
         mcp_lines(&plan),
@@ -817,7 +830,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
     serves(&plan, marks);
     assert_eq!(
         plan.mcp_capabilities,
-        crate::mcp::catalog::Capability::ALL.to_vec()
+        crate::mcp::catalog::Capability::LISTED.to_vec()
     );
     no_mcp_argv(&plan);
 
@@ -826,7 +839,7 @@ fn antigravity_serves_through_the_launch_env_and_its_agent_file_lists_only_user_
         (Some(&["*"][..]), all),
         (
             Some(&["*", "rimz-lsp:always"]),
-            "rimz-lsp:always,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes,rimz-blackboard",
+            "rimz-lsp:always,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes",
         ),
     ] {
         let plan = room.compile(&switches(true, true), &launch("antigravity", mcps, &[]));
@@ -891,7 +904,7 @@ fn pi_serves_through_the_launch_env_with_its_exposures() {
         room.ambient.insert(key.into(), "caller".into());
     }
     let cwd = room.project.path().display().to_string();
-    let all = "rimz-lsp,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes,rimz-blackboard";
+    let all = "rimz-lsp,rimz-shell,rimz-watch,rimz-subagents,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,rimz-message,rimz-ask,rimz-control,rimz-notes";
     let compile = |mcps: Option<&[&str]>, code_mode: Option<bool>, tools: bool| {
         let mut request = launch("pi", mcps, &[]);
         request.identity.params.code_mode = code_mode;
@@ -909,7 +922,7 @@ fn pi_serves_through_the_launch_env_with_its_exposures() {
     assert_eq!(pi_env(&plan), served(all, "{}"));
     assert_eq!(
         plan.mcp_capabilities,
-        crate::mcp::catalog::Capability::ALL.to_vec()
+        crate::mcp::catalog::Capability::LISTED.to_vec()
     );
     assert_eq!(mcp_warnings(&plan), Vec::<String>::new());
     assert_eq!(unapplied(&plan), Vec::<String>::new());
@@ -1280,9 +1293,26 @@ fn unapplied(plan: &LaunchPlan) -> Vec<String> {
         .collect()
 }
 
-/// A launch of `kind` carrying the built-in consensus layer, as a staged team seat does.
-fn seat(kind: &str, mcps: Option<&[&str]>) -> ExecRequest {
-    let mut request = launch(kind, mcps, &[]);
+/// The machine config with the server switches and two teams a launch may sit on: `staged`, with
+/// a pipeline, and `unstaged`, without one.
+fn teams(routine: bool, tools: bool) -> crate::config::MachineConfig {
+    let mut machine: crate::config::MachineConfig =
+        toml::from_str(&switches(routine, tools)).unwrap();
+    machine.agents.teams =
+        toml::from_str("[staged]\nstages = ['Plan']\n[unstaged]\nkeep-warm = 'off'\n").unwrap();
+    machine
+}
+
+/// `request` as its recorded launch places it on `team`, in its role `lead`.
+fn on_team(mut request: ExecRequest, team: Option<&str>) -> ExecRequest {
+    request.identity.params.team = team.map(str::to_owned);
+    request.identity.params.role = team.map(|_| "lead".to_owned());
+    request
+}
+
+/// A launch of `kind` carrying the built-in consensus layer, on `team`.
+fn layered(kind: &str, mcps: Option<&[&str]>, team: Option<&str>) -> ExecRequest {
+    let mut request = on_team(launch(kind, mcps, &[]), team);
     request.system_prompt_file = Some(crate::config::PromptSource::Text {
         origin: PathBuf::from("/defs/seat.md"),
         text: "Base.\n".to_owned(),
@@ -1297,61 +1327,174 @@ fn seat(kind: &str, mcps: Option<&[&str]>) -> ExecRequest {
     request
 }
 
-/// A launch carrying a consensus layer loads its served board tools up front, beside a blanket
-/// `rimz:deferred` too, unless its own `rimz-blackboard` entry carries a mark; it adds no
-/// warning on any kind, and a launch without the layer keeps its marks.
+/// A launch of `kind` in a role seat of the staged team, as a fresh seat launch carries it.
+fn seat(kind: &str, mcps: Option<&[&str]>) -> ExecRequest {
+    layered(kind, mcps, Some("staged"))
+}
+
+/// A role seat of a staged team is served the board tools and loads them up front, whatever its
+/// lists say: a list that leaves them out, a blanket `rimz:deferred`, an empty list, an old
+/// recorded `rimz-blackboard:deferred` entry, and a seat with no team prompt layer, as a recorded
+/// single resume carries it. Every other launch is served neither tool, a team prompt layer
+/// notwithstanding: a solo launch, a roleless cell of the staged team's layout, a judge in a
+/// role seat, a seat of an unstaged team or of a team that no longer resolves, a child, and an
+/// old recorded `mcps` entry or grant naming `rimz-blackboard`. No kind warns.
 #[test]
-fn a_consensus_launch_loads_the_board_tools_up_front() {
+fn a_staged_seat_loads_the_board_tools_up_front_and_no_other_launch_is_served_them() {
+    use crate::mcp::catalog::Capability;
     let room = Room::new();
+    let on = teams(true, true);
+    let no_warnings = Vec::<String>::new();
     let claude = |request: &ExecRequest| {
-        let plan = room.compile(&switches(true, true), request);
-        let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
+        let plan = room.compile_config(&on, request, Isolation::Host);
+        assert_eq!(mcp_warnings(&plan), no_warnings, "{:?}", request.mcps);
+        let entry = claude_entry(&plan.process().provider_argv).map(|(entry, _)| {
+            (
+                entry.get("alwaysLoad").and_then(serde_json::Value::as_bool),
+                entry["args"].clone(),
+            )
+        });
         (
-            entry.get("alwaysLoad").and_then(serde_json::Value::as_bool),
-            entry["args"].clone(),
-            mcp_warnings(&plan),
+            entry,
+            plan.mcp_capabilities.contains(&Capability::Blackboard),
         )
     };
-    let no_warnings = Vec::<String>::new();
+    let only = |names: &[&str]| -> Vec<String> {
+        crate::mcp::catalog::serve_args(
+            &names
+                .iter()
+                .map(|name| Capability::from_name(name).unwrap())
+                .collect::<Vec<_>>(),
+        )
+    };
+    let board = ["--always", "rimz-blackboard"].map(str::to_owned);
+    let up_front = |args: Vec<String>| serde_json::json!([args, board.to_vec()].concat());
+    let listed: Vec<&str> = Capability::LISTED.map(Capability::name).into();
     for (request, always_load, args) in [
-        (
-            seat("claude", None),
-            None,
-            serde_json::json!(["mcp", "serve", "--always", "rimz-blackboard"]),
-        ),
+        (seat("claude", None), None, up_front(only(&[]))),
         (
             seat("claude", Some(&["rimz:deferred"])),
             None,
-            serde_json::json!(["mcp", "serve", "--always", "rimz-blackboard"]),
+            up_front(only(&[])),
         ),
         (
             seat(
                 "claude",
                 Some(&["rimz:deferred", "rimz-blackboard:deferred"]),
             ),
-            Some(false),
-            serde_json::json!(["mcp", "serve", "--deferred", "rimz-blackboard"]),
+            None,
+            up_front(only(&[])),
         ),
         (
             seat("claude", Some(&["rimz-lsp"])),
             None,
-            serde_json::json!(["mcp", "serve", "--only", "rimz-lsp"]),
+            up_front(only(&["rimz-lsp", "rimz-blackboard"])),
         ),
         (
-            launch("claude", Some(&["rimz:deferred"]), &[]),
-            Some(false),
-            serde_json::json!(["mcp", "serve"]),
+            seat("claude", Some(&[])),
+            None,
+            up_front(only(&["rimz-blackboard"])),
+        ),
+        (
+            on_team(launch("claude", None, &[]), Some("staged")),
+            None,
+            up_front(only(&[])),
         ),
     ] {
         assert_eq!(
             claude(&request),
-            (always_load, args, no_warnings.clone()),
+            (Some((always_load, args)), true),
             "{:?}",
             request.mcps
         );
     }
+    let mut child = on_team(launch("claude", None, &[]), Some("staged"));
+    child.subagent = true;
+    let roleless = |mcps: Option<&[&str]>| {
+        let mut cell = seat("claude", mcps);
+        cell.identity.params.role = None;
+        cell
+    };
+    let mut judge = seat("claude", None);
+    judge.identity.params.workflow = Some(crate::agents::WorkflowAttemptRef {
+        run: crate::ids::WorkflowRunId::new(),
+        seq: 1,
+        role: crate::agents::WorkflowAttemptRole::Judge,
+    });
+    let mut granted = launch("claude", None, &[]);
+    granted.rimz_capabilities = Some(vec![
+        "rimz-lsp".parse().unwrap(),
+        "rimz-blackboard".parse().unwrap(),
+    ]);
+    for (request, entry) in [
+        (
+            launch("claude", Some(&["rimz:deferred"]), &[]),
+            Some((Some(false), serde_json::json!(only(&listed)))),
+        ),
+        (
+            layered("claude", None, None),
+            Some((None, serde_json::json!(only(&listed)))),
+        ),
+        (
+            roleless(None),
+            Some((None, serde_json::json!(only(&listed)))),
+        ),
+        (roleless(Some(&[])), None),
+        (
+            judge,
+            Some((
+                None,
+                serde_json::json!(only(&[
+                    "rimz-lsp",
+                    "rimz-shell",
+                    "rimz-watch",
+                    "rimz-workflow",
+                    "rimz-message",
+                    "rimz-ask",
+                    "rimz-control",
+                    "rimz-notes"
+                ])),
+            )),
+        ),
+        (
+            layered("claude", None, Some("unstaged")),
+            Some((None, serde_json::json!(only(&listed)))),
+        ),
+        (
+            layered("claude", None, Some("gone")),
+            Some((None, serde_json::json!(only(&listed)))),
+        ),
+        (
+            child,
+            Some((
+                None,
+                serde_json::json!(only(&[
+                    "rimz-lsp",
+                    "rimz-shell",
+                    "rimz-watch",
+                    "rimz-workflow",
+                    "rimz-message",
+                    "rimz-control",
+                    "rimz-notes"
+                ])),
+            )),
+        ),
+        (launch("claude", Some(&["rimz-blackboard"]), &[]), None),
+        (
+            granted,
+            Some((None, serde_json::json!(only(&["rimz-lsp"])))),
+        ),
+    ] {
+        assert_eq!(
+            claude(&request),
+            (entry, false),
+            "{:?} {:?}",
+            request.mcps,
+            request.identity.params.team
+        );
+    }
     let served = |request: &ExecRequest| {
-        let plan = room.compile(&switches(true, true), request);
+        let plan = room.compile_config(&on, request, Isolation::Host);
         assert_eq!(mcp_warnings(&plan), no_warnings);
         plan.process().env.get("RIMZ_MCP_SERVE").cloned()
     };
@@ -1365,14 +1508,18 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
     );
     assert_eq!(
         served(&seat("antigravity", Some(&["rimz-blackboard:deferred"]))),
-        Some("rimz-blackboard:deferred".to_owned())
+        Some("rimz-blackboard:always".to_owned())
     );
     assert_eq!(
         served(&seat("antigravity", Some(&["rimz-lsp"]))),
-        Some("rimz-lsp".to_owned())
+        Some("rimz-lsp,rimz-blackboard:always".to_owned())
+    );
+    assert_eq!(
+        served(&layered("antigravity", Some(&["rimz:deferred"]), None)),
+        Some(deferred.to_owned())
     );
     let opencode_loads = |request: &ExecRequest| {
-        let plan = room.compile(&switches(true, true), request);
+        let plan = room.compile_config(&on, request, Isolation::Host);
         assert_eq!(mcp_warnings(&plan), no_warnings);
         plan.process()
             .env
@@ -1381,16 +1528,19 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
     };
     let native_board =
         Some(serde_json::json!({"blackboard_flip": "native", "blackboard_record": "native"}));
-    assert_eq!(opencode_loads(&seat("opencode", None)), native_board);
-    assert_eq!(
-        opencode_loads(&seat("opencode", Some(&["rimz:deferred"]))),
-        native_board
-    );
-    assert_eq!(
-        opencode_loads(&seat("opencode", Some(&["rimz-blackboard:deferred"]))),
-        None
-    );
-    assert_eq!(opencode_loads(&seat("opencode", Some(&["rimz-lsp"]))), None);
+    for mcps in [
+        None,
+        Some(&["rimz:deferred"][..]),
+        Some(&["rimz-blackboard:deferred"]),
+        Some(&["rimz-lsp"]),
+    ] {
+        assert_eq!(
+            opencode_loads(&seat("opencode", mcps)),
+            native_board,
+            "{mcps:?}"
+        );
+    }
+    assert_eq!(opencode_loads(&layered("opencode", None, None)), None);
     let mut opencode_code_mode = seat("opencode", None);
     opencode_code_mode.identity.params.code_mode = Some(true);
     assert_eq!(
@@ -1398,7 +1548,7 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
         Some(serde_json::json!({"blackboard_flip": "pinned", "blackboard_record": "pinned"}))
     );
     let pi_exposure = |request: &ExecRequest| {
-        let plan = room.compile(&switches(true, true), request);
+        let plan = room.compile_config(&on, request, Isolation::Host);
         assert_eq!(mcp_warnings(&plan), no_warnings);
         plan.process()
             .env
@@ -1421,8 +1571,12 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
     assert_eq!(
         pi_exposure(&seat("pi", Some(&["*", "rimz-blackboard:deferred"]))),
         Some(serde_json::json!({
-            "toolExposure": {"blackboard_flip": "deferred", "blackboard_record": "deferred"}
+            "toolExposure": {"blackboard_flip": "direct", "blackboard_record": "direct"}
         }))
+    );
+    assert_eq!(
+        pi_exposure(&layered("pi", None, Some("unstaged"))),
+        Some(serde_json::json!({}))
     );
     served(&seat("codex", None));
     served(&seat("codex", Some(&["rimz:deferred"])));
@@ -1430,13 +1584,17 @@ fn a_consensus_launch_loads_the_board_tools_up_front() {
 }
 
 /// The Board writes fragment follows the consensus directly, built in or a file, and names the
-/// blackboard tools exactly when the launch serves them.
+/// blackboard tools exactly when the launch serves them: on a role seat of a staged team whose
+/// launch serves RimZ's server, whatever its lists say, and on no other launch.
 #[test]
 fn the_board_writes_fragment_follows_the_consensus_by_what_the_launch_serves() {
     use crate::harness::team_prompt::{BUILT_IN_CONSENSUS, BoardWrites};
     let room = Room::new();
-    let composed = |machine: &str, request: &ExecRequest| {
-        room.compile(machine, request).prompt.composed.unwrap()
+    let composed = |machine: &crate::config::MachineConfig, request: &ExecRequest| {
+        room.compile_config(machine, request, Isolation::Host)
+            .prompt
+            .composed
+            .unwrap()
     };
     let after = |consensus: &str, fragment: BoardWrites| {
         format!(
@@ -1447,7 +1605,7 @@ fn the_board_writes_fragment_follows_the_consensus_by_what_the_launch_serves() {
     };
     // The launch rewrites the consensus's `rimz(x)` by reach; its last paragraph names none.
     let built_in = BUILT_IN_CONSENSUS.trim_end().rsplit("\n\n").next().unwrap();
-    let on = switches(true, true);
+    let on = teams(true, true);
     // A non-fresh Antigravity launch serves its tools through the launch env, so it gets the
     // tools fragment too.
     let mut resumed = seat("antigravity", None);
@@ -1455,28 +1613,41 @@ fn the_board_writes_fragment_follows_the_consensus_by_what_the_launch_serves() {
         session_id: "conversation".to_owned(),
         extra_args: Vec::new(),
     };
+    let mut roleless = seat("claude", None);
+    roleless.identity.params.role = None;
     for (machine, request, fragment) in [
         (&on, seat("claude", None), BoardWrites::Tools),
-        (
-            &on,
-            seat("codex", Some(&["rimz-blackboard"])),
-            BoardWrites::Tools,
-        ),
+        (&on, seat("codex", Some(&["rimz-lsp"])), BoardWrites::Tools),
         (&on, seat("antigravity", None), BoardWrites::Tools),
         (&on, resumed, BoardWrites::Tools),
         (&on, seat("opencode", None), BoardWrites::Tools),
         (&on, seat("pi", None), BoardWrites::Tools),
-        (&on, seat("claude", Some(&["rimz-lsp"])), BoardWrites::Shell),
-        (&on, seat("claude", Some(&[])), BoardWrites::Shell),
+        (&on, seat("claude", Some(&["rimz-lsp"])), BoardWrites::Tools),
+        (&on, seat("claude", Some(&[])), BoardWrites::Tools),
         (
-            &switches(true, false),
+            &teams(true, false),
             seat("claude", None),
             BoardWrites::Shell,
         ),
         (&on, seat("qwen", None), BoardWrites::Shell),
+        (&on, roleless, BoardWrites::Shell),
+        (
+            &on,
+            layered("claude", None, Some("unstaged")),
+            BoardWrites::Shell,
+        ),
+        (
+            &on,
+            layered("claude", None, Some("gone")),
+            BoardWrites::Shell,
+        ),
+        (&on, layered("claude", None, None), BoardWrites::Shell),
     ] {
         let text = composed(machine, &request);
-        let label = format!("{} {:?} {:?}", request.kind, request.mcps, request.action);
+        let label = format!(
+            "{} {:?} {:?} {:?}",
+            request.kind, request.mcps, request.action, request.identity.params.team
+        );
         assert!(text.starts_with("Base.\n\n# Team consensus\n"), "{label}");
         assert!(text.ends_with(&after(built_in, fragment)), "{label}");
         assert_eq!(text.matches("## Board writes").count(), 1, "{label}");
@@ -1511,8 +1682,8 @@ fn mcp_warnings(plan: &LaunchPlan) -> Vec<String> {
         .collect()
 }
 
-/// `*` limits nothing, alone or beside marks: every capability, no
-/// `--only`, no allowlist or switch-off, and the `lsp` tool as when absent.
+/// `*` limits nothing, alone or beside marks: every capability a list may name, no allowlist or
+/// switch-off, and the `lsp` tool as when absent.
 #[test]
 fn a_star_list_limits_nothing_on_claude_or_codex() {
     let room = Room::new();
@@ -1530,7 +1701,11 @@ fn a_star_list_limits_nothing_on_claude_or_codex() {
             .clone();
         let (entry, _) = claude_entry(&argv).unwrap();
         let args: Vec<_> = entry["args"].as_array().unwrap().iter().collect();
-        assert!(!args.contains(&&serde_json::json!("--only")), "{argv:?}");
+        assert_eq!(
+            args.iter().filter(|arg| **arg == "--only").count(),
+            crate::mcp::catalog::Capability::LISTED.len(),
+            "{argv:?}"
+        );
         assert_eq!(allowlist(&claude_settings(&argv)), None, "{mcps:?}");
         let reminders = crate::harness::launch_reminders::LaunchReminders {
             mcp_server: Some((PathBuf::from("/bin/rimz"), Vec::new())),
@@ -1550,8 +1725,15 @@ fn a_star_list_limits_nothing_on_claude_or_codex() {
             .clone();
         assert_eq!(codex_disabled(&argv), Vec::<String>::new(), "{mcps:?}");
         let args = codex_entry(&argv).unwrap()["args"].clone();
-        assert!(
-            !args.as_array().unwrap().contains(&"--only".into()),
+        let only = args
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|arg| arg.as_str() == Some("--only"))
+            .count();
+        assert_eq!(
+            only,
+            crate::mcp::catalog::Capability::LISTED.len(),
             "{args}"
         );
     }
@@ -1568,44 +1750,41 @@ fn claude_marks_become_always_load_and_serve_flags() {
         let (entry, _) = claude_entry(&plan.process().provider_argv).unwrap();
         (entry, mcp_warnings(&plan))
     };
+    // A blanket entry serves every group a list may name, as `--only` arguments.
+    let listed = crate::mcp::catalog::serve_args(&crate::mcp::catalog::Capability::LISTED);
+    let after = |served: &[String], flags: &[&str]| {
+        let mut args = served.to_vec();
+        args.extend(flags.iter().map(|flag| (*flag).to_owned()));
+        args
+    };
     for (mcps, always_load, args) in [
-        (&["rimz:always"][..], Some(true), &["mcp", "serve"][..]),
-        (&["rimz:deferred"], Some(false), &["mcp", "serve"]),
+        (&["rimz:always"][..], Some(true), listed.clone()),
+        (&["rimz:deferred"], Some(false), listed.clone()),
         (
             &["rimz:deferred", "rimz-lsp:always"],
             None,
-            &["mcp", "serve", "--always", "rimz-lsp"],
+            after(&listed, &["--always", "rimz-lsp"]),
         ),
         (
             &["rimz:always", "rimz-lsp:deferred"],
             Some(true),
-            &["mcp", "serve", "--deferred", "rimz-lsp"],
+            after(&listed, &["--deferred", "rimz-lsp"]),
         ),
         (
             &["*", "rimz-watch:deferred", "rimz-notes:always"],
             None,
-            &[
-                "mcp",
-                "serve",
-                "--deferred",
-                "rimz-watch",
-                "--always",
-                "rimz-notes",
-            ],
+            after(
+                &listed,
+                &["--deferred", "rimz-watch", "--always", "rimz-notes"],
+            ),
         ),
         (
             &["rimz-lsp:always", "rimz-watch"],
             None,
-            &[
-                "mcp",
-                "serve",
-                "--only",
-                "rimz-lsp",
-                "--only",
-                "rimz-watch",
-                "--always",
-                "rimz-lsp",
-            ],
+            after(
+                &["mcp", "serve", "--only", "rimz-lsp", "--only", "rimz-watch"].map(str::to_owned),
+                &["--always", "rimz-lsp"],
+            ),
         ),
     ] {
         let (entry, warnings) = compile(mcps);
@@ -1836,8 +2015,7 @@ fn a_child_and_a_judge_are_served_no_capability_that_launches() {
                 Capability::Workflow,
                 Capability::Message,
                 Capability::Control,
-                Capability::Notes,
-                Capability::Blackboard
+                Capability::Notes
             ],
             "{kind}"
         );
@@ -1851,8 +2029,7 @@ fn a_child_and_a_judge_are_served_no_capability_that_launches() {
                 Capability::Message,
                 Capability::Ask,
                 Capability::Control,
-                Capability::Notes,
-                Capability::Blackboard
+                Capability::Notes
             ],
             "{kind}"
         );
@@ -1977,7 +2154,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
     // a child and a judge lose every capability that launches agents, and `rimz-loop` too.
     // A child also loses `rimz-ask`, since its question goes in its result for its launcher.
     let served = |withheld: &[Capability]| -> Vec<Capability> {
-        Capability::ALL
+        Capability::LISTED
             .into_iter()
             .filter(|capability| !withheld.contains(capability))
             .collect()
@@ -2057,7 +2234,7 @@ fn a_launch_allowed_no_subagents_is_served_no_subagent_tool_and_withheld_its_ski
         plan.process().env.get("RIMZ_MCP_SERVE").map(String::as_str),
         Some(
             "rimz-lsp,rimz-shell,rimz-watch,rimz-agents,rimz-teams,rimz-workflow,rimz-loop,\
-             rimz-message,rimz-ask,rimz-control,rimz-notes,rimz-blackboard"
+             rimz-message,rimz-ask,rimz-control,rimz-notes"
         )
     );
 }

@@ -510,6 +510,9 @@ fn shut_out(
         let reason = vec![format!("a subagent cannot launch {launched}")];
         return (reason.clone(), reason);
     }
+    // No list reaches the board's tools; its skill takes the path any other name's does.
+    let board =
+        || vec!["RimZ serves rimz-blackboard to a staged team's role seats alone".to_owned()];
     let grant = profile
         .tools
         .as_ref()
@@ -519,7 +522,11 @@ fn shut_out(
         && !grant.iter().any(|entry| entry.name() == name)
     {
         let reason = vec![format!("its capabilities leave out {name}")];
-        return (reason.clone(), reason);
+        let tool = match Capability::from_name(name) {
+            Some(Capability::Blackboard) => board(),
+            _ => reason.clone(),
+        };
+        return (tool, reason);
     }
     if let Some(capability) = Capability::from_name(name)
         && profile
@@ -533,6 +540,7 @@ fn shut_out(
         return (reason.clone(), reason);
     }
     let tool = match Capability::from_name(name) {
+        Some(Capability::Blackboard) => board(),
         None => vec![format!("{name} has no MCP tools")],
         Some(Capability::Loop) if subagent => {
             vec!["a subagent is not served the rimz-loop tools".to_owned()]

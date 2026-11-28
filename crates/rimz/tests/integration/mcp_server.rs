@@ -2713,6 +2713,13 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
             "",
         );
     }
+    crate::common::write_definition(
+        &env,
+        "teams",
+        "crew",
+        "leader: lead\nstages: [Plan]\nroles:\n  - {role: lead, agent: cmark, owns: [Plan]}",
+        "Complete the work.",
+    );
     let config = env.rimz_home().join("config.toml");
     std::fs::create_dir_all(config.parent().unwrap()).unwrap();
     let explain_with = |profile: &str, flag: Option<&str>| {
@@ -2743,11 +2750,20 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let claude_user = "the mcps entry `github:always` is not applied: Claude takes a load mode \
                        only for RimZ's server and its capabilities";
 
+    // A role seat of a staged team is served the board tools, loaded up front beside its
+    // `rimz:deferred`; the same profile alone is served neither.
+    let seat = explain("crew.lead");
+    assert_eq!(tool_load(&seat, "blackboard_flip"), "always", "{seat}");
+    assert_eq!(tool_load(&seat, "blackboard_record"), "always", "{seat}");
     let out = explain("cmark");
     assert!(!out.contains("Plan"), "{out}");
     assert!(
+        !out.contains("rimz-blackboard") && !out.contains("blackboard_flip"),
+        "{out}"
+    );
+    assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -2765,7 +2781,10 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert!(out.contains(r#""--always","rimz-lsp""#), "{out}");
     assert!(out.contains("claude mcp list"), "{out}");
     assert!(out.contains("/context"), "{out}");
-    let mut server = serve(&env, &[]);
+    // A solo profile is served every group a list may name, which leaves out the board.
+    let listed = rimz::mcp::catalog::serve_args(&Capability::LISTED).split_off(2);
+    let listed: Vec<&str> = listed.iter().map(String::as_str).collect();
+    let mut server = serve(&env, &listed);
     let instructions = server.initialize()["result"]["instructions"].clone();
     let instructions = instructions.as_str().expect("instructions");
     assert!(out.contains(instructions), "{out}");
@@ -2829,7 +2848,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("xmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes"
         ),
         "{out}"
     );
@@ -2863,7 +2882,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     assert_eq!(tool_load(&out, "shell"), "default", "{out}");
     assert!(
         out.contains(&format!(
-            "rimz-control, rimz-notes, rimz-blackboard; the mcps entry `rimz:deferred` {coded}\n"
+            "rimz-control, rimz-notes; the mcps entry `rimz:deferred` {coded}\n"
         )),
         "{out}"
     );
@@ -2880,7 +2899,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("pmark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes\n"
         ),
         "{out}"
     );
@@ -2954,7 +2973,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("omark");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes\n"
         ),
         "{out}"
     );
@@ -3032,7 +3051,7 @@ fn explain_mcps_shows_what_each_launch_hands_over() {
     let out = explain("cmute");
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes\n"
         ),
         "{out}"
     );
@@ -3130,7 +3149,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&env, "gopen", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
@@ -3145,7 +3164,7 @@ fn explain_mcps_reads_the_antigravity_agent_file() {
     let out = explain(&bare, "antigravity", &[]);
     assert!(
         out.contains(
-            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes, rimz-blackboard as `rimz_tools`\n"
+            "serves rimz-lsp, rimz-shell, rimz-watch, rimz-subagents, rimz-agents, rimz-teams, rimz-workflow, rimz-loop, rimz-message, rimz-ask, rimz-control, rimz-notes as `rimz_tools`\n"
         ),
         "{out}"
     );
