@@ -92,7 +92,7 @@ A clone runs because the stress sandbox's only Git setup is a `safe.directory` e
 
 ## Forcing a race
 
-Triage a flake by forcing the state it needs and showing the unfixed tree fail with the original signature. Insert the stalls with a script you write for the purpose. It places each stall at an exact text anchor and fails when an anchor is missing. It matches each anchor as a whole line, indentation included, and fails when the anchor matches more than once: a statement can recur at another depth in a second function, and a substring match edits whichever copy comes first. Run the same script on the fixed tree. A saved diff misapplies once the fix moves the lines.
+Triage a flake by forcing the state it needs and showing the unfixed tree fail with the original signature. Insert the stalls with a script you write for the purpose. It places each stall at an exact text anchor and fails when an anchor is missing. It matches each anchor as a whole line, indentation included, and fails when the anchor matches more than once: a statement can recur at another depth in a second function, and a substring match edits whichever copy comes first. It searches for each anchor only from the line that opens the function holding it to the line that closes that function, since a helper's statement can also recur at the same depth in a test of the same file, where a whole-line match still finds two copies. Run the same script on the fixed tree. A saved diff misapplies once the fix moves the lines.
 
 ### What a forced proof shows
 
