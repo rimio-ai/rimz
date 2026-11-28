@@ -494,6 +494,10 @@ fn the_call_timeout_stops_the_agent_and_reports_once() {
     hook_as(&env, &record, process.id(), "UserPromptSubmit", json!({}));
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        process.try_wait().unwrap().is_some(),
+        "the stop ends the agent's own stand-in"
+    );
     let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
     assert_eq!(settled.status, RunStatus::TimedOut, "{settled:?}");
     assert_eq!(
@@ -551,6 +555,10 @@ fn a_resting_agents_timeout_is_its_newest_run() {
 
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        process.try_wait().unwrap().is_some(),
+        "the stop ends the agent's own stand-in"
+    );
     assert!(
         !live(&env, "tasker"),
         "{}",
@@ -616,6 +624,10 @@ fn a_one_task_run_that_completes_at_its_deadline_reports_once() {
     turn_as(&env, &record, process.id(), "done just in time");
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
+    assert!(
+        process.try_wait().unwrap().is_some(),
+        "the stop ends the agent's own stand-in"
+    );
     let runs = rimz::harness::run::list(env.store().paths()).unwrap();
     assert!(
         runs.iter().all(|run| run.status == RunStatus::Completed),
