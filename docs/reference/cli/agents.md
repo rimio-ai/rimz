@@ -1106,7 +1106,7 @@ An interactive peer still takes the pane-close path when it has a launcher-opene
 
 Stopping a parent first stops its live children launched with `rimz subagents`, including when [`rimz teams stop`](./teams.md#drive-a-live-team) reaches the parent. Without `--all`, the reference must match one agent. With `--all`, `stop` acts on every match, or on every agent a [selection](#act-on-a-selection) names, one at a time, waiting for each agent's processes before the next; a child an earlier stop in the set already stopped is not stopped again. It prints `stopped <address>` for each stopped agent and `error <address>: <failures>` for each one with a failure; an agent that stopped while a child or its retirement failed gets both lines. These addresses follow `list`'s reader-relative rule, without a resume clause. It exits `1` if any agent had a failure.
 
-`rimz agents stop <REF> --when-idle [DURATION|off]` asks for the same stop later, once the agent is finished rather than now. It records the request, prints one line, and returns at once with exit `0`; the room stops the agent after it has rested for the duration with nothing owed to it. An agent can pass `@me` to end its own session when its work is done.
+`rimz agents stop <REF> --when-idle [DURATION|off]` asks for the same stop later, once the agent is finished rather than now. It records the request, prints one line, and returns at once with exit `0`; the room stops the agent after it has rested for the duration with nothing owed to it. An agent can pass `@me` to end its own session when its work is done. An `agent` tool call with a `stay` duration books the same request at the end of the agent's first turn, requested then.
 
 | Form | Does |
 | --- | --- |

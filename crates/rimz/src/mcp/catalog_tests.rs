@@ -1,6 +1,7 @@
 use serde_json::json;
 
 use super::*;
+use crate::harness::block::Stay;
 use crate::mcp::wording::Wording;
 
 fn tool(name: &str) -> &'static Tool {
@@ -576,7 +577,7 @@ fn calls_carry_their_arguments_as_data() {
     ) else {
         panic!("an agent call with stay, schema, and timeout");
     };
-    assert!(!agent.stay);
+    assert_eq!(agent.stay, Stay::TurnEnd);
     assert_eq!(
         (agent.schema, agent.timeout.as_deref()),
         (
@@ -592,7 +593,55 @@ fn calls_carry_their_arguments_as_data() {
     let Call::Agent(agent) = call("agent", json!({"profile": "coder", "prompt": "Go."})) else {
         panic!("an agent call");
     };
-    assert!(agent.stay && agent.schema.is_none() && agent.timeout.is_none());
+    assert!(agent.stay == Stay::UntilStopped && agent.schema.is_none() && agent.timeout.is_none());
+    let ten_minutes = Stay::Rest(std::time::Duration::from_secs(600));
+    for (stay, parsed) in [
+        (json!(true), Stay::UntilStopped),
+        (json!(false), Stay::TurnEnd),
+        (json!("true"), Stay::UntilStopped),
+        (json!("false"), Stay::TurnEnd),
+        (json!("10m"), ten_minutes),
+    ] {
+        let object = json!({"profile": "coder", "prompt": "Go.", "stay": stay});
+        let Call::Agent(agent) = call("agent", object.clone()) else {
+            panic!("an agent call with stay {stay}");
+        };
+        assert_eq!(agent.stay, parsed, "the tool's {stay}");
+        let scripted = crate::harness::block::parse::<crate::harness::block::Agent>(
+            object,
+            crate::harness::block::Caller::Script,
+        )
+        .unwrap();
+        assert_eq!(scripted.stay, parsed, "the script's {stay}");
+    }
+    for (stay, reason) in [
+        (
+            "soon",
+            "`stay` `soon`: expected `true`, `false`, or a rest such as `10m`: unknown \
+             duration unit `soon`; use s/m/h/d",
+        ),
+        (
+            "366d",
+            "`stay` `366d`: expected `true`, `false`, or a rest such as `10m`: duration \
+             `366d` is longer than the 365d maximum",
+        ),
+        (
+            "0s",
+            "`stay` `0s`: a rest of `0s` closes at the turn end; pass `false` for that",
+        ),
+    ] {
+        for caller in [
+            crate::harness::block::Caller::Tool,
+            crate::harness::block::Caller::Script,
+        ] {
+            let refused = crate::harness::block::parse::<crate::harness::block::Agent>(
+                json!({"profile": "coder", "prompt": "Go.", "stay": stay}),
+                caller,
+            )
+            .unwrap_err();
+            assert_eq!(refused, reason, "{caller:?}");
+        }
+    }
     let Call::Team(team) = call(
         "team",
         json!({"team": "forge", "prompt": "Build.", "worktree": "fix", "timeout": "3d"}),
@@ -1039,6 +1088,16 @@ fn schemas_are_inline_objects_without_null_types() {
     );
     let watch = tool("watch").listing(&Wording::built_in());
     assert_eq!(watch["inputSchema"]["required"], json!(["when"]));
+    let stay = &tool("agent").listing(&Wording::built_in())["inputSchema"]["properties"]["stay"];
+    assert_eq!(
+        (&stay["type"], &stay["default"]),
+        (&json!(["boolean", "string"]), &json!(true))
+    );
+    assert!(
+        stay["description"]
+            .as_str()
+            .is_some_and(|text| text.contains("`\"10m\"`"))
+    );
     let guide = tool("guide").listing(&Wording::built_in());
     assert_eq!(guide["inputSchema"]["required"], json!(["name"]));
 }

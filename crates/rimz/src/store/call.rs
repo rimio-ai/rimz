@@ -1,8 +1,8 @@
-//! The call record: one per launch that an `agent` or `team` call gave a `schema` or a
-//! `timeout`, keyed by the launch id of the launch's leader at `owned/calls/<launch-id>.json`.
-//! It is written before the launch's provider starts and holds the answer schema, the deadline,
-//! every seat the launch opened, and once handed in, the answer. Each change is a locked
-//! read-modify-write published by atomic rename.
+//! The call record: one per launch asked for a `schema`, a `timeout`, or a rest, keyed by the
+//! launch id of the launch's leader at `owned/calls/<launch-id>.json`. It is written before the
+//! launch's provider starts and holds the answer schema, the deadline, the rest, every seat the
+//! launch opened, and once handed in, the answer. Each change is a locked read-modify-write
+//! published by atomic rename.
 
 use std::fs;
 use std::io;
@@ -59,8 +59,17 @@ pub struct CallRecord {
     pub launch_id: AgentSessionId,
     /// Every seat the launch opened, the leader first.
     pub seats: Vec<Seat>,
-    /// The `agent` call's `stay`; a team's call stays.
+    /// Whether the `agent` call's `stay` keeps the agent past its turn end; a team's call and
+    /// a rest stay.
     pub stay: bool,
+    /// A rest stay's rest: once the launch's first turn ends, the agent closes after resting
+    /// this long.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_secs: Option<u64>,
+    /// When the launch's first turn end booked the rest's close; at most once, so a later turn
+    /// end books nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rest_booked_at: Option<Timestamp>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<Map<String, Value>>,
     pub created_at: Timestamp,

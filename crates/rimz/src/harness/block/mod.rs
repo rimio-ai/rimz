@@ -213,7 +213,7 @@ fn drop_field_null(field: &mut Value) {
 
 /// Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
 /// `cwd`) it works in its caller's checkout. A script's call resolves when a staying agent's
-/// session has closed, or when a `stay: false` agent's turn has ended.
+/// session has closed, a rest's included, or when a `stay: false` agent's turn has ended.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Agent {
@@ -240,9 +240,11 @@ pub struct Agent {
     /// Existing directory to work in.
     pub cwd: Option<PathBuf>,
     /// `true` (the default): the agent stays in the room after its first turn until it is
-    /// closed. `false`: one task, and it closes once its turn ends and its report is out.
-    #[serde(default = "stays")]
-    pub stay: bool,
+    /// closed. `false`: one task, and it closes once its turn ends and its report is out. A
+    /// duration (`"10m"`, at most `365d`): it stays, and once its first turn has ended it
+    /// closes after resting that long, unless a prompt the user types withdraws the close.
+    #[serde(default)]
+    pub stay: Stay,
     /// JSON Schema the agent's answer must fit, over `type`, `required`, `properties`,
     /// `enum`, and `items` only. The agent is told to hand it in with `rimz submit`, and the
     /// answer stands in for its last message as its report and the call's result.
@@ -252,8 +254,103 @@ pub struct Agent {
     pub timeout: Option<String>,
 }
 
-fn stays() -> bool {
-    true
+/// How long a launched agent stays: until it is closed, until its turn ends, or until it has
+/// rested a duration after its first turn ends. A tool or a script spells it `true`, `false`,
+/// or a duration, each also as a string; `rimz agents --stay` parses the same strings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Stay {
+    #[default]
+    UntilStopped,
+    TurnEnd,
+    Rest(std::time::Duration),
+}
+
+impl Stay {
+    /// The rest a `Rest` stay closes after.
+    pub(crate) fn rest(self) -> Option<std::time::Duration> {
+        match self {
+            Self::Rest(rest) => Some(rest),
+            Self::UntilStopped | Self::TurnEnd => None,
+        }
+    }
+}
+
+const STAY_FORMS: &str = "`true`, `false`, or a rest such as `10m`";
+
+impl std::str::FromStr for Stay {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, String> {
+        match raw {
+            "true" => return Ok(Self::UntilStopped),
+            "false" => return Ok(Self::TurnEnd),
+            _ => {}
+        }
+        match crate::harness::duration::duration(raw) {
+            Ok(rest) if rest.is_zero() => Err(format!(
+                "a rest of `{raw}` closes at the turn end; pass `false` for that"
+            )),
+            Ok(rest) => Ok(Self::Rest(rest)),
+            Err(error) => Err(format!("expected {STAY_FORMS}: {error}")),
+        }
+    }
+}
+
+impl Serialize for Stay {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::UntilStopped => serializer.serialize_bool(true),
+            Self::TurnEnd => serializer.serialize_bool(false),
+            Self::Rest(rest) => {
+                serializer.serialize_str(&crate::utils::time::format_duration_compact(*rest))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for Stay {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct StayVisitor;
+
+        impl serde::de::Visitor<'_> for StayVisitor {
+            type Value = Stay;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str(STAY_FORMS)
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, stays: bool) -> Result<Stay, E> {
+                Ok(if stays {
+                    Stay::UntilStopped
+                } else {
+                    Stay::TurnEnd
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, raw: &str) -> Result<Stay, E> {
+                raw.parse()
+                    .map_err(|error| E::custom(format!("`stay` `{raw}`: {error}")))
+            }
+        }
+
+        deserializer.deserialize_any(StayVisitor)
+    }
+}
+
+/// A boolean or a string, written by hand: a derived union renders an `anyOf`, which no tool
+/// schema carries.
+impl JsonSchema for Stay {
+    fn inline_schema() -> bool {
+        true
+    }
+
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Stay".into()
+    }
+
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({"type": ["boolean", "string"]})
+    }
 }
 
 /// What an agent's call gives without a `schema`; with one, the answer it handed in.
@@ -797,7 +894,7 @@ impl Booked for Agent {
     fn booking_refusal(&self, _repeats: bool) -> Option<String> {
         let profile = self.profile.trim();
         uncarried_refusal(&[
-            ("stay", !self.stay),
+            ("stay", self.stay != Stay::UntilStopped),
             ("schema", self.schema.is_some()),
             ("timeout", self.timeout.is_some()),
         ])

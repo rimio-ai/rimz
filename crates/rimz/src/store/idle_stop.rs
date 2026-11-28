@@ -1,10 +1,9 @@
 //! Pending `rimz agents stop --when-idle` requests, at most one per session.
 //!
-//! The CLI arms or withdraws a request, the hook drainer withdraws it on a
-//! human prompt, and session retirement removes it, each a read-modify-write
-//! from its own process, so every writer takes the workspace lock and
-//! publishes durably. Readers stay lock-free; an absent or unreadable record
-//! reads as no requests.
+//! The CLI arms or withdraws a request, a rest stay's first turn end arms one, the hook drainer
+//! withdraws it on a human prompt, and session retirement removes it, each a read-modify-write
+//! from its own process, so every writer takes the workspace lock and publishes durably. Readers
+//! stay lock-free; an absent or unreadable record reads as no requests.
 
 use serde::{Deserialize, Serialize};
 

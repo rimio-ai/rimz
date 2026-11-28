@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/harness/block/tests.rs
+assertion_line: 737
 expression: typescript()
 ---
 // The globals of a RimZ workflow script, printed by `rimz workflow types`.
@@ -85,7 +86,7 @@ interface CasesResult {
 /**
  * Launches one agent: one seat, never a team. Without a place (`worktree`, `from_pr`,
  * `cwd`) it works in its caller's checkout. A script's call resolves when a staying agent's
- * session has closed, or when a `stay: false` agent's turn has ended.
+ * session has closed, a rest's included, or when a `stay: false` agent's turn has ended.
  */
 declare function agent(block: Agent & { schema: object }): Promise<any>;
 declare function agent(block: Agent): Promise<AgentResult>;
@@ -118,9 +119,11 @@ interface Agent {
   schema?: Record<string, unknown>;
   /**
    * `true` (the default): the agent stays in the room after its first turn until it is
-   * closed. `false`: one task, and it closes once its turn ends and its report is out.
+   * closed. `false`: one task, and it closes once its turn ends and its report is out. A
+   * duration (`"10m"`, at most `365d`): it stays, and once its first turn has ended it
+   * closes after resting that long, unless a prompt the user types withdraws the close.
    */
-  stay?: boolean;
+  stay?: boolean | string;
   /**
    * Stop the agent this long after its launch (`90m`, `2h`, `3d`), staying or not: its
    * report, and a script's call, read timed out. None by default.

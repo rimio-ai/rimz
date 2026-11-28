@@ -759,6 +759,8 @@ fn a_call_record_goes_only_with_no_live_seat_and_no_deadline_to_come() {
             answer: None,
             asked: None,
             timed_out_at: claimed.then_some(past),
+            rest_secs: None,
+            rest_booked_at: None,
         };
         crate::store::call::create(&paths, &record).unwrap();
         if aged {

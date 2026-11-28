@@ -1041,7 +1041,7 @@ fn agent_file_adapters_keep_subagent_reminder_out_of_user_prompt_only_with_promp
         crate::harness::launch_reminders::wrap_hook_context(&format!("### Answer\n\n{body}"))
     );
     let call = crate::harness::call::CallSpec {
-        stay: false,
+        stay: crate::harness::block::Stay::TurnEnd,
         schema: schema.as_object().cloned(),
         timeout: None,
     };
