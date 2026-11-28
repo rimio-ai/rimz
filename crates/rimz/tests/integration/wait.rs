@@ -3651,12 +3651,20 @@ fn wait_until(env: &Env, description: &str, mut ready: impl FnMut() -> bool) {
     while !ready() {
         assert!(
             std::time::Instant::now() < deadline,
-            "timed out: {description}; pending messages: {:?}; run records: {:?}",
+            "timed out: {description}; pending messages: {:?}; run records: {:?}; wait-watch log: {}",
             env.store().list_pending_messages(),
-            wait_records(env)
+            wait_records(env),
+            wait_watch_log(env)
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+}
+
+/// The room's watcher log, where a watcher's errors and warnings land.
+fn wait_watch_log(env: &Env) -> String {
+    let path = env.store().paths().wait_watch_log();
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| format!("absent at {}: {err}", path.display()))
 }
 
 fn wait_for_wait_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
@@ -3684,8 +3692,9 @@ fn loop_runs_path(env: &Env) -> std::path::PathBuf {
 
 fn wait_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
     let path = loop_runs_path(env);
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    // A record still being appended has no newline yet.
+    text[..text.rfind('\n').map_or(0, |end| end + 1)]
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect()
