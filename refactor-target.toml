@@ -4139,7 +4139,9 @@ upward-dependencies = [
 # pressure shares the cgroup-first PSI reader, Resource and its name, Pressure and PressureErr (+6).
 # input_tty_path shares the controlling-pty resolution with the sidebar host (+1).
 # whole_ancestor_pids gives runtime owner records the whole-or-empty parent chain the pane binder compares (+1).
-surface-budget = 158
+# `kill_owned_group`, the group kill by process identity the table engine and a script run's
+# command host share (+1).
+surface-budget = 159
 
 [[verdict]]
 kind = "item"

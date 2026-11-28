@@ -378,6 +378,25 @@ pub(crate) fn process_group_has_env(pgid: u32, key: &str, value: &str) -> bool {
     })
 }
 
+/// Kill the process group `pid` leads, or `pid` alone while it leads none yet, when it is still
+/// the process its start token `start` names, or, where no start token can be read, when a live
+/// member of its group carries the environment marker `key=value`.
+pub(crate) fn kill_owned_group(pid: u32, start: Option<&str>, (key, value): (&str, &str)) {
+    let owns_group = match process_start_token(pid) {
+        Some(token) => start == Some(token.as_str()),
+        None => process_group_has_env(pid, key, value),
+    };
+    if owns_group && let Ok(pid) = i32::try_from(pid) {
+        use nix::sys::signal::{Signal, kill, killpg};
+
+        let pid = nix::unistd::Pid::from_raw(pid);
+        // A child that has not reached its trampoline's `setsid` leads no group yet.
+        if killpg(pid, Signal::SIGKILL) == Err(nix::errno::Errno::ESRCH) {
+            let _ = kill(pid, Signal::SIGKILL);
+        }
+    }
+}
+
 /// The base command name of `pid` from `/proc/<pid>/comm`. A pane's root process
 /// is the shell that owns it, so this names the shell anchor a process row shows
 /// on its primary line while a command runs underneath. Non-Linux, or an
