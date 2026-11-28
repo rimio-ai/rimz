@@ -6600,7 +6600,9 @@ allowed-dependencies = [
 ]
 # drop_room_identity scrubs the room identity from a loop launch child as from a check (+1).
 # find_hosted_program lets script checks resolve their program and name the PATH searched as hosted commands do (+1).
-surface-budget = 19
+# `CheckOutcome::stdout`, a hosted command's stdout kept apart from its stderr for a script run's
+# command step (+1).
+surface-budget = 20
 
 [[module]]
 path = "crates/rimz/src/harness/duration.rs"

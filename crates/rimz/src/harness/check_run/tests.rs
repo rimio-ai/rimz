@@ -107,6 +107,38 @@ fn hosted_check_publishes_its_process_group_and_tees_both_streams() {
 }
 
 #[test]
+fn hosted_command_keeps_its_stdout_apart_and_logs_both_streams() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("command.log");
+    let output = run_command(
+        dir.path(),
+        "printf '{\"a\":1}'; printf err >&2; printf '{\"b\":2}'",
+        WatchDeadline::Hosted {
+            argv: None,
+            interrupted: &|| false,
+            spawned: &mut |_| Ok(()),
+        },
+        CheckEcho::TeeApart {
+            file: File::create(&path).unwrap(),
+            stdout_cap: 7,
+        },
+        &BTreeMap::new(),
+        |_, _| panic!("hosted commands have no check-in"),
+        &mut None,
+    )
+    .unwrap();
+    assert!(output.passed, "{}", output.output);
+    assert_eq!(
+        output.stdout(),
+        Some("{\"b\":2}"),
+        "the last bytes of stdout, without stderr"
+    );
+    let log = std::fs::read_to_string(path).unwrap();
+    assert!(log.contains("err") && log.contains("{\"a\":1}"), "{log}");
+    assert!(output.output.contains("err"), "the tail keeps both streams");
+}
+
+#[test]
 fn hosted_check_argv_preserves_literal_words_without_a_shell() {
     let dir = tempfile::tempdir().unwrap();
     let argv: Vec<std::ffi::OsString> = [
@@ -469,10 +501,15 @@ fn capacity_first_stderr_line_truncates_at_a_character_boundary() {
         tail: Vec::new(),
         cap: CHECK_OUTPUT_CAP,
     }));
-    let first = drain_pipe(Some(std::io::Cursor::new(line.into_bytes())), capture, None)
-        .join()
-        .unwrap()
-        .unwrap();
+    let first = drain_pipe(
+        Some(std::io::Cursor::new(line.into_bytes())),
+        capture,
+        None,
+        None,
+    )
+    .join()
+    .unwrap()
+    .unwrap();
     assert_eq!(first, "x".repeat(1023));
 }
 
