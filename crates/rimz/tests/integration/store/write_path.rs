@@ -207,19 +207,6 @@ fn is_session_start(event: &EventEnvelope) -> bool {
     )
 }
 
-/// Drop the checkpoint cadence stamp so the next write tail publishes —
-/// the test-side lever for asserting what a due publish reflects, the same
-/// way tests age `abandon-sweep.stamp` to force the sweep.
-fn force_next_publish(h: &crate::common::Harness) {
-    let _ = std::fs::remove_file(
-        h.store
-            .paths()
-            .snapshots_dir()
-            .unwrap()
-            .join("publish.stamp"),
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn publishing_reap_preserves_crash_candidate_until_settled() {
@@ -825,39 +812,38 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
         .expect("projection after the race");
 }
 
-/// Build a three-frame log (`kept`, `zeroed`, `behind-the-hole`), zero the
-/// middle frame's bytes to forge a post-power-cut mid-file corpse, and drop the
-/// fold bases so a read must fold the corrupt region. Returns the harness plus
-/// the survivor's byte offset and the total log length.
+/// Build a three-frame log (`kept`, `zeroed`, `behind-the-hole`) and zero the
+/// middle frame's bytes to forge a post-power-cut mid-file corpse. Returns the
+/// harness plus the survivor's byte offset and the total log length.
+///
+/// The frames are bare log appends, so nothing in this process has folded or
+/// published them: the first read folds the corrupt region cold, as the first
+/// read after a power cut does, and the next store mutation's tail publishes.
+/// A store append that lands a cadence interval after the first would publish
+/// and leave this thread's held fold past the hole, and the in-place zeroing
+/// keeps that fold current, so the read would succeed.
 fn corrupt_mid_frame_log() -> (crate::common::Harness, u64, u64) {
+    use rimz::store::event_log;
     use std::io::{Seek, SeekFrom, Write};
 
     let h = crate::common::Harness::new();
-    h.store
-        .append_event(&lifecycle(&h, "SessionStart", "kept"))
-        .expect("first event");
+    let log = &h.store.paths().events_log;
+    event_log::append(log, &lifecycle(&h, "SessionStart", "kept")).expect("first event");
     let committed = log_len(&h);
-    h.store
-        .append_event(&lifecycle(&h, "SessionStart", "zeroed"))
-        .expect("second event");
+    event_log::append(log, &lifecycle(&h, "SessionStart", "zeroed")).expect("second event");
     let corrupted = log_len(&h);
-    h.store
-        .append_event(&lifecycle(&h, "SessionStart", "behind-the-hole"))
-        .expect("third event");
+    event_log::append(log, &lifecycle(&h, "SessionStart", "behind-the-hole")).expect("third event");
     let total = log_len(&h);
 
     // Zero the middle frame's bytes (keeping its newline) — writeback loss.
     let mut file = std::fs::OpenOptions::new()
         .write(true)
-        .open(&h.store.paths().events_log)
+        .open(log)
         .expect("open log");
     file.seek(SeekFrom::Start(committed)).expect("seek");
     let hole = usize::try_from(corrupted - committed - 1).expect("hole len");
     file.write_all(&vec![0u8; hole]).expect("zero the frame");
     drop(file);
-    // Drop the fold bases so reads must fold the corrupt region.
-    let _ = std::fs::remove_file(h.store.paths().rollup_cache().unwrap());
-    let _ = std::fs::remove_file(h.store.paths().latest_snapshot().unwrap());
 
     (h, committed, total)
 }
@@ -904,8 +890,6 @@ fn publish_tail_self_heals_a_corrupt_event_log() {
     // semantic, and resyncing past a hole would need frame magic the format
     // deliberately omits.
     let (h, _, _) = corrupt_mid_frame_log();
-    // Drop the cadence stamp too, so the publish runs in the next write tail.
-    force_next_publish(&h);
     assert!(
         h.store.runtime_projection(RuntimeScope::Runtime).is_err(),
         "a torn middle frame fails reads loudly before the heal"
