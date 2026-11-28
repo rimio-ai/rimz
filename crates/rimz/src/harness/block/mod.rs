@@ -111,6 +111,27 @@ pub(in crate::harness) fn digest(block: BlockName, object: &Value) -> String {
     hex::encode(Sha256::digest(text.as_bytes()))
 }
 
+/// The field that tells one call of a block from another, as `rimz workflow try` and a run's
+/// answer log show it.
+pub fn summary(block: BlockName, object: &Value) -> String {
+    let field = |key: &str| object.get(key).and_then(Value::as_str).unwrap_or_default();
+    match block {
+        BlockName::Agent => match object.get("name").and_then(Value::as_str) {
+            Some(name) => format!("{} ({name})", field("profile")),
+            None => field("profile").to_owned(),
+        },
+        BlockName::Team => field("team").to_owned(),
+        BlockName::Shell => field("command").to_owned(),
+        BlockName::Watch => match object.get("timeout").and_then(Value::as_str) {
+            Some(timeout) => format!("{} (timeout {timeout})", field("when")),
+            None => field("when").to_owned(),
+        },
+        BlockName::Workflow => format!("{} {}", field("source"), field("value")),
+        BlockName::Schedule => field("name").to_owned(),
+        BlockName::Now => String::new(),
+    }
+}
+
 fn write_canonical(out: &mut String, value: &Value) {
     match value {
         Value::Object(map) => {

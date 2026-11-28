@@ -5,8 +5,8 @@ use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
-use rimz::harness::block::{self, BlockName, Failure};
-use rimz::harness::workflow_script::{self, Call, Caps, End, Log, Mark, Outcome, Pass, Progress};
+use rimz::harness::block::{self, Failure};
+use rimz::harness::workflow_script::{self, Caps, End, Log, Mark, Outcome, Pass, Progress};
 use serde_json::{Value, json};
 
 use super::render;
@@ -53,7 +53,7 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
     let mut marks = replay.marks.iter().peekable();
     for call in &replay.calls {
         write_marks(&mut out, &mut marks, call.number - 1)?;
-        let summary = summary(call);
+        let summary = block::summary(call.block, &call.object);
         let gap = if summary.is_empty() { "" } else { " " };
         writeln!(out, "{} {}{gap}{summary}", call.number, call.block.as_str())?;
         let answer = usize::try_from(call.number - 1)
@@ -119,31 +119,6 @@ fn write_marks<'a>(
         }
     }
     Ok(())
-}
-
-/// The field that tells one call of a block from another.
-fn summary(call: &Call) -> String {
-    let field = |key: &str| {
-        call.object
-            .get(key)
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-    };
-    match call.block {
-        BlockName::Agent => match call.object.get("name").and_then(Value::as_str) {
-            Some(name) => format!("{} ({name})", field("profile")),
-            None => field("profile").to_owned(),
-        },
-        BlockName::Team => field("team").to_owned(),
-        BlockName::Shell => field("command").to_owned(),
-        BlockName::Watch => match call.object.get("timeout").and_then(Value::as_str) {
-            Some(timeout) => format!("{} (timeout {timeout})", field("when")),
-            None => field("when").to_owned(),
-        },
-        BlockName::Workflow => format!("{} {}", field("source"), field("value")),
-        BlockName::Schedule => field("name").to_owned(),
-        BlockName::Now => String::new(),
-    }
 }
 
 fn failed(failure: &Failure) -> String {
