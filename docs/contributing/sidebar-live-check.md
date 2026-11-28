@@ -1,6 +1,6 @@
 # Sidebar live check
 
-A unit test proves what the renderer decides, and a scenario PNG proves how a frame draws ([sidebar-screenshots.md](./sidebar-screenshots.md)). Only a live room proves that the frame reaches a real pane in time, on a real multiplexer. Run [the check sequence](#the-check-sequence) on both backends before hand-off for any change to the renderer, the pipeline line, the shared data plane, or click routing. Run each later section too when your change touches its area:
+A unit test proves what the renderer decides, and a scenario PNG proves how a frame draws ([sidebar-screenshots.md](./sidebar-screenshots.md)). Only a live room proves that the frame reaches a real pane in time, on a real multiplexer. Run [the check sequence](#the-check-sequence) on both backends before hand-off for any change to the renderer, the pipeline line, the shared data plane, or click routing. A change only to text the renderer draws from another module, such as a model name from `crates/rimz/src/agents/model_display.rs`, with no code changed under `crates/rimz/src/sidebar/` or `crates/rimz/src/sidebar_pane/`, changes no frame's timing: the renderer's unit tests and snapshots prove it, and it needs no live check. Run each later section too when your change touches its area:
 
 | Your change touches | Also run |
 | --- | --- |
