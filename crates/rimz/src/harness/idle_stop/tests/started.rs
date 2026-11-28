@@ -1079,6 +1079,13 @@ fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_out
             cancel.then(|| "rimz workflow cancel 'review#main'".to_owned()),
             "{case}"
         );
+        // The address names the workflow, so the facts carry only what the name does not.
+        let owed = (run.0 == "done").then_some("report owed");
+        assert_eq!(
+            row.map(|row| row.detail.clone()),
+            group.map(|_| owed.into_iter().map(str::to_owned).collect::<Vec<_>>()),
+            "{case}"
+        );
         let json = read_as(
             &store,
             dir.path(),
@@ -1091,6 +1098,19 @@ fn a_run_the_agent_started_holds_until_its_report_is_sent_and_a_detached_one_out
         let listed: &[_] = if group.is_some() { &stored } else { &[] };
         let json_rows = [rows(&json.holding), rows(&json.outliving)].concat();
         assert_eq!(json_rows, listed, "{case}");
+        // A stored id names no workflow, so the facts name it. A loop-fired run the agent
+        // does not hold lists under its booking chain, whose facts are the task's.
+        let workflow = (group == Some("holding") || !run.2).then_some("review");
+        let row = json.holding.iter().chain(&json.outliving).next();
+        assert_eq!(
+            row.map(|row| row.detail.clone()),
+            group.map(|_| workflow
+                .into_iter()
+                .chain(owed)
+                .map(str::to_owned)
+                .collect()),
+            "{case}"
+        );
     }
 }
 

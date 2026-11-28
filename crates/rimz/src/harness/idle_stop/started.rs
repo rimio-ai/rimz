@@ -713,9 +713,11 @@ impl<'a> List<'a> {
             provider: None,
             since: header.created_at,
             due: None,
+            // An address names the workflow; a stored id does not.
             detail: header
                 .workflow
                 .iter()
+                .filter(|_| shown == id)
                 .cloned()
                 .chain(ended.then(|| "report owed".to_owned()))
                 .collect(),
