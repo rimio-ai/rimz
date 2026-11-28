@@ -1239,23 +1239,11 @@ impl Transition<'_> {
         else {
             return;
         };
-        let owns_group = match crate::proc::process_start_token(child.pid) {
-            Some(start) => child.start.as_ref() == Some(&start),
-            None => crate::proc::process_group_has_env(
-                child.pid,
-                "RIMZ_WORKFLOW_RUN",
-                self.record.id.as_str(),
-            ),
-        };
-        if owns_group && let Ok(pid) = i32::try_from(child.pid) {
-            use nix::sys::signal::{Signal, kill, killpg};
-
-            let pid = nix::unistd::Pid::from_raw(pid);
-            // A child that has not reached its trampoline's `setsid` leads no group yet.
-            if killpg(pid, Signal::SIGKILL) == Err(nix::errno::Errno::ESRCH) {
-                let _ = kill(pid, Signal::SIGKILL);
-            }
-        }
+        crate::proc::kill_owned_group(
+            child.pid,
+            child.start.as_deref(),
+            ("RIMZ_WORKFLOW_RUN", self.record.id.as_str()),
+        );
     }
 }
 
