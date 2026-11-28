@@ -34,6 +34,14 @@ pub struct CheckOutcome {
     output: String,
     code: Option<i32>,
     stderr_line: String,
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a workflow run's command host reads it once runs are built"
+        )
+    )]
+    stdout: Option<String>,
 }
 
 impl CheckOutcome {
@@ -59,7 +67,20 @@ impl CheckOutcome {
             output,
             code,
             stderr_line: String::new(),
+            stdout: None,
         }
+    }
+
+    /// The command's stdout alone, kept under `CheckEcho::TeeApart`.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a workflow run's command host reads it once runs are built"
+        )
+    )]
+    pub(in crate::harness) fn stdout(&self) -> Option<&str> {
+        self.stdout.as_deref()
     }
 
     pub(in crate::harness) fn output(&self) -> &str {
@@ -87,6 +108,12 @@ pub enum CheckEcho {
     Capture,
     Tee {
         file: File,
+    },
+    /// `Tee`, with the last `stdout_cap` bytes of the command's stdout also kept apart from
+    /// its stderr.
+    TeeApart {
+        file: File,
+        stdout_cap: usize,
     },
     Stream {
         announcement: Option<String>,
@@ -329,9 +356,12 @@ pub(crate) fn run_command(
     mut check_in: impl FnMut(u64, String),
     record_hold: &mut Option<CheckSignalGuard>,
 ) -> Result<CheckOutcome> {
-    let (prefix, file, cap) = match echo {
-        CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP),
-        CheckEcho::Tee { file } => (None, Some(file), WAIT_TAIL_CAP),
+    let (prefix, file, cap, stdout_cap) = match echo {
+        CheckEcho::Capture => (None, None, CHECK_OUTPUT_CAP, None),
+        CheckEcho::Tee { file } => (None, Some(file), WAIT_TAIL_CAP, None),
+        CheckEcho::TeeApart { file, stdout_cap } => {
+            (None, Some(file), WAIT_TAIL_CAP, Some(stdout_cap))
+        }
         CheckEcho::Stream {
             announcement,
             prefix,
@@ -341,7 +371,7 @@ pub(crate) fn run_command(
                 out.write_all(announcement.as_bytes())?;
                 out.flush()?;
             }
-            (Some(prefix), None, CHECK_OUTPUT_CAP)
+            (Some(prefix), None, CHECK_OUTPUT_CAP, None)
         }
     };
     let capture = Arc::new(Mutex::new(CheckCapture {
@@ -349,6 +379,13 @@ pub(crate) fn run_command(
         tail: Vec::with_capacity(cap),
         cap,
     }));
+    let apart = stdout_cap.map(|cap| {
+        Arc::new(Mutex::new(CheckCapture {
+            file: None,
+            tail: Vec::new(),
+            cap,
+        }))
+    });
     let captured_output = || {
         capture
             .lock()
@@ -401,6 +438,7 @@ pub(crate) fn run_command(
     let stdout = drain_pipe(
         child.stdout.take(),
         Arc::clone(&capture),
+        apart.clone(),
         prefix
             .clone()
             .map(|prefix| PipeForward::new(PipeDestination::Stdout, prefix)),
@@ -408,6 +446,7 @@ pub(crate) fn run_command(
     let stderr = drain_pipe(
         child.stderr.take(),
         Arc::clone(&capture),
+        None,
         prefix.map(|prefix| PipeForward::new(PipeDestination::Stderr, prefix)),
     );
     let started = Instant::now();
@@ -544,6 +583,15 @@ pub(crate) fn run_command(
         output: captured_output()?,
         code: status.code(),
         stderr_line,
+        stdout: match apart {
+            Some(apart) => Some(
+                apart
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("loop check output lock poisoned"))?
+                    .output(),
+            ),
+            None => None,
+        },
     })
 }
 
@@ -650,6 +698,7 @@ impl CheckCapture {
 fn drain_pipe(
     pipe: Option<impl Read + Send + 'static>,
     capture: Arc<Mutex<CheckCapture>>,
+    apart: Option<Arc<Mutex<CheckCapture>>>,
     mut forward: Option<PipeForward>,
 ) -> std::thread::JoinHandle<std::io::Result<String>> {
     std::thread::spawn(move || {
@@ -674,6 +723,12 @@ fn drain_pipe(
                     .lock()
                     .map_err(|_| std::io::Error::other("loop check output lock poisoned"))?
                     .push(bytes)?;
+                if let Some(apart) = &apart {
+                    apart
+                        .lock()
+                        .map_err(|_| std::io::Error::other("loop check output lock poisoned"))?
+                        .push(bytes)?;
+                }
                 if let Some(forward) = &mut forward {
                     forward.push(bytes);
                 }
