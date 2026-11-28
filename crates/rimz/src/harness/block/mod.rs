@@ -1046,6 +1046,13 @@ pub(in crate::harness) fn reads(
     Ok(condition.truth(readings))
 }
 
+/// A launch's `timeout` in the grammar the blocks take it: one number and `s`, `m`, `h`, or
+/// `d`, at most `365d`. `rimz agents`, `rimz teams`, `rimz shell`, and `rimz watch` parse
+/// their `--timeout` with it.
+pub fn timeout(raw: &str) -> Result<std::time::Duration, String> {
+    crate::harness::duration::duration(raw).map_err(|error| error.to_string())
+}
+
 /// A duration in the loop scheduler's grammar, which a booking's `in`, `every`, and `for` reach:
 /// more than zero, with no cap.
 fn delay_refusal(field: &str, raw: Option<&str>) -> Option<String> {

@@ -788,6 +788,7 @@ fn prepare(
             throttle_turn: None,
             reader,
             response_receipt: agent_launched,
+            launched_at: None,
             completion: context.completion,
         });
     let room = if matches!(entry, RoomEntry::Live) {

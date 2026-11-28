@@ -4834,7 +4834,7 @@ fn failed_supervised_run_retries_with_failure_context() {
         .home_root
         .join("project-worktrees")
         .join("retry-worktree");
-    let mut child = spawn_retrying_print(&env, "retry-success", true, "fix it");
+    let mut child = spawn_retrying_print(&env, "retry-success", true, "fix it", &[]);
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     assert!(worktree.is_dir(), "attempt 1 created the shared worktree");
@@ -4927,7 +4927,8 @@ fn failed_supervised_run_retries_with_failure_context() {
 fn oversized_retry_prompt_refuses_before_creating_another_run() {
     let env = Env::new();
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "retry-oversized", false, &"x".repeat(120 * 1024));
+    let mut child =
+        spawn_retrying_print(&env, "retry-oversized", false, &"x".repeat(120 * 1024), &[]);
     let mut failed = wait_for_run_count(&store, &mut child, 1)
         .pop()
         .expect("first run");
@@ -4965,7 +4966,7 @@ fn oversized_retry_prompt_refuses_before_creating_another_run() {
 fn timed_out_supervised_run_does_not_retry() {
     let env = Env::new();
     let store = env.store();
-    let mut child = spawn_retrying_print(&env, "retry-timeout", false, "fix it");
+    let mut child = spawn_retrying_print(&env, "retry-timeout", false, "fix it", &[]);
 
     let mut records = wait_for_run_count(&store, &mut child, 1);
     let mut timed_out = records.pop().expect("first run");
@@ -4987,6 +4988,126 @@ fn timed_out_supervised_run_does_not_retry() {
         1
     );
     assert!(!String::from_utf8_lossy(&out.stderr).contains("retrying"));
+}
+
+/// A print run's `--timeout` is its launch's call deadline, so its run record keeps no deadline
+/// of its own, and the turn the deadline cuts is the attempt marked timed out.
+#[cfg(unix)]
+#[test]
+fn a_print_timeout_is_its_launchs_deadline_and_times_out_the_turn_it_cuts() {
+    let env = Env::new();
+    let store = env.store();
+    let mut child =
+        spawn_retrying_print(&env, "deadline-turn", false, "fix it", &["--timeout", "2s"]);
+    let run = wait_for_run_count(&store, &mut child, 1)
+        .pop()
+        .expect("first run");
+    assert_eq!((run.deadline_at, run.timeout), (None, None));
+    let launch_id = run.launch_id.clone().expect("the run's launch");
+    let call = rimz::store::call::load(store.paths(), &launch_id)
+        .unwrap()
+        .expect("the launch's call record");
+    assert_eq!(
+        call.deadline,
+        Some(call.created_at + Duration::from_secs(2))
+    );
+
+    let out = child.wait_with_output().expect("wait timed-out print");
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    let stored = rimz::harness::run::load(store.paths(), &run.run_id).unwrap();
+    assert_eq!(stored.status, RunStatus::TimedOut);
+    assert_eq!(rimz::harness::run::list(store.paths()).unwrap().len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_print_deadline_that_passes_between_attempts_starts_no_retry() {
+    let env = Env::new();
+    let store = env.store();
+    let mut child = spawn_retrying_print(
+        &env,
+        "deadline-retry",
+        false,
+        "fix it",
+        &["--timeout", "1h"],
+    );
+    let mut failed = wait_for_run_count(&store, &mut child, 1)
+        .pop()
+        .expect("first run");
+    move_call_deadline(&store, &failed, Timestamp::now());
+    failed.status = RunStatus::Failed;
+    failed.failure_tail = Some("compiler failure".to_owned());
+    finish_run(&store, &mut failed);
+
+    let out = child.wait_with_output().expect("wait print");
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    assert_eq!(rimz::harness::run::list(store.paths()).unwrap().len(), 1);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("retrying"), "{stderr}");
+    assert!(
+        stderr
+            .contains("rimz: the launch's --timeout passed before a retry could start (exit 124)"),
+        "{stderr}"
+    );
+    let stored = rimz::harness::run::load(store.paths(), &failed.run_id).unwrap();
+    assert_eq!(
+        stored.status,
+        RunStatus::Failed,
+        "the attempt ended before the deadline"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_print_deadline_caps_its_verify_check_and_times_the_run_out() {
+    let env = Env::new();
+    let store = env.store();
+    let pane_fixture = env.write_pane_fixture(&[verify_agent_pane(&env)]);
+    let mut child = verifying_print_command(
+        &env,
+        "verify-deadline",
+        2,
+        &pane_fixture,
+        Some("1h"),
+        "sleep 30",
+    )
+    .spawn()
+    .expect("spawn verifying print");
+    let mut completed = wait_for_run_count(&store, &mut child, 1)
+        .pop()
+        .expect("initial run");
+    move_call_deadline(
+        &store,
+        &completed,
+        Timestamp::now() + Duration::from_secs(1),
+    );
+    completed.status = RunStatus::Completed;
+    completed.last_message = Some("claimed done".to_owned());
+    let finished = Instant::now();
+    finish_run(&store, &mut completed);
+
+    let out = child.wait_with_output().expect("wait capped verify");
+    assert_eq!(out.status.code(), Some(124), "{out:?}");
+    assert!(
+        finished.elapsed() < Duration::from_secs(20),
+        "the check ran past the time left"
+    );
+    let stored = rimz::harness::run::load(store.paths(), &completed.run_id).unwrap();
+    assert_eq!(stored.status, RunStatus::TimedOut);
+    let verify = stored.verify.expect("the cut check's detail");
+    assert!(verify.timed_out && !verify.passed, "{verify:?}");
+}
+
+/// Move the deadline of `run`'s launch to `deadline`.
+#[cfg(unix)]
+fn move_call_deadline(store: &rimz::Store, run: &RunRecord, deadline: Timestamp) {
+    let launch_id = run.launch_id.as_ref().expect("the run's launch");
+    rimz::store::call::update(store.paths(), launch_id, |call| {
+        call.deadline = Some(deadline);
+        Some(())
+    })
+    .unwrap()
+    .expect("the launch's call record");
 }
 
 #[cfg(unix)]
@@ -5134,10 +5255,13 @@ fn verify_reprompt_wait_timeout_stays_terminal() {
     let mut completed = records.pop().expect("initial run");
     register_verify_agent(&env, &store, &mut completed);
     completed.status = RunStatus::Completed;
-    // The deadline falls due as the first turn ends, so only the re-prompted wait can time out.
-    // A deadline the first wait reaches times it out before this write, which then overwrites
-    // its TimedOut.
-    completed.deadline_at = Some(Timestamp::now());
+    // The deadline falls due soon after the first turn ends, so only the red check, capped by
+    // the time left, or the re-prompted wait can time out.
+    move_call_deadline(
+        &store,
+        &completed,
+        Timestamp::now() + Duration::from_secs(3),
+    );
     finish_run(&store, &mut completed);
 
     let out = child
@@ -5239,6 +5363,7 @@ fn spawn_retrying_print(
     trace_name: &str,
     use_worktree: bool,
     prompt: &str,
+    extra: &[&str],
 ) -> std::process::Child {
     env.install_agent_hooks("codex");
     trust_codex_preflight_hooks(env);
@@ -5279,6 +5404,7 @@ fn spawn_retrying_print(
     if use_worktree {
         command.arg("--worktree=retry-worktree");
     }
+    command.args(extra);
     command.spawn().expect("spawn retrying print")
 }
 

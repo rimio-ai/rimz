@@ -128,6 +128,7 @@ impl Fixture {
             throttle_turn: None,
             reader: None,
             response_receipt: false,
+            launched_at: None,
             completion: RunCompletion::Watched {
                 cancellation: RunCancellation::new(),
                 install_interrupts: |_| Ok(()),
@@ -857,35 +858,47 @@ fn a_definition_timeout_reaches_the_subagent_run_record() {
 }
 
 #[test]
-fn every_run_with_a_deadline_records_its_timeout() {
-    let fixture = Fixture::new();
-    let mut leader = fixture.leader();
+fn a_subagents_timeout_is_its_runs_clock_and_any_other_its_launchs_deadline() {
     let ten = std::time::Duration::from_secs(10 * 60);
-    leader.timeout = Some(ten);
-    let backend = fake_backend::Backend::default();
-    let LaunchOutcome::Opened(opened) = open_fresh(
-        fixture.fresh.clone(),
-        Some(leader),
-        &mut Unattended,
-        &backend,
-    )
-    .unwrap() else {
-        panic!("launch did not open");
-    };
-    let run = opened.run.unwrap();
-    let record = crate::harness::run::load(run.store.paths(), &run.record.run_id).unwrap();
-    assert_eq!(
-        (
-            record.timeout,
-            record.warn,
-            record.grace,
-            record.deadline_at
-        ),
-        (
-            Some(ten),
-            Vec::new(),
-            None,
-            Some(record.started_at.checked_add(ten).unwrap()),
-        )
-    );
+    for subagent in [true, false] {
+        let fixture = Fixture::new();
+        let mut fresh = fixture.fresh.clone();
+        let mut leader = fixture.leader();
+        leader.subagent = subagent;
+        if subagent {
+            leader.timeout = Some(ten);
+        } else {
+            fresh.call = Some(crate::harness::call::CallSpec {
+                stay: crate::harness::block::Stay::TurnEnd,
+                schema: None,
+                timeout: Some(ten),
+            });
+        }
+        let backend = fake_backend::Backend::default();
+        let LaunchOutcome::Opened(opened) =
+            open_fresh(fresh, Some(leader), &mut Unattended, &backend).unwrap()
+        else {
+            panic!("launch did not open");
+        };
+        let run = opened.run.unwrap();
+        let record = crate::harness::run::load(run.store.paths(), &run.record.run_id).unwrap();
+        let launch_id = record.launch_id.clone().unwrap();
+        let call = crate::store::call::load(run.store.paths(), &launch_id).unwrap();
+        if subagent {
+            assert_eq!(
+                (record.timeout, record.deadline_at),
+                (Some(ten), Some(record.started_at.checked_add(ten).unwrap()))
+            );
+            assert!(call.is_none(), "a subagent's launch has no call deadline");
+        } else {
+            assert_eq!((record.timeout, record.deadline_at), (None, None));
+            let call = call.expect("the launch's call record");
+            assert_eq!(call.deadline, Some(call.created_at + ten));
+            assert_eq!(
+                run.leader.launched_at,
+                Some(call.created_at),
+                "a retry keeps the first launch's deadline"
+            );
+        }
+    }
 }

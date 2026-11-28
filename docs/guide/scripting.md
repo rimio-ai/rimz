@@ -107,7 +107,7 @@ An exit code tells you the turn ended. These two flags let the run prove the wor
 rimz agents codex -p --verify "cargo xtask test auth" --max-attempts 3 "Fix the failing auth test."
 ```
 
-**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's failure reason (the launch error, launch-step refusal, or captured pane tail) to the original prompt inside a `<previous-attempt-failure>` block. Timeout and budget caps apply to each attempt; timeouts, budget stops, and cancels stay terminal, and the last attempt decides the command's exit code.
+**Retry on failure.** `--retries N` reruns a failed (exit `1`) turn up to `N` more times in a fresh session, appending the previous attempt's failure reason (the launch error, launch-step refusal, or captured pane tail) to the original prompt inside a `<previous-attempt-failure>` block. The budget cap applies to each attempt, while `--timeout` counts from the first launch, and a retry it has passed never starts (exit `124`). Timeouts, budget stops, and cancels stay terminal, and otherwise the last attempt decides the command's exit code.
 
 ```sh
 rimz agents codex -p --retries 1 --timeout 30m "Fix the failing checks."

@@ -48,6 +48,9 @@ pub struct LeaderRun {
     pub throttle_turn: Option<crate::harness::throttle::Turn>,
     pub reader: Option<String>,
     pub response_receipt: bool,
+    /// When this run's first attempt launched; none before it opens. A retry's call record
+    /// takes its deadline from then, so no attempt moves the launch's deadline.
+    pub launched_at: Option<jiff::Timestamp>,
     pub completion: RunCompletion,
 }
 
@@ -313,13 +316,13 @@ fn open_fresh(
             record.report_to = leader.report_to;
             record.subagent = leader.subagent;
             record.budget.clone_from(&cell.launch.budget);
-            record.deadline_at = leader
-                .timeout
-                .map(|timeout| record.started_at.checked_add(timeout))
-                .transpose()
-                .context("computing supervised run deadline")?;
-            record.timeout = leader.timeout;
             if leader.subagent {
+                record.deadline_at = leader
+                    .timeout
+                    .map(|timeout| record.started_at.checked_add(timeout))
+                    .transpose()
+                    .context("computing supervised run deadline")?;
+                record.timeout = leader.timeout;
                 record.warn.clone_from(&leader.warn);
                 record.grace = leader.grace.filter(|grace| !grace.is_zero());
             }
@@ -407,11 +410,15 @@ fn open_fresh(
             description: fresh.description.clone(),
         },
     )?;
+    let launched_at = leader
+        .as_ref()
+        .and_then(|leader| leader.launched_at)
+        .unwrap_or_else(jiff::Timestamp::now);
     if let Some(call) = &fresh.call
         && let Err(error) = call.publish(
             store.paths(),
             call_seats(batch.identities(), leader_index),
-            jiff::Timestamp::now(),
+            launched_at,
         )
     {
         let _ = store.fail_agent_launch_batch(&batch);
@@ -611,19 +618,22 @@ fn open_fresh(
             assist,
         });
     }
-    let run = record.zip(leader).map(|(record, leader)| OpenedRun {
-        response_path: leader
-            .response_receipt
-            .then(|| crate::harness::run::response_path(store.paths(), &record))
-            .flatten(),
-        record,
-        waiter,
-        workspace: workspace.clone(),
-        store: store.clone(),
-        room: room.clone(),
-        owns_checkout_lifecycle: fresh.launch.owns_checkout_lifecycle(),
-        next: Box::new(fresh.clone()),
-        leader,
+    let run = record.zip(leader).map(|(record, mut leader)| {
+        leader.launched_at = Some(launched_at);
+        OpenedRun {
+            response_path: leader
+                .response_receipt
+                .then(|| crate::harness::run::response_path(store.paths(), &record))
+                .flatten(),
+            record,
+            waiter,
+            workspace: workspace.clone(),
+            store: store.clone(),
+            room: room.clone(),
+            owns_checkout_lifecycle: fresh.launch.owns_checkout_lifecycle(),
+            next: Box::new(fresh.clone()),
+            leader,
+        }
     });
     Ok(LaunchOutcome::Opened(Box::new(OpenedLayout {
         identities: batch.identities().to_vec(),

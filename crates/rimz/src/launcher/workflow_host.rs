@@ -421,6 +421,7 @@ impl workflow::AttemptHost for Host<'_> {
                     throttle_turn: step.throttle_turn,
                     reader: None,
                     response_receipt: false,
+                    launched_at: None,
                     completion: super::RunCompletion::Detached,
                 }),
             };

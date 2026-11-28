@@ -2555,7 +2555,7 @@ fn settle_verify_cancels_after_storing_the_verify() {
         ..red_verify(3)
     };
     let VerifyStep::Settled(settled) =
-        settle_verify(&paths, &record.run_id, verify.clone(), true, 3).unwrap()
+        settle_verify(&paths, &record.run_id, verify.clone(), true, false, 3).unwrap()
     else {
         panic!("a requested cancellation settles the run");
     };
@@ -2572,7 +2572,7 @@ fn settle_verify_keeps_a_passed_run_completed() {
         ..red_verify(3)
     };
     let VerifyStep::Settled(settled) =
-        settle_verify(&paths, &record.run_id, verify.clone(), false, 3).unwrap()
+        settle_verify(&paths, &record.run_id, verify.clone(), false, false, 3).unwrap()
     else {
         panic!("a pass settles the run");
     };
@@ -2584,7 +2584,7 @@ fn settle_verify_keeps_a_passed_run_completed() {
 fn settle_verify_fails_a_red_run_at_the_attempt_cap() {
     let (_dir, paths, record) = completed_for_verify();
     let VerifyStep::Settled(settled) =
-        settle_verify(&paths, &record.run_id, red_verify(3), false, 3).unwrap()
+        settle_verify(&paths, &record.run_id, red_verify(3), false, false, 3).unwrap()
     else {
         panic!("the attempt cap settles the run");
     };
@@ -2596,7 +2596,7 @@ fn settle_verify_fails_a_red_run_at_the_attempt_cap() {
 fn settle_verify_reopens_a_red_run_under_the_cap() {
     let (_dir, paths, record) = completed_for_verify();
     let VerifyStep::Reprompt(reopened) =
-        settle_verify(&paths, &record.run_id, red_verify(1), false, 3).unwrap()
+        settle_verify(&paths, &record.run_id, red_verify(1), false, false, 3).unwrap()
     else {
         panic!("a red verify under the cap re-prompts");
     };
@@ -5299,7 +5299,7 @@ fn a_verify_cancel_keeps_the_spend_its_completion_recorded() {
     record.input_tokens = Some(100);
     create(&paths, &record).unwrap();
     let VerifyStep::Settled(canceled) =
-        settle_verify(&paths, &record.run_id, red_verify(1), true, 3).unwrap()
+        settle_verify(&paths, &record.run_id, red_verify(1), true, false, 3).unwrap()
     else {
         panic!("a requested cancel settles");
     };
