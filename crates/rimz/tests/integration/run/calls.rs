@@ -118,6 +118,22 @@ fn call(schema: Option<serde_json::Value>, deadline: Option<(Timestamp, Duration
 
 /// The task's provider firing its `event` hook, `extra` merged into the payload.
 fn hook(env: &Env, record: &RunRecord, event: &str, extra: serde_json::Value) {
+    hook_with_owner(env, record, None, event, extra);
+}
+
+/// Like [`hook`], stamping `owner` as `RIMZ_AGENT_PID` in place of [`Env::agent_owner_pid`] so
+/// the row keeps the seat's own [`provider`] process.
+fn hook_as(env: &Env, record: &RunRecord, owner: u32, event: &str, extra: serde_json::Value) {
+    hook_with_owner(env, record, Some(owner), event, extra);
+}
+
+fn hook_with_owner(
+    env: &Env,
+    record: &RunRecord,
+    owner: Option<u32>,
+    event: &str,
+    extra: serde_json::Value,
+) {
     let mut payload = json!({
         "hook_event_name": event,
         "session_id": TASK_SESSION,
@@ -128,6 +144,9 @@ fn hook(env: &Env, record: &RunRecord, event: &str, extra: serde_json::Value) {
         .unwrap()
         .extend(extra.as_object().cloned().unwrap_or_default());
     let mut command = env.hook_command("codex");
+    if let Some(pid) = owner {
+        command.env("RIMZ_AGENT_PID", pid.to_string());
+    }
     command.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str());
     let output = env
         .spawn_payload(command, &payload.to_string())
@@ -138,8 +157,22 @@ fn hook(env: &Env, record: &RunRecord, event: &str, extra: serde_json::Value) {
 }
 
 fn turn(env: &Env, record: &RunRecord, last: &str) {
-    hook(env, record, "UserPromptSubmit", json!({}));
-    hook(env, record, "Stop", json!({"last_assistant_message": last}));
+    turn_with_owner(env, record, None, last);
+}
+
+fn turn_as(env: &Env, record: &RunRecord, owner: u32, last: &str) {
+    turn_with_owner(env, record, Some(owner), last);
+}
+
+fn turn_with_owner(env: &Env, record: &RunRecord, owner: Option<u32>, last: &str) {
+    hook_with_owner(env, record, owner, "UserPromptSubmit", json!({}));
+    hook_with_owner(
+        env,
+        record,
+        owner,
+        "Stop",
+        json!({"last_assistant_message": last}),
+    );
 }
 
 /// `rimz submit` run from the task's own pane.
@@ -219,7 +252,8 @@ fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process:
         .unwrap()
 }
 
-/// A process standing in for a seat's provider, which a stop ends.
+/// A process standing in for a seat's provider, which a stop ends when hooks stamp its pid as
+/// `RIMZ_AGENT_PID`.
 fn provider() -> std::process::Child {
     use crate::common::ScrubSessionEnvExt;
     Command::new("sleep")
@@ -457,7 +491,7 @@ fn the_call_timeout_stops_the_agent_and_reports_once() {
         Some(call(None, Some((created, Duration::from_secs(30 * 60))))),
         Some((7, process.id())),
     );
-    hook(&env, &record, "UserPromptSubmit", json!({}));
+    hook_as(&env, &record, process.id(), "UserPromptSubmit", json!({}));
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
     let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
@@ -511,7 +545,7 @@ fn a_resting_agents_timeout_is_its_newest_run() {
     let mut staying = call(None, Some((created, Duration::from_secs(30 * 60))));
     staying.stay = true;
     let first = peer_turn_in(&env, Some(staying), Some((7, process.id())));
-    turn(&env, &first, "the first turn's answer");
+    turn_as(&env, &first, process.id(), "the first turn's answer");
     let completed = rimz::harness::run::load(env.store().paths(), &first.run_id).unwrap();
     assert_eq!(completed.status, RunStatus::Completed, "{completed:?}");
 
@@ -579,7 +613,7 @@ fn a_one_task_run_that_completes_at_its_deadline_reports_once() {
         Some(call(None, Some((created, Duration::from_secs(30 * 60))))),
         Some((7, process.id())),
     );
-    turn(&env, &record, "done just in time");
+    turn_as(&env, &record, process.id(), "done just in time");
     let output = call_timeout(&env, TASK_LAUNCH, &[(7, "codex")]);
     assert!(output.status.success(), "{output:?}");
     let runs = rimz::harness::run::list(env.store().paths()).unwrap();
@@ -616,16 +650,10 @@ fn a_launch_ended_before_its_deadline_is_sent_nothing() {
 /// deadline an hour past, with seats `seats` (handle and Zellij terminal) each running a
 /// provider stand-in, and the leader's team run.
 fn team_call(env: &Env, seats: &[(&str, u64)]) -> (Vec<std::process::Child>, RunRecord) {
-    use crate::common::ScrubSessionEnvExt;
-
     let workspace = env.resolve_workspace(&env.project_root);
     let seat = |(name, pane): (&str, u64)| {
         let session = format!("{name}-session");
-        let process = Command::new("sleep")
-            .scrub_session_env()
-            .arg("30")
-            .spawn()
-            .unwrap();
+        let process = provider();
         let launch = LaunchParams {
             team: Some("forge".to_owned()),
             channel: Some("x".to_owned()),
@@ -830,6 +858,7 @@ fn a_team_seating_calls_handed_in_answer_is_its_response() {
             .unwrap()
             .extend(extra.as_object().cloned().unwrap_or_default());
         let mut command = env.hook_command("claude");
+        command.env("RIMZ_AGENT_PID", processes[0].id().to_string());
         command.env(rimz::harness::launch::ENV_RUN_ID, record.run_id.as_str());
         let output = env
             .spawn_payload(command, &payload.to_string())
