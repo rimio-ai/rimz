@@ -307,7 +307,7 @@ fn a_try_and_a_plain_run_start_beside_each_other_but_a_mid_graph_start_is_refuse
     let stderr = String::from_utf8_lossy(&refused.stderr);
     assert_eq!(refused.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains(&format!("workflow review already has run {plain} for ")),
+        stderr.contains("workflow review already has run review#main for "),
         "{stderr}"
     );
     let listed: Value =

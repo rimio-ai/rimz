@@ -339,10 +339,13 @@ pub fn default_signal_match_key(
     }
 }
 
-/// The subject following the name in a delivered signal or event listing.
+/// The subject following the name in a delivered signal or event listing. A `workflow.*` run
+/// shows as `runs` names it ([`crate::store::workflow::RunNames::shown`]), and as the payload
+/// writes it where that names no run id.
 pub fn signal_subject(
     name: &crate::store::event::SignalName,
     payload: &Map<String, Value>,
+    runs: &crate::store::workflow::RunNames,
 ) -> String {
     let text = |key: &str| payload.get(key).and_then(Value::as_str);
     let mut headline = String::new();
@@ -375,7 +378,10 @@ pub fn signal_subject(
         }
         "worktree" => append_identity(&mut headline, payload, "name"),
         "team" => append_identity(&mut headline, payload, "instance"),
-        "workflow" => append_identity(&mut headline, payload, "run"),
+        "workflow" => match text("run").and_then(|run| run.parse().ok()) {
+            Some(run) => headline.push_str(&format!(" {}", one_line(&runs.shown(&run)))),
+            None => append_identity(&mut headline, payload, "run"),
+        },
         _ => {}
     }
     match name.as_str() {
@@ -687,30 +693,56 @@ mod tests {
         assert!(parse_signal_selector("task", "pr.conflicted", Some(&matches)).is_ok());
     }
 
+    /// A run shows as the room's runs name it: a real run by its address, a `once` try by its
+    /// id, and a run id no record holds as the payload writes it.
     #[test]
     fn a_workflow_subject_names_the_run_and_its_edge() {
-        let subject = |name: &str, payload: Value| {
-            let name = name.parse().unwrap();
-            signal_subject(&name, payload.as_object().unwrap())
+        let home = tempfile::tempdir().unwrap();
+        let state =
+            crate::StatePaths::for_project_root_under(Path::new("/project"), home.path()).unwrap();
+        let guard = crate::disk::lock::WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+        let seed = |lane: &str, once: bool| {
+            let id = crate::ids::WorkflowRunId::new();
+            let at = jiff::Timestamp::UNIX_EPOCH;
+            let record: crate::store::workflow::RunRecord =
+                serde_json::from_value(serde_json::json!({
+                    "version": crate::store::workflow::VERSION, "id": id, "workflow": "review",
+                    "spec_dir": "/definitions/review",
+                    "scope": {"kind": "worktree", "path": format!("/project/.worktrees/{lane}")},
+                    "project_root": "/project", "created_at": at, "entered_at": at,
+                    "state": "active", "node": "fix", "visits": {}, "deadline_fired": false,
+                    "next_seq": 1, "once": once,
+                }))
+                .unwrap();
+            crate::store::workflow::initialize(&state, &record, &guard).unwrap();
+            id.to_string()
         };
-        let run = serde_json::json!({"run": "wf_1", "workflow": "review", "node": "fix"});
-        let with = |key: &str, value: &str| {
-            let mut payload = run.clone();
-            payload[key] = value.into();
-            payload
+        let real = seed("feat-x", false);
+        let tried = seed("feat-y", true);
+        let runs = crate::store::workflow::RunNames::new(&state);
+        let subject = |name: &str, run: &str, extra: &[(&str, &str)]| {
+            let mut payload = serde_json::json!({"run": run, "workflow": "review", "node": "fix"});
+            for (key, value) in extra {
+                payload[*key] = (*value).into();
+            }
+            signal_subject(&name.parse().unwrap(), payload.as_object().unwrap(), &runs)
         };
         assert_eq!(
-            subject("workflow.moved", with("from", "build")),
-            "wf_1 · build -> fix"
+            subject("workflow.moved", &real, &[("from", "build")]),
+            "review#feat-x · build -> fix"
         );
         assert_eq!(
-            subject("workflow.ended", with("outcome", "failed")),
-            "wf_1 · failed"
+            subject("workflow.ended", &real, &[("outcome", "failed")]),
+            "review#feat-x · failed"
         );
         assert_eq!(
-            subject("workflow.failed", with("outcome", "failed")),
-            "wf_1"
+            subject("workflow.failed", &real, &[("outcome", "failed")]),
+            "review#feat-x"
         );
-        assert_eq!(subject("workflow.waiting", run), "wf_1");
+        assert_eq!(
+            subject("workflow.ended", &tried, &[("outcome", "done")]),
+            format!("{tried} · done")
+        );
+        assert_eq!(subject("workflow.waiting", "wf_1", &[]), "wf_1");
     }
 }

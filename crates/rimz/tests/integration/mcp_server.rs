@@ -4921,6 +4921,103 @@ fn a_stopped_workflow_run_reads_as_ended_and_settles_as_a_cli_cancel_does() {
     assert_eq!(settled(&record), settled(&cli), "{record:#}\n{cli:#}");
 }
 
+/// An address names the newest run at it that the caller started, live runs first: `tasks`
+/// lists that run by its address and an older one by its stored id, `join` and `stop` act on
+/// it, and an address only another agent's run holds is refused as theirs.
+#[test]
+fn a_workflow_address_names_the_newest_live_run_the_caller_started() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let at = |second: i64| json!({"created_at": jiff::Timestamp::from_second(second).unwrap()});
+    let older = seed_started_run(&env, "launch-session", at(1_700_000_000));
+    let newer = seed_started_run(&env, "launch-session", at(1_700_000_100));
+    let mut theirs = at(1_700_000_300);
+    theirs["scope"] = json!({"kind": "worktree", "path": env.project_root.join("lane-x")});
+    seed_started_run(&env, "launch-other", theirs);
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (listed, is_error) = server.answer(1, "tasks", json!({"kind": "workflow"}));
+    assert!(!is_error, "{listed}");
+    let mut ids = task_ids(&listed);
+    ids.sort_unstable();
+    let stored = format!("workflow:{older}");
+    assert_eq!(ids, ["workflow:review#main", stored.as_str()], "{listed}");
+
+    let (joined, is_error) = server.answer(
+        2,
+        "join",
+        json!({"id": "workflow:review#main", "timeout": "1s"}),
+    );
+    assert!(!is_error, "{joined}");
+    assert_eq!(
+        joined,
+        json!({"id": "workflow:review#main", "status": "running"})
+    );
+    for (call, canceled) in [(3, &newer), (4, &older)] {
+        let (stopped, is_error) =
+            server.answer(call, "stop", json!({"id": "workflow:review#main"}));
+        assert!(!is_error, "{stopped}");
+        assert_eq!(stopped["status"], json!("stopped"), "{stopped}");
+        assert_eq!(run_record(&env, canceled).0["state"], json!("canceled"));
+    }
+
+    let (failure, is_error) = server.answer(5, "stop", json!({"id": "workflow:review#lane-x"}));
+    assert!(is_error, "{failure}");
+    assert_eq!(
+        failure["error"],
+        json!("workflow:review#lane-x was started by another agent")
+    );
+    let (unknown, is_error) = server.answer(6, "join", json!({"id": "workflow:review#nowhere"}));
+    assert!(is_error, "{unknown}");
+    assert_eq!(
+        unknown["error"],
+        json!("no workflow named `review#nowhere`")
+    );
+    server.close();
+}
+
+/// An address another starter's newer run holds selects that run: the caller's ended run there
+/// lists by its id, and a stop or join of the address refuses as not the caller's rather than
+/// reaching the caller's own.
+#[test]
+fn an_address_another_agents_newer_run_holds_refuses_and_names_the_callers_run_by_its_id() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    crate::common::wait::register_calling_agent(&env);
+    let at = |second: i64| jiff::Timestamp::from_second(second).unwrap();
+    let mine = seed_started_run(
+        &env,
+        "launch-session",
+        json!({"created_at": at(1_700_000_000), "state": "done", "loop_report": "owed"}),
+    );
+    seed_started_run(
+        &env,
+        "launch-other",
+        json!({"created_at": at(1_700_000_100)}),
+    );
+    let mut server = serve_as_agent(&env);
+    server.initialize();
+    let (listed, is_error) = server.answer(1, "tasks", json!({"kind": "workflow"}));
+    assert!(!is_error, "{listed}");
+    assert_eq!(
+        task_ids(&listed),
+        [format!("workflow:{mine}").as_str()],
+        "{listed}"
+    );
+    for (call, tool) in [(2, "stop"), (3, "join")] {
+        let (failure, is_error) = server.answer(call, tool, json!({"id": "workflow:review#main"}));
+        assert!(is_error, "{tool}: {failure}");
+        assert_eq!(
+            failure["error"],
+            json!("workflow:review#main was started by another agent"),
+            "{tool}"
+        );
+    }
+    assert_eq!(run_record(&env, &mine).0["state"], json!("done"));
+    server.close();
+}
+
 /// A definition whose one script holds the run live until it is canceled.
 const HELD_WORKFLOW: &str = "[workflow]\nscope = 'worktree'\nstart = 'hold'\n\
     [script.hold]\nrun = 'sleep 300'\ntimeout = '1h'\non = { done = '@done' }\n";
@@ -4957,7 +5054,7 @@ fn a_workflow_the_tool_starts_is_listed_joined_and_stopped_by_its_caller() {
     );
     assert!(!is_error, "{start}");
     let [run] = live_run_ids(&env).try_into().expect("one live run");
-    let id = format!("workflow:{run}");
+    let id = "workflow:held#main".to_owned();
     assert_eq!(
         start,
         json!({
@@ -5180,9 +5277,13 @@ fn the_workflow_tool_refuses_what_the_command_refuses() {
     let [run] = live_run_ids(&env).try_into().expect("one live run");
     let (failure, is_error) = server.answer(7, "workflow", json!({"name": "held"}));
     assert!(is_error, "{failure}");
-    assert!(
-        failure["error"].as_str().unwrap().contains(&run),
-        "the overlap names the live run: {failure}"
+    assert_eq!(
+        failure["error"],
+        json!(format!(
+            "workflow held already has run held#main for {}",
+            env.project_root.display()
+        )),
+        "the overlap names the live run by its address: {failure}"
     );
     assert_eq!(live_run_ids(&env), vec![run.clone()]);
     let (stopped, _) = server.answer(8, "stop", json!({"id": format!("workflow:{run}")}));
@@ -5279,7 +5380,7 @@ fn stopping_a_schedule_removes_its_booking_and_leaves_its_run_running() {
         json!({
             "id": "schedule:nightly",
             "status": "stopped",
-            "still_running": [format!("workflow:{run}")],
+            "still_running": ["workflow:review#main"],
         })
     );
     assert_eq!(run_record(&env, &run).0["state"], json!("active"));

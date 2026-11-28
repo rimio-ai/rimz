@@ -1390,7 +1390,7 @@ fn message_cancel_and_clear_respect_ids_targets_and_channel_lanes() {
 }
 
 #[test]
-fn a_shown_message_id_two_records_share_names_the_newer() {
+fn a_shown_id_names_the_newer_record_and_a_stored_id_scans_no_history() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -1431,6 +1431,19 @@ fn a_shown_message_id_two_records_share_names_the_newer() {
         "{history:?}"
     );
     assert_eq!(message_by_id(&env, &older).status, MessageStatus::Queued);
+
+    // A malformed history row blocks the scan a shown id needs, never a stored id.
+    let history = env.state_path_for(&env.project_root).message_history_dir;
+    std::fs::create_dir_all(&history).unwrap();
+    std::fs::write(history.join("2000-01-01.jsonl"), "{broken\n").unwrap();
+    let canceled = run_success(
+        env.rimz().args(["message", "cancel", older.as_str()]),
+        "cancel by stored id past a malformed history row",
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&canceled.stdout),
+        format!("canceled {}\n", older.shown())
+    );
 }
 
 #[test]
@@ -4382,8 +4395,8 @@ fn a_started_command_carries_root_when_the_reader_resolves_another_room() {
     own.arg("--root").arg(&env.project_root);
     assert_eq!(
         command_of(own),
-        format!("rimz message cancel {}", message.message_id.shown()),
-        "the reader's own room needs no --root"
+        format!("rimz message cancel {}", message.message_id),
+        "the reader's own room needs no --root; --json keeps the stored id"
     );
     let mut shown = pinned();
     shown.arg("--root").arg(&env.project_root);
@@ -4833,7 +4846,15 @@ fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run(
                         (cell("kind"), cell("name"))
                     })
                     .collect();
-                assert_eq!(held, listed, "{receipt}");
+                // The receipt shows the message's short id, and --json keeps its stored one.
+                assert_eq!(
+                    held.get(1).map(|(_, name)| name.clone()),
+                    Some(message.message_id.shown()),
+                    "{receipt}"
+                );
+                let mut stored = held.clone();
+                stored[1].1 = message.message_id.to_string();
+                assert_eq!(stored, listed, "{receipt}");
                 assert_eq!(
                     held.iter()
                         .map(|(kind, _)| kind.as_str())

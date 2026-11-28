@@ -2001,7 +2001,10 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     until(&env, &id, |v| v["record"]["wait"].is_object());
     let duplicate = command(&env, &["workflow", "run", "review"]);
     assert_eq!(duplicate.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&duplicate.stderr).contains(&id));
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr).contains("already has run review#main for"),
+        "{duplicate:?}"
+    );
     let mut record = show(&env, &id)["record"].clone();
     record["state"] = json!("parked");
     record["park"] = json!({"reason":"user", "text":"Review", "at":record["created_at"]});
@@ -2013,7 +2016,7 @@ fn run_refuses_duplicates_missing_rooms_unsupported_nodes_and_outside_dirs() {
     assert_eq!(duplicate.status.code(), Some(1));
     assert!(
         String::from_utf8_lossy(&duplicate.stderr)
-            .contains(&format!("workflow review already has run {id} for"))
+            .contains("workflow review already has run review#main for")
     );
     let outside = command(
         &env,

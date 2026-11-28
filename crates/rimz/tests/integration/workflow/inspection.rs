@@ -387,34 +387,46 @@ fn address_miss_names_live_addresses_and_empty_parts_are_usage_errors() {
     }
 }
 
+/// `seed`, started `second` seconds into 2026.
+fn seed_at(env: &Env, root: &Path, checkout: &Path, state: &str, second: i64) -> RunRecord {
+    let mut record = seed(env, root, checkout, state);
+    record.created_at = jiff::Timestamp::from_second(1_767_225_600 + second).unwrap();
+    save(env, &record);
+    record
+}
+
 #[test]
-fn colliding_addresses_refuse_with_ids_and_checkout_paths() {
+fn colliding_addresses_take_the_most_recently_started_run() {
     let env = setup();
-    let first = seed(&env, &env.project_root, &env.project_root, "parked");
-    let second = seed(&env, &env.project_root, &env.project_root, "active");
+    let first = seed_at(&env, &env.project_root, &env.project_root, "parked", 2);
+    let second = seed_at(&env, &env.project_root, &env.project_root, "active", 1);
     for (verb, flags) in [
-        ("show", vec![]),
-        ("resume", vec!["--at", "build"]),
         ("extend", vec!["build", "--visits", "+1"]),
         ("cancel", vec![]),
     ] {
         let mut args = vec!["workflow", verb, "review#main"];
         args.extend(&flags);
-        let text = refusal(command(&env, &args));
-        for record in [&first, &second] {
-            assert!(text.contains(record.id.as_str()), "{text}");
-            assert!(text.contains(record.scope.path.to_str().unwrap()), "{text}");
-            let suffix = match verb {
-                "resume" => " --at build",
-                "extend" => " build --visits +1",
-                _ => "",
-            };
-            assert!(
-                text.contains(&format!("rimz workflow {verb} {}{suffix}", record.id)),
-                "{text}",
-            );
-        }
+        success(command(&env, &args));
     }
+    let load = |record: &RunRecord| {
+        let found = rimz::store::workflow::find(&env.state_path_for(&env.project_root), &record.id)
+            .unwrap()
+            .unwrap();
+        match found.class {
+            rimz::store::workflow::RunClass::Current(record) => *record,
+            _ => panic!("{} reads as a current record", record.id),
+        }
+    };
+    let (first, second) = (load(&first), load(&second));
+    assert_eq!(
+        (first.state, first.visit_grant("build"), second.state),
+        (RunState::Canceled, 1, RunState::Active)
+    );
+    assert_eq!(
+        json_show(&env, "review#main")["record"]["id"],
+        json!(second.id),
+        "a live run before the newer ended one"
+    );
 
     let env = Env::new();
     let first_room = env.home_root.join("first/project");
@@ -422,38 +434,21 @@ fn colliding_addresses_refuse_with_ids_and_checkout_paths() {
     env.record(&first_room);
     env.record(&second_room);
     let records = [
-        seed(&env, &first_room, &first_room.join("feat-a"), "parked"),
-        seed(
+        seed_at(&env, &first_room, &first_room.join("feat-a"), "parked", 1),
+        seed_at(
             &env,
             &first_room,
             &env.home_root.join("linked/feat-a"),
             "parked",
+            3,
         ),
-        seed(&env, &second_room, &second_room.join("feat-a"), "parked"),
+        seed_at(&env, &second_room, &second_room.join("feat-a"), "parked", 2),
     ];
-    let text = refusal(command(&env, &["workflow", "show", "review#feat-a"]));
-    assert!(
-        text.contains("rimz --root ~/second/project workflow show 'review#feat-a'"),
-        "{text}"
+    assert_eq!(
+        json_show(&env, "review#feat-a")["record"]["id"],
+        json!(records[1].id),
+        "outside every room, the newest of them all"
     );
-    let mut selected = text
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("rimz "))
-        .map(|line| {
-            let output = copied(&env, line, true);
-            if output.status.success() {
-                let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-                value["record"]["id"].as_str().unwrap().to_owned()
-            } else {
-                String::from_utf8(output.stderr).unwrap()
-            }
-        })
-        .collect::<Vec<_>>();
-    selected.sort();
-    let mut expected = records.map(|record| record.id.to_string());
-    expected.sort();
-    assert_eq!(selected, expected, "{text}");
 }
 
 #[test]
@@ -625,28 +620,23 @@ fn bare_show_always_lists_live_runs_and_distinguishes_known_empty_from_unknown()
 }
 
 #[test]
-fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
+fn rooms_take_the_newest_outside_and_prefer_the_callers_room_without_creating_state() {
     let env = setup();
     let other = env.home_root.join("other/project");
     env.record(&other);
-    let here = seed(&env, &env.project_root, &env.project_root, "parked");
-    let mut there = seed(&env, &other, &other, "parked");
+    let here = seed_at(&env, &env.project_root, &env.project_root, "parked", 1);
+    let mut there = seed_at(&env, &other, &other, "parked", 2);
     let outside = env.home_root.join("outside");
     fs::create_dir_all(&outside).unwrap();
-    let text = refusal(
+    let output = success(
         env.rimz()
             .current_dir(&outside)
-            .args(["workflow", "show", "review#main"])
+            .args(["workflow", "show", "review#main", "--json"])
             .output()
             .unwrap(),
     );
-    for root in [&env.project_root, &other] {
-        let relative = root.strip_prefix(&env.home_root).unwrap();
-        assert!(
-            text.contains(&format!("rimz --root ~/{}", relative.display())),
-            "{text}"
-        );
-    }
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["record"]["id"], json!(there.id), "{value:#}");
     assert!(!env.state_path_for(&outside).root.exists());
     assert_eq!(
         json_show(&env, "review#main")["record"]["id"],
@@ -697,6 +687,23 @@ fn rooms_refuse_outside_and_prefer_the_callers_room_without_creating_state() {
         text.ends_with("no active or parked runs of review\n"),
         "{text}"
     );
+    // A room's own finished run outranks a live run in another room.
+    there.state = RunState::Parked;
+    there.terminal_at = None;
+    save(&env, &there);
+    assert_eq!(
+        json_show(&env, "review#main")["record"]["id"],
+        json!(here.id)
+    );
+    let output = success(
+        env.rimz()
+            .current_dir(&other)
+            .args(["workflow", "show", "review#main", "--json"])
+            .output()
+            .unwrap(),
+    );
+    let value: Value = serde_json::from_str(&output).unwrap();
+    assert_eq!(value["record"]["id"], json!(there.id), "{value:#}");
 }
 
 fn copied(env: &Env, text: &str, json: bool) -> std::process::Output {
@@ -1281,7 +1288,6 @@ fn run_receipt_hint_selects_its_run_with_a_shared_address() {
         .lines()
         .find_map(|line| line.strip_prefix("→ "))
         .unwrap();
-    assert!(hint.contains(id), "{receipt}");
     let selected: Value = serde_json::from_str(&success(copied(&env, hint, true))).unwrap();
     assert_eq!(selected["record"]["id"], id, "{receipt}");
 }

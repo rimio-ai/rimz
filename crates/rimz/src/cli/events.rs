@@ -11,6 +11,7 @@ use jiff::Timestamp;
 use rimz::harness::signal::SignalSelector;
 use rimz::store::event::{SignalName, SignalSource};
 use rimz::store::follow::{FollowEvent, SignalEvent};
+use rimz::store::workflow::RunNames;
 
 use super::{GlobalFlags, render};
 
@@ -116,7 +117,7 @@ fn list(
         }
         return Ok(());
     }
-    let rows = signal_rows(signals, limit, now);
+    let rows = signal_rows(signals, limit, now, &RunNames::new(store.paths()));
     if rows.is_empty() {
         match events.first() {
             Some(first) => writeln!(
@@ -186,10 +187,11 @@ fn signal_rows(
     signals: impl IntoIterator<Item = SignalEvent>,
     limit: usize,
     now: Timestamp,
+    runs: &RunNames,
 ) -> Vec<[String; 4]> {
     let mut rows = Vec::<SignalRow>::new();
     for signal in signals {
-        let subject = rimz::harness::signal::signal_subject(&signal.name, &signal.payload);
+        let subject = rimz::harness::signal::signal_subject(&signal.name, &signal.payload, runs);
         if let Some(row) = rows.last_mut()
             && row.name == signal.name
             && row.source == signal.source
@@ -371,6 +373,16 @@ mod tests {
         "2026-06-01T12:00:00Z".parse().unwrap()
     }
 
+    /// The runs of a room that holds none.
+    fn no_runs() -> RunNames {
+        let state = rimz::StatePaths::for_project_root_under(
+            std::path::Path::new("/project"),
+            std::path::Path::new("/rimz-home"),
+        )
+        .unwrap();
+        RunNames::new(&state)
+    }
+
     fn signal(name: &str, source: SignalSource, seconds_ago: i64, payload: Value) -> SignalEvent {
         SignalEvent {
             v: 1,
@@ -394,7 +406,7 @@ mod tests {
             )
         });
         assert_eq!(
-            signal_rows(signals, 20, now()),
+            signal_rows(signals, 20, now(), &no_runs()),
             vec![
                 [
                     "10s",
@@ -418,7 +430,7 @@ mod tests {
             )
         });
         assert_eq!(
-            signal_rows(signals, 20, now()),
+            signal_rows(signals, 20, now(), &no_runs()),
             vec![["10s", "deploy.done ×2", "cli", "over 2m"].map(str::to_owned)]
         );
     }
@@ -439,7 +451,7 @@ mod tests {
                 event.at = now() - jiff::SignedDuration::from_millis(millis);
                 event
             });
-            signal_rows(signals, 20, now())
+            signal_rows(signals, 20, now(), &no_runs())
         });
         assert_eq!(
             rows,
@@ -467,7 +479,7 @@ mod tests {
             )
         });
         assert_eq!(
-            signal_rows(signals, 20, now()),
+            signal_rows(signals, 20, now(), &no_runs()),
             vec![
                 [
                     "10s",
@@ -506,7 +518,8 @@ mod tests {
                     other_name
                 ],
                 20,
-                now()
+                now(),
+                &no_runs()
             ),
             vec![
                 ["10s", "ci.passed", "forge", "@abc1234"].map(str::to_owned),
@@ -539,7 +552,7 @@ mod tests {
         let burst = ["0s", "deploy.done ×25", "cli", "over 24s"].map(str::to_owned);
         let older = ["1h", "deploy.finished", "cli", "-"].map(str::to_owned);
         assert_eq!(
-            [0, 1, 2].map(|limit| signal_rows(signals.clone(), limit, now())),
+            [0, 1, 2].map(|limit| signal_rows(signals.clone(), limit, now(), &no_runs())),
             [vec![], vec![burst.clone()], vec![burst, older]]
         );
     }
@@ -558,7 +571,8 @@ mod tests {
                     )
                 ],
                 20,
-                now()
+                now(),
+                &no_runs()
             ),
             vec![
                 ["10s", "deploy.done", "cli", "-"].map(str::to_owned),

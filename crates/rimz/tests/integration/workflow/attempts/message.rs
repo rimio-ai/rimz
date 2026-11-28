@@ -95,9 +95,9 @@ fn a_message_step_queues_one_wait_notice_for_a_busy_target_and_moves_on() {
         )
     );
     assert!(
-        record.text.starts_with(&format!(
-            "Workflow `tell` step `tell` sends you this message (run {id}; `rimz workflow show {id}`).\n\nPlan the fix"
-        )),
+        record.text.starts_with(
+            "Workflow `tell` step `tell` sends you this message (run tell#main; `rimz workflow show 'tell#main'`).\n\nPlan the fix"
+        ),
         "{}",
         record.text
     );

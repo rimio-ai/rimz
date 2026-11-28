@@ -5898,11 +5898,19 @@ fn agents_show_filters_live_and_delivered_system_messages_in_human_and_json_view
             conversation,
             "{human}"
         );
+        // The human view names each message by the short id an agent types back.
+        let short = |id: &str| rimz::ids::MessageId::parse(id).unwrap().shown();
         for id in &visible_ids {
-            assert!(human.contains(id), "missing conversation {id}: {human}");
+            assert!(
+                human.contains(&short(id)),
+                "missing conversation {id}: {human}"
+            );
         }
         for id in &hidden_ids {
-            assert!(!human.contains(id), "system message {id} leaked: {human}");
+            assert!(
+                !human.contains(&short(id)),
+                "system message {id} leaked: {human}"
+            );
         }
         assert!(!human.contains("system-only text"), "{human}");
         assert!(!human.contains("harness-only text"), "{human}");

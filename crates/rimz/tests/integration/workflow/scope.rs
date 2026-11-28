@@ -42,7 +42,10 @@ fn project_scope_is_unique_across_checkouts_and_refuses_a_named_worktree() {
     );
     let duplicate = command(&env, &["workflow", "run", "review"]);
     assert_eq!(duplicate.status.code(), Some(1));
-    assert!(String::from_utf8_lossy(&duplicate.stderr).contains(&id));
+    assert!(
+        String::from_utf8_lossy(&duplicate.stderr).contains("already has run review#main for"),
+        "{duplicate:?}"
+    );
     success(command(&env, &["workflow", "cancel", &id]));
     let output = command(&env, &["workflow", "run", "review", "-w", "one"]);
     assert_eq!(output.status.code(), Some(1));

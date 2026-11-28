@@ -609,6 +609,109 @@ fn run_address_uses_the_recorded_scope_without_reading_the_checkout() {
 }
 
 #[test]
+fn an_address_takes_the_newest_run_after_local_live_and_real_runs_first() {
+    let run = |id: u8, root: &str, state: RunState, once: bool, second: i64| {
+        let mut run = record();
+        run.id =
+            WorkflowRunId::parse(&format!("wf_0190b8172c00700080000000000000{id:02}")).unwrap();
+        run.project_root = root.into();
+        run.scope.path = format!("{root}/.worktrees/feat-x").into();
+        run.state = state;
+        run.once = once;
+        run.created_at = Timestamp::from_second(second).unwrap();
+        run
+    };
+    let address: RunAddress = "review#feat-x".parse().unwrap();
+    let here = Some(Path::new("/project"));
+    let newest = |runs: &[RunRecord]| address.newest(runs, here).map(|run| run.id.clone());
+    let older = run(1, "/project", RunState::Active, false, 10);
+    let newer = run(2, "/project", RunState::Active, false, 20);
+    let ended = run(3, "/project", RunState::Done, false, 30);
+    let elsewhere = run(4, "/other", RunState::Active, false, 40);
+    let tried = run(5, "/project", RunState::Active, true, 50);
+    let mut other_lane = run(6, "/project", RunState::Active, false, 60);
+    other_lane.scope.path = "/project/.worktrees/feat-y".into();
+    let all = [&older, &newer, &ended, &elsewhere, &tried, &other_lane].map(Clone::clone);
+    assert_eq!(newest(&all), Some(newer.id.clone()));
+    assert_eq!(
+        newest(&[older.clone(), ended.clone()]),
+        Some(older.id.clone())
+    );
+    assert_eq!(newest(std::slice::from_ref(&ended)), Some(ended.id.clone()));
+    assert_eq!(
+        newest(&[older.clone(), elsewhere.clone()]),
+        Some(older.id.clone())
+    );
+    assert_eq!(
+        newest(&[ended.clone(), elsewhere.clone()]),
+        Some(ended.id.clone())
+    );
+    assert_eq!(
+        newest(std::slice::from_ref(&elsewhere)),
+        Some(elsewhere.id.clone())
+    );
+    assert_eq!(newest(std::slice::from_ref(&tried)), Some(tried.id.clone()));
+    assert_eq!(newest(&[other_lane]), None);
+}
+
+/// A run shows as its address only while that address, typed back, selects it: of two live runs
+/// at one address (a deployed workflow and a loop task's inline run of the same name), the older
+/// shows its id; a try, a run this RimZ cannot read, and an unknown id show their ids; a finished
+/// run its address once no live run holds it.
+#[test]
+fn a_run_shows_as_its_address_only_where_the_address_selects_it() {
+    let home = tempfile::tempdir().unwrap();
+    let state = StatePaths::for_project_root_under(home.path(), home.path()).unwrap();
+    let guard = WorkspaceLock::acquire(&state.workspace_lock).unwrap();
+    let run = |id: u8, lane: &str, second: i64| {
+        let mut run = record();
+        run.id =
+            WorkflowRunId::parse(&format!("wf_0190b8172c00700080000000000000{id:02}")).unwrap();
+        run.scope.path = format!("/project/.worktrees/{lane}").into();
+        run.created_at = Timestamp::from_second(second).unwrap();
+        run
+    };
+    let deployed = run(1, "feat-x", 10);
+    let mut task = run(2, "feat-x", 20);
+    task.origin = RunOrigin::Inline;
+    task.task = Some("review".into());
+    let mut tried = run(3, "feat-y", 30);
+    tried.once = true;
+    let mut ended = run(4, "feat-z", 40);
+    ended.state = RunState::Done;
+    ended.terminal_at = Some(ended.created_at);
+    let stranded = run(5, "feat-w", 50);
+    for run in [&deployed, &task, &tried, &ended, &stranded] {
+        initialize(&state, run, &guard).unwrap();
+    }
+    finish(&state, &ended.id, Some(b"h"), &guard).unwrap();
+    let mut older = serde_json::to_value(&stranded).unwrap();
+    older["version"] = json!(VERSION - 1);
+    fs::write(
+        &state.workflow(&stranded.id).record,
+        serde_json::to_vec(&older).unwrap(),
+    )
+    .unwrap();
+    let names = RunNames::new(&state);
+    let shown = |run: &RunRecord| names.shown(&run.id);
+    assert_eq!(shown(&deployed), deployed.id.to_string());
+    assert_eq!(shown(&task), "review#feat-x");
+    assert_eq!(shown(&tried), tried.id.to_string());
+    assert_eq!(shown(&ended), "review#feat-z");
+    assert_eq!(shown(&stranded), stranded.id.to_string());
+    let unknown = WorkflowRunId::new();
+    assert_eq!(names.shown(&unknown), unknown.to_string());
+    let selected = |raw: &str| {
+        names
+            .select(&raw.parse().unwrap())
+            .map(|run| run.id.clone())
+    };
+    assert_eq!(selected("review#feat-x"), Some(task.id.clone()));
+    assert_eq!(selected("review#feat-z"), Some(ended.id.clone()));
+    assert_eq!(selected("review#feat-w"), None);
+}
+
+#[test]
 fn manual_origin_round_trips_and_stays_absent_unless_set() {
     let mut value = serde_json::to_value(record()).unwrap();
     assert!(value.get("manual").is_none());

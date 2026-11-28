@@ -121,20 +121,22 @@ fn restart_one(
     let ownership = workflow_pin(&ctx.store, &agent)?;
     if let WorkflowPin::Current {
         run,
+        shown,
         step,
         role: rimz::agents::WorkflowAttemptRole::Step,
     } = &ownership
     {
+        let command = rimz::store::workflow::workflow_command("restart", shown, &["--continue"]);
         if account.is_some() || no_continue {
             bail!(
-                "restart refused: this agent runs step {step} of workflow run {run}, which \
-                 `--account` and `--no-continue` do not apply to; run `rimz workflow restart \
-                 {run} --continue` instead"
+                "restart refused: this agent runs step {step} of workflow run {shown}, which \
+                 `--account` and `--no-continue` do not apply to; run `rimz {command}` \
+                 instead"
             );
         }
         writeln!(
             crate::cli::render::out(),
-            "{}restarting step {step} of run {run} via rimz workflow restart {run} --continue",
+            "{}restarting step {step} of run {shown} via rimz {command}",
             receipt_prefix(selected)
         )?;
         return crate::cli::workflow::restart(run.as_str(), true, globals);

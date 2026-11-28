@@ -89,7 +89,8 @@ pub(super) fn cancel(
         // The cancel is already committed, so the receipt does not fail on a run it cannot read.
         let running = workflow::started_runs_running(&run.state, &run.record);
         if !running.is_empty() {
-            let running = running.iter().map(|id| id.as_str()).collect::<Vec<_>>();
+            let names = records::RunNames::new(&run.state);
+            let running = running.iter().map(|id| names.shown(id)).collect::<Vec<_>>();
             writeln!(
                 out,
                 "its started runs were left running: {}",
@@ -553,7 +554,14 @@ fn continue_session(
             )
         );
     }
-    let fix = format!("rimz workflow restart {}", run.record.id);
+    let fix = format!(
+        "rimz {}",
+        records::workflow_command(
+            "restart",
+            &records::RunNames::new(&run.state).shown(&run.record.id),
+            &[]
+        )
+    );
     let candidate = run
         .record
         .session_attempt()

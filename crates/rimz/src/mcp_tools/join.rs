@@ -244,8 +244,12 @@ pub(super) fn join(
                 }
                 (_, Reading::NeedsYou { .. }) => Joined {
                     hint: Some(format!(
-                        "the run waits on a person; `rimz workflow show {}` says why",
-                        target.id
+                        "the run waits on a person; `rimz {}` says why",
+                        crate::store::workflow::workflow_command(
+                            "show",
+                            &owned::run_name(&owners, &target.id),
+                            &[]
+                        )
                     )),
                     ..Joined::new(id, "running")
                 },

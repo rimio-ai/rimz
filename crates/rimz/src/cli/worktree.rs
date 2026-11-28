@@ -622,10 +622,20 @@ fn remove_worktree(
             let fix = if holders.workflow_runs.is_empty() {
                 "use --force to remove it".to_owned()
             } else {
+                let runs = rimz::store::workflow::RunNames::new(store.paths());
                 let commands = holders
                     .workflow_runs
                     .iter()
-                    .map(|run| format!("`rimz workflow cancel {}`", run.id))
+                    .map(|run| {
+                        format!(
+                            "`rimz {}`",
+                            rimz::store::workflow::workflow_command(
+                                "cancel",
+                                &runs.shown(&run.id),
+                                &[]
+                            )
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" and ");
                 format!(
@@ -714,13 +724,19 @@ fn cancel_removed_workflow_runs(
             Err(error) => error.to_string(),
         };
         failed = true;
+        // An address typed here selects among this room's runs, so another room's run keeps
+        // its id.
+        let target = if run.project_root == repo_root {
+            rimz::store::workflow::RunNames::of_project(repo_root).shown(&run.id)
+        } else {
+            run.id.to_string()
+        };
         writeln!(
             std::io::stderr().lock(),
-            "failed to cancel workflow run {} ({}): {error}; \
-             run `rimz workflow cancel {}` to finish it",
+            "failed to cancel workflow run {} ({}): {error}; run `rimz {}` to finish it",
             run.address(),
             run.id,
-            run.id
+            rimz::store::workflow::workflow_command("cancel", &target, &[])
         )?;
     }
     if failed {

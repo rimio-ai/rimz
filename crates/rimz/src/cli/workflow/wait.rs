@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use rimz::harness::workflow::join::{self, Ended, JoinTarget, Joined, Reading};
-use rimz::store::workflow::{RunClass, RunState};
+use rimz::store::workflow::{RunClass, RunNames, RunState};
 
 use super::*;
 use crate::cli::render::announce::{MESSAGE_STOP_EXIT, write_message_stop};
@@ -16,6 +16,7 @@ const TIMED_OUT_EXIT: i32 = 124;
 
 struct Target {
     address: String,
+    shown: String,
     join: JoinTarget,
 }
 
@@ -99,19 +100,17 @@ fn exit_of(target: &Target, stop: i32) -> i32 {
 /// bare workflow name names no one run.
 fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
     if let Ok(id) = raw.parse::<WorkflowRunId>() {
-        if records::find_under(&paths::rimz_home(), &id)?.is_none() {
+        let Some((state, found)) = records::find_under(&paths::rimz_home(), &id)? else {
             return Err(UsageError::new(format!("unknown workflow run {id}")).into());
-        }
+        };
         let reading = look(&id)?;
-        let address = match records::find_under(&paths::rimz_home(), &id)? {
-            Some((_, found)) => match found.class {
-                RunClass::Current(record) => record.address().to_string(),
-                _ => id.to_string(),
-            },
-            None => id.to_string(),
+        let address = match found.class {
+            RunClass::Current(record) => record.address().to_string(),
+            _ => id.to_string(),
         };
         return Ok(Target {
             address,
+            shown: RunNames::new(&state).shown(&id),
             join: JoinTarget { id, reading },
         });
     }
@@ -122,14 +121,15 @@ fn target(raw: &str, globals: &super::super::GlobalFlags) -> Result<Target> {
         ))
         .into());
     }
-    let id = match resolve::select(raw, "show", globals, None, None, &[])? {
-        resolve::Selection::Run(run) => run.record.id,
-        resolve::Selection::Other(other) => other.id,
+    let (state, id) = match resolve::select(raw, "show", globals, None, None, &[])? {
+        resolve::Selection::Run(run) => (run.state, run.record.id),
+        resolve::Selection::Other(other) => (other.state, other.id),
         resolve::Selection::Workflow(_) => unreachable!("an address selects one run"),
     };
     let reading = look(&id)?;
     Ok(Target {
         address: raw.to_owned(),
+        shown: RunNames::new(&state).shown(&id),
         join: JoinTarget { id, reading },
     })
 }
@@ -165,12 +165,7 @@ fn needs_you_why(record: &RunRecord, definition_dir: &std::path::Path) -> String
 }
 
 fn line(target: &Target) -> String {
-    let id = &target.join.id;
-    let name = if target.address == id.as_str() {
-        id.to_string()
-    } else {
-        format!("{} ({id})", target.address)
-    };
+    let name = &target.shown;
     match &target.join.reading {
         Reading::Running { state, node } => match node {
             Some(node) => format!("{name}: still {} at {node}", state.as_str()),

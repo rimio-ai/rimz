@@ -151,7 +151,7 @@ fn a_forwarded_signal_is_canceled_at_delivery_once_its_attempt_ends() {
         );
         assert!(queued.text.starts_with("review.ready\n"), "{}", queued.text);
         assert!(
-            queued.text.contains(&format!("rimz workflow show {id}")),
+            queued.text.contains("rimz workflow show 'review#main'"),
             "{}",
             queued.text
         );

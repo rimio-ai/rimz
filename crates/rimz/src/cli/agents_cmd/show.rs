@@ -65,6 +65,7 @@ fn collect_show_report(
     snapshot: &rimz::store::snapshot::SidebarSnapshot,
     reference: &str,
     capture: Option<CaptureRequest>,
+    json: bool,
 ) -> Result<(ShowReport, Option<anyhow::Error>)> {
     let agent_result = resolve_live_or_audit(
         store,
@@ -156,6 +157,7 @@ fn collect_show_report(
             reader: &reader,
             you: super::report::is_me(store, snapshot, &reader, agent),
             rimz: &prefix,
+            stored_ids: json,
         };
         let mut started =
             rimz::harness::idle_stop::started::started(store, snapshot, agent, &seat, now)?;
@@ -368,6 +370,7 @@ pub(super) fn show_agent(
             ansi,
             mux: ctx.mux(),
         }),
+        json,
     )?;
     if let Some(read) = &report.started_unread {
         super::report::warn_started_unread(&mut render::err(), "", read)?;
@@ -877,7 +880,10 @@ fn render_messages_section(
     let mut table = render::Table::new(["ID", "STATUS", "FROM", "AGE", "TEXT"]);
     for message in messages {
         table.row([
-            render::cell(message.id.as_str()),
+            render::cell(
+                rimz::ids::MessageId::parse(&message.id)
+                    .map_or_else(|_| message.id.clone(), |id| id.shown()),
+            ),
             render::cell(message.status.as_str()).fg(render::status::message(message.status)),
             render::cell(message.from.as_str()).fg(render::palette::meta()),
             render::cell(message.age.as_str()),

@@ -2634,7 +2634,7 @@ fn waiting_compaction_is_typed_ahead_of_older_queued_prompt_and_message_settles_
             assert!(
                 shown["delivery"]["verdict"]
                     .as_str()
-                    .is_some_and(|v| v.contains(&command.message_id.shown())),
+                    .is_some_and(|v| v.contains(command.message_id.as_str())),
                 "verdict must name the compaction command: {shown}"
             );
             // Cancel the second notice so the rest of the test checks a single digest.

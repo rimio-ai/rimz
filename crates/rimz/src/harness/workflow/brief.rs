@@ -166,12 +166,16 @@ fn joined(record: &RunRecord) -> Option<String> {
                 .reason
                 .as_ref()
                 .map_or_else(String::new, |reason| format!(": {reason}"));
+            let shown = workflow::RunNames::of_project(&record.project_root).shown(&run.id);
             Some(format!(
                 "{} ({}) ended {}{branch}{notes}{reason}: {}.",
-                span(&run.id.to_string()),
+                span(&shown),
                 run.workflow,
                 super::state::ending_word(&ended.ending),
-                span(&format!("rimz workflow show {}", run.id))
+                span(&format!(
+                    "rimz {}",
+                    workflow::workflow_command("show", &shown, &[])
+                ))
             ))
         })
         .collect::<Vec<_>>();

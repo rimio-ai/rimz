@@ -224,12 +224,14 @@ fn agents_restart_refuses_a_current_judge_without_clearing_its_pin() {
         .output()
         .unwrap();
     let error = String::from_utf8_lossy(&output.stderr);
+    let shown = records::RunNames::new(state).shown(&record.id);
     assert!(
         !output.status.success()
             && error.contains(&format!(
-                "agent is still owned by run `{id}`, judging check {}; wait for its answer or \
-                 cancel the run with `rimz workflow cancel {id}`",
-                record.attempt.as_ref().unwrap().node
+                "agent is still owned by run `{shown}`, judging check {}; wait for its answer or \
+                 cancel the run with `rimz {}`",
+                record.attempt.as_ref().unwrap().node,
+                records::workflow_command("cancel", &shown, &[])
             ))
             && !error.contains("workflow restart"),
         "{output:?}"
@@ -428,10 +430,13 @@ fn continue_without_a_conversation_refuses_before_stopping() {
         .output()
         .unwrap();
     let error = String::from_utf8_lossy(&output.stderr);
+    let shown = records::RunNames::new(room.env.store().paths()).shown(&id.parse().unwrap());
     assert!(
         !output.status.success()
-            && error.contains("no resumable session")
-            && error.contains(&format!("rimz workflow restart {id}")),
+            && error.contains(&format!(
+                "no resumable session for step build; use rimz {}",
+                records::workflow_command("restart", &shown, &[])
+            )),
         "{error}"
     );
     let value = show(&room.env, &id);
@@ -535,6 +540,8 @@ fn continued_restart(routed: bool) {
     )
     .unwrap();
     let reference = format!("@{}", run.agent_name.as_deref().unwrap());
+    let shown = records::RunNames::new(room.env.store().paths()).shown(&id.parse().unwrap());
+    let restart = records::workflow_command("restart", &shown, &["--continue"]);
     if routed {
         // The step belongs to the workflow, which takes neither restart flag.
         for flag in [&["--account", "default"][..], &["--no-continue"][..]] {
@@ -546,9 +553,9 @@ fn continued_restart(routed: bool) {
             assert!(
                 !output.status.success()
                     && stderr.contains(&format!(
-                        "restart refused: this agent runs step build of workflow run {id}, \
+                        "restart refused: this agent runs step build of workflow run {shown}, \
                          which `--account` and `--no-continue` do not apply to; run `rimz \
-                         workflow restart {id} --continue` instead"
+                         {restart}` instead"
                     )),
                 "{stderr}"
             );
@@ -570,7 +577,7 @@ fn continued_restart(routed: bool) {
     room.kill_owner(RESTARTED_OWNER);
     let receipt = success(child.wait_with_output().unwrap());
     assert!(
-        (!routed || receipt.contains(&format!("via rimz workflow restart {id} --continue")))
+        (!routed || receipt.contains(&format!("via rimz {restart}")))
             && receipt.contains("resumed")
             && receipt.contains("visits restarted at 1"),
         "{receipt}"

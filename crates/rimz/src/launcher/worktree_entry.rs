@@ -177,10 +177,21 @@ pub(super) fn remove(
             let fix = if holders.workflow_runs.is_empty() {
                 String::new()
             } else {
+                // A run of the other room is not this room's to name by address: it keeps its id.
+                let runs = crate::store::workflow::RunNames::new(store.paths());
                 let commands = holders
                     .workflow_runs
                     .iter()
-                    .map(|run| format!("`rimz workflow cancel {}`", run.id))
+                    .map(|run| {
+                        format!(
+                            "`rimz {}`",
+                            crate::store::workflow::workflow_command(
+                                "cancel",
+                                &runs.shown(&run.id),
+                                &[]
+                            )
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(" and ");
                 format!(

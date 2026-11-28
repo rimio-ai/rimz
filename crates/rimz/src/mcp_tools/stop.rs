@@ -109,7 +109,7 @@ pub(super) fn stop(tools: &Tools, args: &StopArgs) -> Result<Answer, Failure> {
                         RunClass::Current(record) => {
                             crate::harness::workflow::started_runs_running(state, record)
                                 .iter()
-                                .map(|run| TaskKind::Workflow.id(run.as_str()))
+                                .map(|run| TaskKind::Workflow.id(&owned::run_name(&owners, run)))
                                 .collect()
                         }
                         _ => Vec::new(),
@@ -131,7 +131,7 @@ pub(super) fn stop(tools: &Tools, args: &StopArgs) -> Result<Answer, Failure> {
                     still_running: Some(
                         alive
                             .iter()
-                            .filter_map(|alive| launch_id(&alive.launch))
+                            .filter_map(|alive| launch_id(&owners, &alive.launch))
                             .collect(),
                     ),
                     ..Stopped::new(id, "stopped")
@@ -195,9 +195,11 @@ fn failed<'a>(
 }
 
 /// The id a schedule's still-running launch answers by, when it has one.
-fn launch_id(launch: &Launch) -> Option<String> {
+fn launch_id(owners: &Owners<'_>, launch: &Launch) -> Option<String> {
     match launch {
-        Launch::Workflow(record) => Some(TaskKind::Workflow.id(record.id.as_str())),
+        Launch::Workflow(record) => {
+            Some(TaskKind::Workflow.id(&owned::run_name(owners, &record.id)))
+        }
         Launch::Supervised(run) => run.agent_name.as_deref().map(|name| {
             let kind = if run.subagent {
                 TaskKind::Subagent

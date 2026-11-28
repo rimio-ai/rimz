@@ -437,7 +437,10 @@ fn a_held_slot_refuses_a_second_start_before_its_trust_read() {
         .unwrap();
     let stderr = String::from_utf8_lossy(&second.stderr);
     assert!(!second.status.success(), "{stderr}");
-    assert!(stderr.contains(&id), "{stderr}");
+    assert!(
+        stderr.contains("workflow review already has run review#main for"),
+        "{stderr}"
+    );
     assert!(!stderr.contains("workflow start refused"), "{stderr}");
     success(room.command(&["workflow", "cancel", &id]).output().unwrap());
 }

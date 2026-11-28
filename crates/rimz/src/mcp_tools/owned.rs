@@ -16,7 +16,7 @@ use crate::harness::schedule::catalog::TaskCatalog;
 use crate::ids::{AgentKind, AgentSessionId, TeamInstanceId, WorkflowRunId};
 use crate::mcp::Failure;
 use crate::store::runtime::AuditRows;
-use crate::store::workflow::{FoundRun, RunClass, RunStarter};
+use crate::store::workflow::{FoundRun, RunAddress, RunClass, RunNames, RunStarter};
 
 /// How many links a walk reads before it gives up: a chain is a few links long.
 const MAX_WALK: usize = 64;
@@ -33,6 +33,8 @@ pub(super) struct Owners<'a> {
     live: &'a [AgentState],
     audit: &'a AuditRows,
     state: &'a StatePaths,
+    /// The room's runs, read once for every run a call selects or names.
+    runs: RunNames,
 }
 
 impl<'a> Owners<'a> {
@@ -47,6 +49,7 @@ impl<'a> Owners<'a> {
             live,
             audit,
             state,
+            runs: RunNames::new(state),
         }
     }
 
@@ -310,7 +313,10 @@ pub(super) fn resolve<'a>(
             Ok(Named::Team(cohort))
         }
         TaskKind::Workflow => {
-            let run = WorkflowRunId::parse(name).map_err(|_| unknown())?;
+            let Ok(run) = WorkflowRunId::parse(name) else {
+                let address = RunAddress::from_str(name).map_err(|_| unknown())?;
+                return addressed_run(owners, &address)?.ok_or_else(unknown);
+            };
             let found = crate::store::workflow::find(owners.state, &run)
                 .map_err(anyhow::Error::from)?
                 .ok_or_else(unknown)?;
@@ -354,6 +360,35 @@ pub(super) fn resolve<'a>(
             }
         }
     }
+}
+
+/// The run `address` selects among the room's runs, as `rimz workflow` selects it: none when it
+/// selects no run, refused when another agent started the run it selects.
+fn addressed_run<'a>(
+    owners: &Owners<'a>,
+    address: &RunAddress,
+) -> Result<Option<Named<'a>>, Failure> {
+    let Some(id) = owners.runs.select(address).map(|run| run.id.clone()) else {
+        return Ok(None);
+    };
+    let Some(found) =
+        crate::store::workflow::find(owners.state, &id).map_err(anyhow::Error::from)?
+    else {
+        return Ok(None);
+    };
+    if !owners.started_run(&found) {
+        return Err(refused(&TaskKind::Workflow.id(&address.to_string())));
+    }
+    Ok(Some(Named::Workflow {
+        id,
+        found: Box::new(found),
+    }))
+}
+
+/// The name a workflow run answers to in an id: its address while that address selects it,
+/// else its stored id.
+pub(super) fn run_name(owners: &Owners<'_>, run: &WorkflowRunId) -> String {
+    owners.runs.shown(run)
 }
 
 /// Whether the wake row `entry` is a shell or a watch.

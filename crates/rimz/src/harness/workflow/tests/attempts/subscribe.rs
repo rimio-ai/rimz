@@ -64,7 +64,14 @@ fn a_session_forwards_only_delivering_signals_to_its_leader() {
     let (message, text) = &forwards[0];
     assert!(text.starts_with("ci.failed on feat\n"), "{text}");
     assert!(
-        text.contains(&format!("rimz workflow show {}", record.id)),
+        text.contains(&format!(
+            "rimz {}",
+            crate::store::workflow::workflow_command(
+                "show",
+                &crate::store::workflow::RunNames::new(&state).shown(&record.id),
+                &[]
+            )
+        )),
         "{text}"
     );
     assert!(

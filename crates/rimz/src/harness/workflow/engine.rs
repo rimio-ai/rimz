@@ -29,9 +29,11 @@ pub(crate) use runs::join_report;
 
 #[derive(Debug, thiserror::Error)]
 pub enum WorkflowErr {
-    #[error("workflow {workflow} already has run {run} for {}", scope.display())]
+    #[error("workflow {workflow} already has run {shown} for {}", scope.display())]
     Exists {
         run: WorkflowRunId,
+        /// The existing run as an agent reads it (`RunNames::shown`).
+        shown: String,
         workflow: String,
         scope: std::path::PathBuf,
         task: Option<String>,
@@ -598,6 +600,7 @@ fn refuse_existing(
                 || task.is_some_and(|task| r.ran_for(task)))
     }) {
         Some(existing) => Err(WorkflowErr::Exists {
+            shown: workflow::RunNames::new(state).shown(&existing.id),
             run: existing.id,
             workflow: existing.workflow,
             scope: existing.scope.path,
@@ -1399,16 +1402,18 @@ impl Notice {
 
     /// The WAIT notice body: the run's line, then the step's composed prompt.
     fn text(
+        state: &StatePaths,
         record: &RunRecord,
         paths: &WorkflowPaths,
         step: &Node,
         digests: &mut BTreeMap<String, String>,
     ) -> std::result::Result<String, String> {
+        let id = workflow::RunNames::new(state).shown(&record.id);
         let header = format!(
-            "Workflow `{}` step `{}` sends you this message (run {id}; `rimz workflow show {id}`).",
+            "Workflow `{}` step `{}` sends you this message (run {id}; `rimz {}`).",
             record.workflow,
             record.node,
-            id = record.id,
+            workflow::workflow_command("show", &id, &[]),
         );
         let prompt =
             agent::compose(record, paths, step, digests).map_err(|error| error.to_string())?;
@@ -1592,7 +1597,7 @@ fn prepare(
         {
             // A lost message host re-sends under the same id, which the queue takes once.
             let mut digests = BTreeMap::new();
-            let text = Notice::text(&t.record, paths, step, &mut digests);
+            let text = Notice::text(state, &t.record, paths, step, &mut digests);
             let attempt = t.record.attempt.as_mut().expect("live message attempt");
             attempt.host = agent::identity();
             attempt.digests = digests;
@@ -1812,7 +1817,7 @@ fn prepare(
     .map(|prompt| prompt.map_err(|error| error.to_string()));
     let notice = step
         .filter(|_| matches!(step_kind, Some(Kind::Message(_))))
-        .map(|step| Notice::text(&t.record, paths, step, &mut digests));
+        .map(|step| Notice::text(state, &t.record, paths, step, &mut digests));
     let head_start = if step.is_none() && kind == AttemptKind::Script {
         None
     } else {
@@ -2431,10 +2436,12 @@ pub fn resume(
                 "terminal workflow runs cannot resume".into(),
             ));
         }
+        // A try always shows as its id: its address never selects it.
         if at.is_some() && record.once {
             return Err(WorkflowErr::Refused(format!(
                 "workflow run {id} is a try, which ends at its node and cannot be moved; cancel \
-                 it with `rimz workflow cancel {id}`"
+                 it with `rimz {}`",
+                workflow::workflow_command("cancel", id.as_str(), &[])
             )));
         }
         if let Some(node) = at
@@ -2774,8 +2781,14 @@ impl Forward {
     }
 
     /// Queue the journaled forward off-lock; a failure leaves the journal row and warns.
-    fn send(&self, host: &dyn AttemptHost, record: &RunRecord, signal: &Signal) {
-        let text = forward_text(record, &self.step, self.prompt.as_deref(), signal);
+    fn send(
+        &self,
+        host: &dyn AttemptHost,
+        runs: &workflow::RunNames,
+        record: &RunRecord,
+        signal: &Signal,
+    ) {
+        let text = forward_text(runs, record, &self.step, self.prompt.as_deref(), signal);
         if let Err(error) = host.forward(&self.run, &self.message, &text) {
             tracing::warn!(
                 run = %record.id, step = %self.step, %error,
@@ -2831,18 +2844,25 @@ fn subscribers(
 }
 
 /// The SIGNAL notice a subscribed step's leader receives.
-fn forward_text(record: &RunRecord, step: &str, prompt: Option<&str>, signal: &Signal) -> String {
-    let subject = crate::harness::signal::signal_subject(&signal.name, &signal.payload);
+fn forward_text(
+    runs: &workflow::RunNames,
+    record: &RunRecord,
+    step: &str,
+    prompt: Option<&str>,
+    signal: &Signal,
+) -> String {
+    let subject = crate::harness::signal::signal_subject(&signal.name, &signal.payload, runs);
     let mut lines = vec![if subject.is_empty() {
         signal.name.to_string()
     } else {
         format!("{} {subject}", signal.name)
     }];
     lines.extend(crate::harness::signal::signal_details(signal));
+    let id = runs.shown(&record.id);
     lines.push(format!(
-        "Workflow `{}` step `{step}` subscribes to this signal (run {id}; `rimz workflow show {id}`).",
+        "Workflow `{}` step `{step}` subscribes to this signal (run {id}; `rimz {}`).",
         record.workflow,
-        id = record.id,
+        workflow::workflow_command("show", &id, &[]),
     ));
     if let Some(prompt) = prompt {
         lines.extend([String::new(), prompt.to_owned()]);
@@ -2927,6 +2947,7 @@ pub(crate) fn hears_lifecycle(
 
 pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Result<()> {
     let reader = std::cell::OnceCell::new();
+    let runs = workflow::RunNames::new(state);
     for record in workflow::live_runs(state)? {
         let paths = state.workflow(&record.id);
         let result: Result<()> = (|| {
@@ -2952,7 +2973,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
                 }
                 drop(guard);
                 for forward in &forwards {
-                    forward.send(host, &current, signal);
+                    forward.send(host, &runs, &current, signal);
                 }
                 return Ok(());
             }
@@ -2983,7 +3004,7 @@ pub fn wake(state: &StatePaths, signal: &Signal, host: &dyn AttemptHost) -> Resu
             persist(&mut t, &guard)?;
             drop(guard);
             for forward in &forwards {
-                forward.send(host, &t.record, signal);
+                forward.send(host, &runs, &t.record, signal);
             }
             spawn(&t.record).map(drop)
         })();

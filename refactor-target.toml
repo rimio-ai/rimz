@@ -4997,7 +4997,10 @@ path = "crates/rimz/src/store"
 # A workflow run's record owns its wire types (`store::workflow_run`): the record, its open
 # steps, their work, stops, endings, answer lines, journal entries, and sealed copies, with the
 # load, create, commit, and seal operations the run engine calls (+32).
-surface-budget = 754
+# RunAddress::{selects, newest}, RunNames (new, of_project, select, shown) and workflow_command
+# give the CLI and the MCP tools one run address rule and one quoting of the commands they print
+# (+8).
+surface-budget = 762
 
 [[verdict]]
 kind = "item"
@@ -6700,11 +6703,13 @@ path = "crates/rimz/src/harness/signal.rs"
 # Neutral signal vocabulary; the emit, arming and fire side stays in the scheduler.
 # parse_payload and PayloadErr hold the one `--json` payload rule `events emit` and `loop fire --signal` share (+2).
 # holds_match lets a manual fire's notice name the `--match` fields a pretend signal fails (+1).
+# A workflow subject names its run as store::workflow::RunNames shows it.
 allowed-dependencies = [
     "(crate)",
     "disk::summary",
     "harness::check_run",
     "store::event",
+    "store::workflow",
     "theme::fmt",
 ]
 surface-budget = 25

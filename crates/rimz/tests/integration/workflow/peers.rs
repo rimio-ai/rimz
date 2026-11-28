@@ -382,7 +382,9 @@ fn wait_returns_when_its_runs_end_with_their_endings_and_exit() {
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     let text = String::from_utf8_lossy(&output.stdout);
     assert!(
-        text.lines().count() == 1 && text.contains(&one) && text.contains("· checkout "),
+        text.lines().count() == 1
+            && text.contains("one#main: done")
+            && text.contains("· checkout "),
         "{text}"
     );
 
@@ -407,7 +409,7 @@ fn wait_returns_when_its_runs_end_with_their_endings_and_exit() {
     success(command(&env, &["workflow", "cancel", &three]));
     let output = child.wait_with_output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
-    assert!(String::from_utf8_lossy(&output.stdout).contains(&three));
+    assert!(String::from_utf8_lossy(&output.stdout).contains("three#main: canceled"));
 }
 
 #[test]
@@ -421,10 +423,7 @@ fn wait_times_out_refuses_unknown_runs_and_stops_for_a_prompt() {
     assert_eq!(output.status.code(), Some(124), "{output:?}");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stdout.contains(&format!("{slow}): still active at pr")),
-        "{stdout}"
-    );
+    assert!(stdout.contains("slow#main: still active at pr"), "{stdout}");
     assert!(
         stderr.contains("timed out after 1s; the runs still going are left running"),
         "{stderr}"
@@ -501,7 +500,10 @@ fn wait_returns_at_once_when_a_run_needs_a_person() {
             "asking":{"since":now, "handle":"@fox", "kind":"permission", "text":"May I push?"},
         });
     });
-    for (id, why) in [(&parked, "look at this"), (&asking, "May I push?")] {
+    for (id, name, why) in [
+        (&parked, "parked", "look at this"),
+        (&asking, "asking", "May I push?"),
+    ] {
         for any in [false, true] {
             let mut args = vec![quiet.as_str(), id.as_str()];
             if any {
@@ -511,9 +513,9 @@ fn wait_returns_at_once_when_a_run_needs_a_person() {
             assert_eq!(output.status.code(), Some(3), "{any}: {output:?}");
             let text = String::from_utf8_lossy(&output.stdout);
             assert!(
-                text.contains(&format!("{id}): needs you: "))
+                text.contains(&format!("{name}#main: needs you: "))
                     && text.contains(why)
-                    && text.contains(&format!("{quiet}): still active at pr")),
+                    && text.contains("quiet#main: still active at pr"),
                 "{text}"
             );
         }
@@ -556,6 +558,12 @@ fn wait_reads_a_home_deleted_under_it_as_a_quiet_ending() {
         (&json!("ended"), &json!("done"), &json!(0)),
         "{entry:#}"
     );
+}
+
+/// How an agent reads run `id`: its address where that selects it, else its id.
+fn run_shown(env: &Env, id: &str) -> String {
+    rimz::store::workflow::RunNames::new(&env.state_path_for(&env.project_root))
+        .shown(&id.parse().unwrap())
 }
 
 pub(super) fn reports(env: &Env) -> Vec<MessageRecord> {
@@ -625,10 +633,10 @@ fn an_agents_run_reports_its_end_once_to_its_starter_and_leaves_the_live_home() 
     );
     let entry = &report_of(&wait(&env, &[&owed, "--json"]).output().unwrap())[0];
     for part in [
-        format!("workflow run {owed} (owed) ended done"),
+        "workflow run owed#main (owed) ended done".to_owned(),
         format!("checkout {}", entry["checkout"].as_str().unwrap()),
         format!("notes {}", entry["notes"].as_str().unwrap()),
-        format!("rimz workflow show {owed} --history"),
+        "rimz workflow show 'owed#main' --history".to_owned(),
     ] {
         assert!(report.text.contains(&part), "{part}: {}", report.text);
     }
@@ -739,13 +747,20 @@ fn a_stranded_run_reports_to_its_starter_as_failed() {
     success(command(&env, &["workflow", "reconcile"]));
     let sent = reports(&env);
     assert_eq!(sent.len(), 1, "{sent:#?}");
+    let text = &sent[0].text;
+    // A stranded run is no longer on record, so its address selects nothing and the report
+    // names its id, and the history command the report prints reaches it.
     assert!(
-        sent[0]
-            .text
-            .contains(&format!("workflow run {owed} (owed) ended failed")),
-        "{}",
-        sent[0].text
+        text.contains(&format!("workflow run {owed} (owed) ended failed")),
+        "{text}"
     );
+    let history = text
+        .lines()
+        .find_map(|line| line.strip_prefix("history: rimz "))
+        .unwrap_or_else(|| panic!("the report prints its history command: {text}"));
+    let args = shlex::split(history).unwrap();
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    assert!(success(command(&env, &args)).contains(&owed), "{history}");
     assert_eq!(live_homes(&env), 0);
 }
 
@@ -922,7 +937,7 @@ fn a_runs_step_starts_each_entry_in_its_own_worktree_and_follows_then_once_both_
     for (id, checkout) in ids.iter().zip(&checkouts) {
         let row = shown
             .lines()
-            .find(|line| line.contains(id.as_str()))
+            .find(|line| line.contains(&run_shown(&env, id)))
             .unwrap_or_else(|| panic!("{shown}"));
         let name = checkout.file_name().unwrap().to_str().unwrap();
         assert!(
@@ -1060,7 +1075,7 @@ fn a_runs_step_timeout_and_cancel_leave_its_children_running() {
     let receipt =
         String::from_utf8(command(&env, &["workflow", "cancel", &parent]).stdout).unwrap();
     for id in &more {
-        assert!(receipt.contains(id.as_str()), "{receipt}");
+        assert!(receipt.contains(&run_shown(&env, id)), "{receipt}");
         assert_eq!(show(&env, id)["record"]["state"], "active");
     }
 }
@@ -1087,7 +1102,10 @@ fn a_runs_step_cancel_leaves_a_started_run_whose_record_cannot_be_read_out_of_it
         .collect::<Vec<_>>();
     assert_eq!(
         left,
-        [format!("its started runs were left running: {}", ids[1])],
+        [format!(
+            "its started runs were left running: {}",
+            run_shown(&env, &ids[1])
+        )],
         "{receipt}"
     );
 }
@@ -1343,7 +1361,10 @@ fn a_cancel_while_a_runs_step_starts_its_children_stops_the_start_and_names_only
         .collect::<Vec<_>>();
     assert_eq!(
         left,
-        [format!("its started runs were left running: {}", ids[0])],
+        [format!(
+            "its started runs were left running: {}",
+            run_shown(&env, &ids[0])
+        )],
         "{receipt}"
     );
 }

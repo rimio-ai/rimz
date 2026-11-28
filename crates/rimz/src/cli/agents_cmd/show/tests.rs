@@ -118,8 +118,10 @@ fn delegated_wait_show_activity_names_subagent_and_focuses_answering_pane() {
             now,
         )
         .with_live_panes(panes, None);
-        let (report, error) =
-            collect_show_report(&store, &workspace, &runtime, &snapshot, "@parent", None).unwrap();
+        let (report, error) = collect_show_report(
+            &store, &workspace, &runtime, &snapshot, "@parent", None, false,
+        )
+        .unwrap();
         assert!(error.is_none());
         assert_eq!(
             report.ask_next_step.as_deref(),
@@ -234,8 +236,10 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane.clone()], None);
-    let (report, error) =
-        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
+    let (report, error) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", None, false,
+    )
+    .unwrap();
     assert!(error.is_none());
     assert_eq!(report.agent.as_ref().unwrap().status, AgentStatus::Running);
     assert!(report.ask_next_step.is_none(), "{:?}", report.ask_next_step);
@@ -258,8 +262,10 @@ fn permission_ask_visibility_uses_the_show_snapshot_clock() {
         jiff::Timestamp::from_second(1_059).unwrap(),
     )
     .with_live_panes(vec![pane], None);
-    let (report, _) =
-        collect_show_report(&store, &workspace, &runtime, &snapshot, "@codex", None).unwrap();
+    let (report, _) = collect_show_report(
+        &store, &workspace, &runtime, &snapshot, "@codex", None, false,
+    )
+    .unwrap();
     assert!(report.ask_next_step.is_some());
 }
 

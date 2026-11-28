@@ -34,7 +34,7 @@ A run is active (a node is working or waiting), parked (stopped at a node until 
 
 | Target | Example | Selects |
 | --- | --- | --- |
-| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout. `show` falls back to the newest finished run that this RimZ's record version wrote when none is unfinished. Any finished run, whatever version wrote it, is reached by the id `rimz workflow list --all` prints. |
+| Run address `<workflow>#<checkout>` | `babysit-pr#feat-x` | That workflow's unfinished run in that checkout. `show` falls back, when none is unfinished, to a finished run that this RimZ's record version wrote: the caller's project first, a real run over a [one-node run](#running-one-node), then the most recently started. Any finished run, whatever version wrote it, is reached by the id `rimz workflow list --all` prints. |
 | Workflow name | `babysit-pr` | In `show`, the definition and its live runs. In `resume`, `extend`, `restart`, and `cancel`, the caller's run (below). |
 | Run id | `wf_` and 32 hexadecimal digits | That run, finished or not, in any room. |
 
@@ -76,7 +76,7 @@ A loop task's fire refused this way records an errored fire carrying this text a
 
 With `scope = "worktree"`, nodes run in the selected checkout. With `scope = "project"`, they run at the project root, even when invoked from an owned worktree. `-w` on a project-scoped workflow refuses before anything is created, with `<workflow> has scope = project, so it runs at <project root>; start it without -w` (exit 1). A loop task's fire into a worktree is not a `-w` start and runs at the project root.
 
-One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run, a start given `--at` or `--input` included. A one-node run (`--once`) holds no slot: it starts beside any run, and any run starts beside it. A loop task's tail refuses all three flags, each naming the flag, since a task's run always runs the whole workflow from its start, and refuses `--detach` too, since a task's run owes the task its report. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
+One unfinished run holds each `(workflow, scope path)` pair, and a run a loop task started also holds `(task, scope path)`. A second start refuses and names the existing run by its address, a start given `--at` or `--input` included. A one-node run (`--once`) holds no slot: it starts beside any run, and any run starts beside it. A loop task's tail refuses all three flags, each naming the flag, since a task's run always runs the whole workflow from its start, and refuses `--detach` too, since a task's run owes the task its report. The CLI validates before it asks for that slot, so a broken definition refuses on validation first.
 
 A run records who started it and how deep it sits ([starters and depth](#starters-and-depth)). A start past the depth limit refuses before a worktree, a home, or a record is created.
 
