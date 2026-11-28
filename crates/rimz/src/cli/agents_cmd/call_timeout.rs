@@ -20,9 +20,10 @@ pub fn call_timeout(request: CallTimeoutRequest, globals: &super::GlobalFlags) -
         return Ok(());
     };
     let failure = rimz::harness::call::timeout_failure(&call);
-    // A launch already ended at its deadline is owed nothing, read from the store's rows so the
-    // report never waits on a pane being seen; only the stop needs the room's live view.
-    let rows = ctx.store.snapshot_cached()?;
+    // A launch already ended at its deadline is owed nothing, read from a fresh store projection
+    // so a seat whose owner died since the last publish drops out and the report never waits on a
+    // pane being seen; only the stop needs the room's live view.
+    let rows = ctx.store.snapshot()?;
     if rimz::harness::call::live_seats(&call, rows.agents.iter()).is_empty() {
         return Ok(());
     }
