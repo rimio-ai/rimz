@@ -238,9 +238,10 @@ pub struct TaskEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub every: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub cron: Option<String>,
+    /// The signal a team role's binding fires on, the one row that takes it: a row without a
+    /// binding's shape (`team` and no action of its own: no `kind`, `target` or `args`) that
+    /// sets `signal` or `match` is refused.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -251,8 +252,8 @@ pub struct TaskEntry {
     pub matches: Option<BTreeMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watch: Option<WatchSpec>,
-    /// Whether a `signal` or `when` row fires again after its first fire; `every` and `cron`
-    /// rows repeat by nature, and so does a team binding, whose `team` makes it standing.
+    /// Whether a `when` row fires again after its first fire; a `cron` row repeats by nature,
+    /// and so does a team binding, whose `team` makes it standing.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub repeat: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -261,10 +262,10 @@ pub struct TaskEntry {
     /// naming its timeout and retires. Unlike `deadline`, which only gates a fire.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires: Option<Timestamp>,
-    /// The instant of an absolute one-shot, written by `rimz loop add --in` and `--at`, and by
-    /// an older RimZ's self wait. A scheduled fire that records a result removes the row,
-    /// whatever the result; the clock pass dispatches a fire that recorded none again, and a
-    /// manual run leaves the row.
+    /// The instant of an absolute one-shot, written by `rimz loop add --at` and the `schedule`
+    /// tool's `at`, and by an older RimZ's self wait. A scheduled fire that records a result
+    /// removes the row, whatever the result; the clock pass dispatches a fire that recorded none
+    /// again, and a manual run leaves the row.
     #[serde(rename = "fire-at", skip_serializing_if = "Option::is_none")]
     pub fire_at: Option<Timestamp>,
     /// The provider whose windows the row's `window.*` terms read, recorded at add.
@@ -298,7 +299,22 @@ pub struct RefusedRow {
 impl<'de> Deserialize<'de> for TaskEntry {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = serde_json::Value::deserialize(deserializer)?;
-        Ok(TaskEntry::deserialize(&raw).unwrap_or_else(|error| {
+        let decoded = match removed_trigger(&raw) {
+            Some(detail) => Err(detail.to_owned()),
+            None => TaskEntry::deserialize(&raw).map_err(|error| error.to_string()),
+        };
+        let decoded = decoded.and_then(|entry| {
+            let binding = entry.team.is_some()
+                && entry.kind.is_none()
+                && entry.target.is_none()
+                && entry.args.is_empty();
+            let unbound_signal = !binding && (entry.signal.is_some() || entry.matches.is_some());
+            if unbound_signal {
+                return Err(SIGNAL_REMOVED.to_owned());
+            }
+            Ok(entry)
+        });
+        Ok(decoded.unwrap_or_else(|detail| {
             let root = raw
                 .get("root")
                 .and_then(serde_json::Value::as_str)
@@ -306,13 +322,33 @@ impl<'de> Deserialize<'de> for TaskEntry {
                 .unwrap_or_default();
             TaskEntry {
                 root,
-                refused: Some(RefusedRow {
-                    detail: error.to_string(),
-                    raw,
-                }),
+                refused: Some(RefusedRow { detail, raw }),
                 ..TaskEntry::default()
             }
         }))
+    }
+}
+
+/// Why a row with `signal` or `match` outside a team binding's shape is refused.
+const SIGNAL_REMOVED: &str = "a task no longer fires on `signal`: fire on a state with `when`, or \
+                              have a workflow `subscribe` to the signal";
+
+/// Why a stored row carrying a trigger RimZ no longer takes is refused, naming its replacement.
+fn removed_trigger(raw: &serde_json::Value) -> Option<&'static str> {
+    raw.get("every").and_then(|_| removed_task_key("every"))
+}
+
+/// Why a task key that named a removed trigger is refused, naming its replacement: `every`,
+/// `in`, and `signal` or `match`, which only a team binding's row still carries.
+pub(crate) fn removed_task_key(key: &str) -> Option<&'static str> {
+    match key {
+        "every" => Some(
+            "a task no longer fires on `every`: write the interval as a `cron` expression \
+             (`*/30 * * * *` for every 30 minutes)",
+        ),
+        "in" => Some("a task no longer fires on `in`: write the delay as `rimz loop add --at`"),
+        "signal" | "match" => Some(SIGNAL_REMOVED),
+        _ => None,
     }
 }
 

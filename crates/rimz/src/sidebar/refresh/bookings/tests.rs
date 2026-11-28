@@ -178,7 +178,7 @@ fn only_agent_booked_one_off_launch_commands_are_bookings() {
             "recurring",
             config(TaskEntry {
                 when: None,
-                every: Some("1h".to_owned()),
+                cron: Some("0 * * * *".to_owned()),
                 each_worktree: true,
                 ..booked(&root)
             }),

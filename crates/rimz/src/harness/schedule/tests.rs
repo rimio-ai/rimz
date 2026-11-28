@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{LaunchKind, WatchSpec};
+use jiff::SignedDuration;
 use jiff::civil::date;
 
 #[test]
@@ -68,11 +69,11 @@ fn lost_watch_uses_host_grace_and_live_lock() {
 #[test]
 fn lifecycle_kind_follows_the_stored_row() {
     let recurring = TaskEntry {
-        every: Some("5m".into()),
+        cron: Some("*/5 * * * *".into()),
         ..spawn_entry()
     };
     let signal = TaskEntry {
-        every: None,
+        cron: None,
         signal: Some("ci.passed".into()),
         ..recurring.clone()
     };
@@ -281,10 +282,9 @@ fn condition_rows_validate_describe_and_have_standing_lifetimes() {
     entry.repeat = false;
     assert!(parse_trigger("ship", &entry).unwrap().once);
     assert!(ephemeral_lifetime(&entry));
-    for field in ["every", "cron", "signal", "watch", "deadline"] {
+    for field in ["cron", "signal", "watch", "deadline"] {
         let mut conflict = entry.clone();
         match field {
-            "every" => conflict.every = Some("5m".to_owned()),
             "cron" => conflict.cron = Some("0 * * * *".to_owned()),
             "signal" => conflict.signal = Some("ci.passed".to_owned()),
             "watch" => conflict.watch = Some(WatchSpec::Command("true".to_owned())),
@@ -337,21 +337,14 @@ fn fire_at_rows_are_ephemeral_absolute_one_shots() {
         parsed.describe(),
         local.strftime("once at %Y-%m-%d %H:%M").to_string()
     );
-    for field in ["every", "cron"] {
-        let mut conflict = entry.clone();
-        match field {
-            "every" => conflict.every = Some("5m".to_owned()),
-            "cron" => conflict.cron = Some("0 * * * *".to_owned()),
-            _ => unreachable!(),
-        }
-        assert!(
-            matches!(
-                parse_trigger("reset", &conflict),
-                Err(ScheduleErr::TimeConflict { .. })
-            ),
-            "{field}"
-        );
-    }
+    let conflict = TaskEntry {
+        cron: Some("0 * * * *".to_owned()),
+        ..entry.clone()
+    };
+    assert!(matches!(
+        parse_trigger("reset", &conflict),
+        Err(ScheduleErr::TimeConflict { .. })
+    ));
     for field in ["signal", "when", "watch"] {
         let mut conflict = entry.clone();
         match field {
@@ -448,11 +441,10 @@ fn after(now: &ZonedDateTime, seconds: i64) -> Timestamp {
         .expect("shifted timestamp")
 }
 
-fn entry(every: Option<&str>, cron: Option<&str>) -> TaskEntry {
+fn entry(cron: Option<&str>) -> TaskEntry {
     TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: every.map(ToOwned::to_owned),
         cron: cron.map(ToOwned::to_owned),
         ..TaskEntry::default()
     }
@@ -474,7 +466,7 @@ fn allow_entry(kind: LaunchKind) -> TaskEntry {
         target: (!shell).then(|| "claude".to_owned()),
         args: vec!["true".to_owned()],
         timeout: shell.then(|| "1m".to_owned()),
-        every: Some("1h".to_owned()),
+        cron: Some("0 * * * *".to_owned()),
         overlap: Some(crate::config::OverlapPolicy::Allow),
         ..TaskEntry::default()
     }
@@ -493,7 +485,7 @@ fn schedule_of(entry: &TaskEntry) -> Schedule {
 }
 
 fn cron(expr: &str) -> Schedule {
-    schedule_of(&entry(None, Some(expr)))
+    schedule_of(&entry(Some(expr)))
 }
 
 /// Each accepted action shape with its kind predicates, then every way the
@@ -610,7 +602,7 @@ fn task_action_from_entry_maps_field_combinations() {
         ),
         (
             TaskEntry {
-                every: None,
+                cron: None,
                 ..allow_entry(LaunchKind::Agent)
             },
             "loop task `task` sets `overlap`; a one-shot fires once, so no later fire overlaps it",
@@ -637,7 +629,8 @@ fn task_action_from_entry_maps_field_combinations() {
 
 #[test]
 fn a_row_with_a_key_outside_the_row_refuses_with_the_re_add_message() {
-    let entry: TaskEntry = toml::from_str("agent = 'codex'\nprompt = 'fix'\nevery = '1h'").unwrap();
+    let entry: TaskEntry =
+        toml::from_str("agent = 'codex'\nprompt = 'fix'\ncron = '0 * * * *'").unwrap();
     let err = TaskAction::from_entry("old", &entry).expect_err("old row refuses");
     let message = err.to_string();
     assert!(
@@ -656,8 +649,8 @@ fn a_row_with_a_key_outside_the_row_refuses_with_the_re_add_message() {
 #[test]
 fn on_belongs_to_a_watch_and_refuses_on_a_command_or_signal_delivery_row() {
     for row in [
-        "args=['true']\ntimeout='1m'\nevery='1h'\non='success'",
-        "wait={kind='codex', session='s', handle='@x'}\nsignal='deploy.done'\non='success'",
+        "args=['true']\ntimeout='1m'\ncron='0 * * * *'\non='success'",
+        "wait={kind='codex', session='s', handle='@x'}\nteam='forge#main'\nsignal='deploy.done'\non='success'",
     ] {
         let entry: TaskEntry = toml::from_str(row).unwrap();
         assert_eq!(
@@ -703,7 +696,7 @@ fn a_rows_worktree_is_handed_to_its_launch_before_the_tail() {
     ] {
         let target = if kind == "team" { "forge" } else { "worker" };
         let entry: TaskEntry = toml::from_str(&format!(
-            "kind='{kind}'\ntarget='{target}'\nworktree='deps'\nargs=['go']\nroot='/r'\nevery='1h'"
+            "kind='{kind}'\ntarget='{target}'\nworktree='deps'\nargs=['go']\nroot='/r'\ncron='0 * * * *'"
         ))
         .unwrap();
         let shape = TaskShape::compile("t", &entry);
@@ -717,15 +710,15 @@ fn a_rows_worktree_is_handed_to_its_launch_before_the_tail() {
         );
     }
     let shell: TaskEntry =
-        toml::from_str("worktree='deps'\nargs=['true']\ntimeout='1m'\nroot='/r'\nevery='1h'")
+        toml::from_str("worktree='deps'\nargs=['true']\ntimeout='1m'\nroot='/r'\ncron='0 * * * *'")
             .unwrap();
     assert_eq!(
         TaskShape::compile("t", &shell).action(),
         Ok(&TaskAction::Shell(vec!["true".to_owned()]))
     );
     for fields in [
-        "each-worktree=true\nargs=['true']\ntimeout='1m'\nevery='1h'",
-        "wait={kind='codex', session='s', handle='@x'}\nsignal='deploy.done'",
+        "each-worktree=true\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'",
+        "wait={kind='codex', session='s', handle='@x'}\nteam='forge#main'\nsignal='deploy.done'",
     ] {
         let entry: TaskEntry =
             toml::from_str(&format!("worktree='deps'\nroot='/r'\n{fields}")).unwrap();
@@ -740,7 +733,7 @@ fn a_rows_worktree_is_handed_to_its_launch_before_the_tail() {
 fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
     // Repeating clock and condition tasks overlap on their live run.
     for fields in [
-        "args=['true']\ntimeout='1m'\nevery='1h'",
+        "args=['true']\ntimeout='1m'\ncron='0 * * * *'",
         "args=['true']\ntimeout='1m'\nwhen=['team.stage=Done']\nrepeat=true",
     ] {
         let entry: crate::config::TaskEntry =
@@ -761,15 +754,15 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
             "one-shot",
         ),
         (
-            "args=['true']\ntimeout='1m'\nevery='1h'\ndeadline='2030-01-01T00:00:00Z'",
+            "args=['true']\ntimeout='1m'\ncron='0 * * * *'\ndeadline='2030-01-01T00:00:00Z'",
             "one-shot",
         ),
         (
-            "wait={kind='claude',session='s',handle='@a'}\nsignal='deploy.done'",
+            "wait={kind='claude',session='s',handle='@a'}\nteam='forge#main'\nsignal='deploy.done'",
             "no run to overlap",
         ),
         (
-            "args=['true']\ntimeout='1m'\nevery='1h'\noverlap-limit=2",
+            "args=['true']\ntimeout='1m'\ncron='0 * * * *'\noverlap-limit=2",
             "queue",
         ),
         (
@@ -785,7 +778,7 @@ fn overlap_is_refused_on_every_unsupported_shape_and_invalid_limit() {
     }
     for fields in ["overlap-limit=2", "overlap='queue'\noverlap-limit=0"] {
         let entry: crate::config::TaskEntry = toml::from_str(&format!(
-            "args=['true']\ntimeout='1m'\nevery='1h'\n{fields}"
+            "args=['true']\ntimeout='1m'\ncron='0 * * * *'\n{fields}"
         ))
         .unwrap();
         assert!(
@@ -803,7 +796,7 @@ fn task_shape_compiles_action_and_timing_independently() {
         "morning",
         &TaskEntry {
             cron: Some("0 7 * * *".to_owned()),
-            every: Some("1h".to_owned()),
+            fire_at: Some(Timestamp::UNIX_EPOCH),
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
             ..TaskEntry::default()
@@ -819,81 +812,43 @@ fn task_shape_compiles_action_and_timing_independently() {
     ));
 }
 
-/// Every accepted `(every, cron)` shape and the line a listing renders.
-/// `describe` is a total projection of the parsed schedule, so the structural
-/// assertions below pin the shape it renders from.
+/// A cron row's shape and the line a listing renders. `describe` is a total projection of the
+/// parsed schedule, so the structural assertion below pins the shape it renders from.
 #[test]
-fn parse_schedule_accepts_every_timing_form() {
-    let described = |every, cron| {
-        parse_schedule("m", &entry(every, cron))
-            .expect("parse")
-            .describe()
-    };
-    for (every, cron, expected) in [
-        (Some("7m"), None, "every 7m"),
-        // Sub-minute intervals round up rather than flooring to never firing.
-        (Some("1s"), None, "every 1m"),
-        (None, Some("0 7 * * 1-5"), "cron `0 7 * * 1-5`"),
-    ] {
-        let label = format!("{every:?} {cron:?}");
-        assert_eq!(described(every, cron), expected, "{label}");
-    }
-
+fn parse_schedule_accepts_a_cron_timing() {
+    let parsed = parse_schedule("m", &entry(Some("0 7 * * 1-5"))).expect("parse");
+    assert_eq!(parsed.describe(), "cron `0 7 * * 1-5`");
     assert_eq!(
-        schedule_of(&entry(Some("7m"), None)),
-        Schedule::Interval(IntervalSpec::new(7))
-    );
-    assert_eq!(
-        schedule_of(&entry(None, Some("0 7 * * 1-5"))),
+        schedule_of(&entry(Some("0 7 * * 1-5"))),
         cron("0 7 * * 1-5")
     );
     // A repeat cadence always outlives its fire.
-    for (every, cron) in [(Some("1d"), None), (None, Some("0 7 * * 1-5"))] {
-        let parsed = parse_schedule("m", &entry(every, cron)).expect("parse");
-        assert!(!parsed.once, "{every:?} {cron:?}");
-    }
+    assert!(!parsed.once);
 }
 
 /// Every `ScheduleErr` variant with a field combination that raises it.
 #[test]
 fn parse_schedule_rejects_invalid_timing_fields() {
     let name = || "m".to_owned();
-    let bad_every = |value: &str| ScheduleErr::BadEvery {
-        name: name(),
-        value: value.to_owned(),
-    };
     let bad_cron = |value: &str| ScheduleErr::BadCron {
         name: name(),
         value: value.to_owned(),
     };
 
-    for (every, cron, expected) in [
-        (
-            Some("5m"),
-            Some("0 7 * * *"),
-            ScheduleErr::TimeConflict { name: name() },
-        ),
-        (None, None, ScheduleErr::NoTime { name: name() }),
-        (Some("weekday"), None, bad_every("weekday")),
-        (Some("day"), None, bad_every("day")),
-        (Some("mon,wed,fri"), None, bad_every("mon,wed,fri")),
-        (Some("0m"), None, bad_every("0m")),
-        (Some("later"), None, bad_every("later")),
-        (Some("reset"), None, bad_every("reset")),
-        (Some("Reset"), None, bad_every("Reset")),
-        (Some(" reset "), None, bad_every(" reset ")),
-        (None, Some("0 7 * *"), bad_cron("0 7 * *")),
+    let conflict = TaskEntry {
+        fire_at: Some(Timestamp::UNIX_EPOCH),
+        ..entry(Some("0 7 * * *"))
+    };
+    for (entry, expected) in [
+        (conflict, ScheduleErr::TimeConflict { name: name() }),
+        (entry(None), ScheduleErr::NoTime { name: name() }),
+        (entry(Some("0 7 * *")), bad_cron("0 7 * *")),
     ] {
-        let label = format!("{every:?} {cron:?}");
-        assert_eq!(
-            parse_schedule("m", &entry(every, cron)),
-            Err(expected),
-            "{label}"
-        );
+        assert_eq!(parse_schedule("m", &entry), Err(expected), "{entry:?}");
     }
     assert_eq!(
-        bad_every("later").to_string(),
-        "schedule `m` has an invalid `every` value `later`; use a duration like `30m`"
+        ScheduleErr::NoTime { name: name() }.to_string(),
+        "schedule `m` needs a firing time: set `cron = \"...\"`"
     );
 }
 
@@ -939,7 +894,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         (
             TaskEntry {
                 signal: Some("ci.failed".to_owned()),
-                every: Some("5m".to_owned()),
+                cron: Some("*/5 * * * *".to_owned()),
                 ..spawn_entry()
             },
             ScheduleErr::TriggerConflict {
@@ -949,7 +904,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         (
             TaskEntry {
                 matches: Some(std::collections::BTreeMap::new()),
-                every: Some("5m".to_owned()),
+                cron: Some("*/5 * * * *".to_owned()),
                 ..spawn_entry()
             },
             ScheduleErr::MatchWithoutSignal {
@@ -958,7 +913,7 @@ fn parse_trigger_rejects_conflicting_fields() {
         ),
         (
             TaskEntry {
-                every: Some("5m".to_owned()),
+                cron: Some("*/5 * * * *".to_owned()),
                 repeat: true,
                 ..spawn_entry()
             },
@@ -1113,7 +1068,7 @@ fn triggers_match_names_and_top_level_payload_values() {
     use crate::harness::signal::SignalResolution::{Deliver, Excluded, Ignore, Skip};
     assert_eq!(matching.resolve("task", &signal), Deliver);
     assert_eq!(
-        Trigger::Schedule(parse_schedule("task", &entry(Some("5m"), None)).unwrap())
+        Trigger::Schedule(parse_schedule("task", &entry(Some("*/5 * * * *"))).unwrap())
             .resolve("task", &signal),
         Ignore
     );
@@ -1262,7 +1217,7 @@ fn a_signal_trigger_names_why_it_would_not_deliver_a_carried_signal() {
         ),
         (
             trigger(TaskEntry {
-                every: Some("1h".to_owned()),
+                cron: Some("0 * * * *".to_owned()),
                 ..spawn_entry()
             }),
             signal("deploy.done", prod.clone()),
@@ -1339,14 +1294,12 @@ fn obsolete_ci_finished_subscription_is_rejected_with_replacement() {
 /// direction fails.
 #[test]
 fn schedule_due_at_occurrence_edges() {
-    let interval = Schedule::Interval(IntervalSpec::new(15));
     let quarter_hour = cron("*/15 * * * *");
     let weekday_cron = cron("0 7 * * 1-5");
     let every_wed = cron("30 7 * * wed");
     let every_mon = cron("30 7 * * mon");
     let daily = cron("30 7 * * *");
 
-    let boundary = zdt(2026, 6, 24, 8, 15, 0);
     let wed_0730 = zdt(2026, 6, 24, 7, 30, 0);
     let wed_0700 = zdt(2026, 6, 24, 7, 0, 0);
     let wed_0729 = zdt(2026, 6, 24, 7, 29, 59);
@@ -1356,8 +1309,6 @@ fn schedule_due_at_occurrence_edges() {
     // Was `schedule` due at `now`, given a fire `ago` seconds earlier?
     let due = |schedule: &Schedule, now: &ZonedDateTime, ago| schedule.due(before(now, ago), now);
 
-    assert!(!due(&interval, &boundary, 899), "interval a second early");
-    assert!(due(&interval, &boundary, 900), "interval at the boundary");
     assert!(
         due(&every_wed, &wed_0730, 60),
         "weekly cron at its occurrence"
@@ -1391,14 +1342,12 @@ fn schedule_due_at_occurrence_edges() {
 /// gives up rather than spinning.
 #[test]
 fn schedule_next_after_reports_the_following_occurrence() {
-    let interval = Schedule::Interval(IntervalSpec::new(15));
     let quarter_hour = cron("*/15 * * * *");
     let yearly = cron("0 0 1 1 *");
     let every_mon = cron("30 7 * * mon");
     let daily = cron("30 7 * * *");
 
     let morning = zdt(2026, 6, 24, 8, 0, 0);
-    let ten_past = zdt(2026, 6, 24, 8, 10, 0);
     let before_quarter = zdt(2026, 6, 24, 8, 14, 12);
     let on_quarter = zdt(2026, 6, 24, 8, 30, 12);
     let jan_second = zdt(2026, 1, 2, 0, 0, 0);
@@ -1406,12 +1355,6 @@ fn schedule_next_after_reports_the_following_occurrence() {
     let next =
         |schedule: &Schedule, now: &ZonedDateTime, ago| schedule.next_after(before(now, ago), now);
 
-    let interval_last = before(&ten_past, 60);
-    assert_eq!(
-        next(&interval, &ten_past, 60),
-        Timestamp::from_second(interval_last.as_second() + 900).ok(),
-        "interval counts from the last fire"
-    );
     assert_eq!(
         next(&every_mon, &morning, 2 * 86_400 + 1_800),
         Some(zdt(2026, 6, 29, 7, 30, 0).timestamp()),
@@ -1510,8 +1453,8 @@ fn task_timing_state_precedence_and_classification() {
     };
 
     let now = zdt(2026, 6, 24, 8, 10, 0);
-    let interval = entry(Some("15m"), None);
-    let invalid = entry(None, None);
+    let interval = entry(Some("*/15 * * * *"));
+    let invalid = entry(None);
     let stale = crate::trust::TrustState::Stale;
     let manual = arming::Arming {
         enabled: false,
@@ -1553,7 +1496,7 @@ fn task_timing_state_precedence_and_classification() {
     );
     assert_eq!(overlay(Timing::fired(0, &now)), Invalid);
     // A hand-written row whose cron the parser refuses reads invalid as compiled.
-    let refused = TaskShape::compile("task", &entry(None, Some("0 9 * * L")));
+    let refused = TaskShape::compile("task", &entry(Some("0 9 * * L")));
     let fired = Timing::fired(0, &now);
     assert_eq!(
         TaskTiming::evaluate(&refused.trigger, fired.source, fired.last_fire, None, &now).state(),
@@ -1589,18 +1532,18 @@ fn task_timing_state_precedence_and_classification() {
         Timing::fired(10 * 60, &now).state(&interval, &now),
         Upcoming(after(&now, 5 * 60)),
     );
-    // An ended pause moves the edge forward: 20 minutes since the last fire, but
-    // the pause lifted 5 minutes ago, so the next 15m occurrence is 10m out.
+    // An ended pause moves the edge forward: the 08:00 occurrence after the last fire passed
+    // while paused, and the pause lifted 5 minutes ago, so the next one is 08:15.
     assert_eq!(
         Timing::fired(20 * 60, &now)
             .held(ended)
             .state(&interval, &now),
-        Upcoming(after(&now, 10 * 60)),
+        Upcoming(after(&now, 5 * 60)),
     );
     // A sparse cron expression still has a computable occurrence.
     assert_eq!(
         Timing::fired(60, &zdt(2026, 1, 2, 0, 0, 0))
-            .state(&entry(None, Some("0 0 1 1 *")), &zdt(2026, 1, 2, 0, 0, 0)),
+            .state(&entry(Some("0 0 1 1 *")), &zdt(2026, 1, 2, 0, 0, 0)),
         Upcoming(zdt(2027, 1, 1, 0, 0, 0).timestamp()),
     );
 
@@ -1615,16 +1558,7 @@ fn task_timing_state_precedence_and_classification() {
             },
             Timing::fired(60, &now),
         ),
-        (
-            "interval",
-            entry(Some("15m"), None),
-            Timing::fired(15 * 60, &now),
-        ),
-        (
-            "cron",
-            entry(None, Some("10 8 * * *")),
-            Timing::fired(60, &now),
-        ),
+        ("cron", entry(Some("10 8 * * *")), Timing::fired(60, &now)),
     ] {
         assert!(matches!(timing.state(&entry, &now), Due(_)), "{label}");
     }
@@ -1816,7 +1750,7 @@ fn cron_accepts_names_stepped_ranges_and_macros() {
 
 #[test]
 fn cron_refuses_unsupported_forms_and_unknown_tokens() {
-    let parse = |expr: &str| parse_schedule("m", &entry(None, Some(expr))).map(|_| ());
+    let parse = |expr: &str| parse_schedule("m", &entry(Some(expr))).map(|_| ());
     for (expr, form) in [
         ("0 0 L * *", "L"),
         ("0 0 ? * 1", "?"),
@@ -1870,7 +1804,7 @@ fn cron_refuses_unsupported_forms_and_unknown_tokens() {
 
 #[test]
 fn cron_that_can_never_fire_is_refused_and_a_leap_day_is_found() {
-    let parse = |expr: &str| parse_schedule("m", &entry(None, Some(expr))).map(|_| ());
+    let parse = |expr: &str| parse_schedule("m", &entry(Some(expr))).map(|_| ());
     for expr in ["0 0 30 2 *", "0 0 31 4,6,9,11 *"] {
         let error = parse(expr).unwrap_err();
         assert_eq!(
@@ -1942,31 +1876,31 @@ fn cron_next_after_matches_a_minute_walk_across_zone_shifts() {
 #[test]
 fn trigger_clauses_word_each_trigger_as_a_runs_brief_names_it() {
     let clause = |row: &str| {
-        let entry: TaskEntry =
-            toml::from_str(&format!("args=['true']\ntimeout='1m'\n{row}")).unwrap();
+        let entry: TaskEntry = toml::from_str(row).unwrap();
         trigger_clause(&catalog::LoadedTask::new(
             "land",
             entry,
             catalog::TaskSource::Config,
         ))
     };
+    let shell = |row: &str| clause(&format!("args=['true']\ntimeout='1m'\n{row}"));
     let when = "when=['pr=open && team.stage=Done && !ci=pending,failed']\nfor='3m'\n";
     assert_eq!(
-        clause(&format!("{when}each-worktree=true\n")).as_deref(),
+        shell(&format!("{when}each-worktree=true\n")).as_deref(),
         Some(
             "when `pr=open && team.stage=Done && !ci=pending,failed` held in this worktree for 3m"
         )
     );
     assert_eq!(
-        clause(when).as_deref(),
+        shell(when).as_deref(),
         Some("when `pr=open && team.stage=Done && !ci=pending,failed` held for 3m")
     );
     assert_eq!(
-        clause("cron='0 * * * *'\n").as_deref(),
+        shell("cron='0 * * * *'\n").as_deref(),
         Some("on the cron schedule `0 * * * *`")
     );
     assert_eq!(
-        clause("signal='deploy.done'\n").as_deref(),
+        clause("team='forge#main'\nsignal='deploy.done'\n").as_deref(),
         Some("on the signal `deploy.done`")
     );
 }
@@ -2095,14 +2029,9 @@ fn an_each_worktree_row_that_fires_once_is_refused_with_the_fix() {
     assert_eq!(
         error.to_string(),
         "loop task `yagni` sets `each-worktree` on a trigger that fires once, which would remove \
-         the task after its first checkout; set `repeat = true` beside `when`, or fire on `every` \
-         or `cron`"
+         the task after its first checkout; set `repeat = true` beside `when`, or fire on `cron`"
     );
-    for fields in [
-        "when=['pr=merged']\nrepeat=true",
-        "every='1h'",
-        "cron='0 * * * *'",
-    ] {
+    for fields in ["when=['pr=merged']\nrepeat=true", "cron='0 * * * *'"] {
         let entry: TaskEntry = toml::from_str(&format!(
             "args=['true']\ntimeout='1m'\neach-worktree=true\n{fields}"
         ))

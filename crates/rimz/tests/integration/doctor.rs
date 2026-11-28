@@ -1057,7 +1057,7 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.context-only]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.done'\n",
+            "[tasks.context-only]\nwait = {{ kind = 'claude', session = 's', handle = '@context' }}\nroot = '{}'\nsignal = 'ci.done'\nteam = 'forge#main'\n",
             env.project_root.display()
         ),
     )
@@ -1074,7 +1074,7 @@ fn doctor_audit_widens_loop_and_language_server_tables() {
         "started_at_ms": 0, "estimate_bytes": 0, "settings_hash": "hash", "request_count": 0, "peak_rss_kb": 0, "leases": []
     })).unwrap()).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
-    assert_eq!(report["loop_tasks"]["tasks"][0]["spec"], "true");
+    assert_eq!(report["loop_tasks"]["tasks"][0]["spec"], "@context");
     for (args, expanded) in [(vec!["doctor"], false), (vec!["doctor", "--audit"], true)] {
         let output = env.rimz().args(args).output().unwrap();
         assert!(output.status.success(), "{output:?}");
@@ -1115,7 +1115,7 @@ fn doctor_keeps_same_named_cross_root_instance_and_its_worktree_hold() {
     std::fs::create_dir(&other).unwrap();
     std::fs::write(
         env.rimz_home().join("loop.toml"),
-        format!("[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\nevery='1h'\n"),
+        format!("[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n"),
     )
     .unwrap();
     let instances = env
@@ -1126,7 +1126,7 @@ fn doctor_keeps_same_named_cross_root_instance_and_its_worktree_hold() {
     std::fs::write(
         instances,
         serde_json::to_vec(&json!({"same": {
-            "root": env.project_root, "dir": worktree, "args": ["true"], "timeout": "1m", "signal": "ci.failed"
+            "root": env.project_root, "dir": worktree, "args": ["true"], "timeout": "1m", "cron": "0 * * * *"
         }}))
         .unwrap(),
     )
@@ -1168,7 +1168,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
     let path = env.home_root.join("project-worktrees/followup");
     let subdir = path.join("src");
     std::fs::create_dir(&subdir).unwrap();
-    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n[tasks.project]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.failed'\n", path.display(), subdir.display(), env.project_root.display())).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nwhen = ['ci=failed']\n[tasks.project]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nwhen = ['ci=failed']\n", path.display(), subdir.display(), env.project_root.display())).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(
         report["loop_tasks"]["tasks"][0]["holds_worktrees"],
@@ -1181,7 +1181,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nsignal = 'ci.failed'\n",
+            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\ndir = '{}'\nwhen = ['ci=failed']\n",
             env.project_root.display(),
             subdir.join("not-created-yet").display()
         ),
@@ -1204,7 +1204,7 @@ fn doctor_names_loop_worktree_holds_in_json_and_normal_text() {
 fn doctor_flags_clock_tasks_without_a_scheduler() {
     let env = Env::new();
     std::fs::write(env.rimz_home().join("loop.toml"), format!(
-        "[tasks.morning]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1m'\n[tasks.signal]\nargs = ['true']\ntimeout = '1m'\nrepeat = true\nroot = '{}'\nsignal = 'ci.failed'\n", env.project_root.display(), env.project_root.display()
+        "[tasks.morning]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ncron = '* * * * *'\n[tasks.signal]\nwait = {{ kind = 'claude', session = 's', handle = '@c' }}\nroot = '{}'\nsignal = 'ci.failed'\nteam = 'forge#main'\n", env.project_root.display(), env.project_root.display()
     )).unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
     assert_eq!(report["loop_tasks"]["timer"]["state"], "not_installed");
@@ -1931,7 +1931,7 @@ fn doctor_reports_machine_task_root_problem() {
     let env = Env::new();
     std::fs::write(
         env.rimz_home().join("loop.toml"),
-        "[tasks.one]\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+        "[tasks.one]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
     )
     .unwrap();
     let report = doctor_json(&env.rimz().args(["doctor", "--json"]).output().unwrap());
@@ -1969,7 +1969,7 @@ fn doctor_counts_an_invalid_loop_action() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.broken]\nroot = '{}'\nsignal = 'ci.done'\n",
+            "[tasks.broken]\nroot = '{}'\nwhen = ['ci=failed']\n",
             env.project_root.display()
         ),
     )

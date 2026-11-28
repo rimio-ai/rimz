@@ -20,8 +20,7 @@ use crate::harness::ancestry::{
 use crate::harness::block::{Schedule, ScheduleOverlap, ScheduleTrigger};
 use crate::harness::schedule::catalog::TaskCatalog;
 use crate::harness::schedule::wait::{WhenPlace, WindowAccount, at_refusal, read_when};
-use crate::harness::schedule::{self, ScheduleErr, TaskShape};
-use crate::harness::signal::SelectorErr;
+use crate::harness::schedule::{self, TaskShape};
 use crate::harness::spec::Cell;
 use crate::harness::workflow;
 use crate::launcher::LaunchOverrides;
@@ -94,13 +93,10 @@ pub(super) fn book(tools: &Tools, booking: &Booking) -> Result<Answer, Failure> 
         entry.provider = armed.provider;
     }
     let shape = TaskShape::compile(&args.name, &entry);
-    shape.trigger().as_ref().map_err(|err| match err {
-        ScheduleErr::Selector(SelectorErr::ObsoleteCiSignal { name }) => Failure::new(format!(
-            "schedule `{name}`: ci.finished was replaced by ci.passed, ci.failed, or 'ci.*'; \
-             leave `conclusion` out of `match`"
-        )),
-        err => Failure::new(err.to_string()),
-    })?;
+    shape
+        .trigger()
+        .as_ref()
+        .map_err(|err| Failure::new(err.to_string()))?;
     shape
         .action()
         .map_err(|err| Failure::new(err.to_string()))?;
@@ -413,23 +409,7 @@ fn set_trigger(
                 .map_err(|err| at_refusal(err, "`at`"))?;
             entry.fire_at = Some(fire_at);
         }
-        ScheduleTrigger::In => {
-            let delay = schedule::parse_delay(&args.value)
-                .map_err(|err| Failure::new(format!("invalid in `{}`: {err}", args.value)))?;
-            let fire_at = schedule::delayed_instant(delay, now.timestamp()).map_err(|_| {
-                Failure::new(format!(
-                    "invalid in `{}`: lands past the latest time RimZ can schedule",
-                    args.value
-                ))
-            })?;
-            entry.fire_at = Some(fire_at);
-        }
-        ScheduleTrigger::Every => entry.every = Some(args.value.clone()),
         ScheduleTrigger::Cron => entry.cron = Some(args.value.clone()),
-        ScheduleTrigger::Signal => {
-            entry.signal = Some(args.value.clone());
-            entry.matches = args.matches.clone().filter(|matches| !matches.is_empty());
-        }
         ScheduleTrigger::When => {
             entry.when = Some(vec![args.value.clone()]);
             entry.hold.clone_from(&args.hold);

@@ -187,7 +187,7 @@ Read plan.md when the planner finishes.
 | `DEADLINE` | A [deadline](./subagents.md#configure-the-deadline-ladder) warning or stop request, sent to the subagent; a stop left queued is withdrawn if its run ends, or ends and reopens, before delivery | `@rimz` |
 | `WAIT` | A [`rimz shell`](./shell.md) or [`rimz watch`](./watch.md) delivery, a loop delivery row not triggered by a signal, or a workflow [message step](./workflow.md#message-steps) | `@rimz` |
 | `CACHE_KEEPALIVE` | A facts-only prompt-cache ping for a sleeping agent | `@rimz` |
-| `SIGNAL` | A [signal-triggered loop](./loop.md#signals) delivery, or a signal a workflow step [subscribes](./workflow.md#wake-and-subscribe) to | `@rimz` |
+| `SIGNAL` | A delivery to a team's [signal binding](../../guide/configuration.md#team-signal-bindings), or a signal a workflow step [subscribes](./workflow.md#wake-and-subscribe) to | `@rimz` |
 | `STAGE` | A [team stage](./teams.md) opening | `@rimz` |
 
 When one delivery carries several queued messages, the user-shell sends come first, in the order they were queued, then the other messages in theirs, separated by blank lines. Text before the first header is the user's, or text RimZ records as its own with no header, such as an agent's `--no-from` send.

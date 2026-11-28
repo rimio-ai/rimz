@@ -134,12 +134,12 @@ fn refusal_clears(record: &rimz::diag::lsp::Record, memory: bool) {
 fn only_live_clock_tasks_without_a_scheduler_are_unscheduled() {
     let now = "2026-01-01T00:00:00Z".parse().unwrap();
     for (trigger, enabled, pause_until, room, timer, expected) in [
-        ("every = '1m'", true, None, false, false, true),
-        ("every = '1m'", true, None, true, false, false),
-        ("every = '1m'", true, None, false, true, false),
-        ("every = '1m'", false, None, false, false, false),
+        ("cron = '* * * * *'", true, None, false, false, true),
+        ("cron = '* * * * *'", true, None, true, false, false),
+        ("cron = '* * * * *'", true, None, false, true, false),
+        ("cron = '* * * * *'", false, None, false, false, false),
         (
-            "every = '1m'",
+            "cron = '* * * * *'",
             true,
             Some("2026-01-02T00:00:00Z"),
             false,
@@ -147,7 +147,7 @@ fn only_live_clock_tasks_without_a_scheduler_are_unscheduled() {
             false,
         ),
         (
-            "every = '1m'",
+            "cron = '* * * * *'",
             true,
             Some("2025-12-31T00:00:00Z"),
             false,

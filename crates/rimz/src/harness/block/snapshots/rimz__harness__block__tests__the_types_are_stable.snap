@@ -270,10 +270,11 @@ interface Schedule {
    */
   name: string;
   /** What fires the booking. */
-  trigger: "at" | "in" | "every" | "cron" | "signal" | "when";
+  trigger: "at" | "cron" | "when";
   /**
-   * The trigger's argument: a clock time, delay, interval, cron expression, signal name, or
-   * condition.
+   * The trigger's argument: for `at`, a delay (`30m`, `2h`) or a clock time (`HH:MM`,
+   * `<weekday> HH:MM`, `YYYY-MM-DD HH:MM`); for `cron`, a five-field expression; for `when`,
+   * a condition.
    */
   value: string;
   /** What each fire launches. */
@@ -285,8 +286,6 @@ interface Schedule {
   arguments: Record<string, unknown>;
   /** `when` only: how long the condition must hold before firing. */
   for?: string;
-  /** `signal` only: payload fields that must equal these values (`*` matches any value). */
-  match?: Record<string, string>;
   /** Disable after this many failed fires in a row (default `3`; `0` never). */
   max_strikes?: number;
   /**
@@ -295,7 +294,7 @@ interface Schedule {
    * it for `agent` only).
    */
   overlap?: "skip" | "coalesce" | "queue" | "replace" | "allow";
-  /** `signal` or `when` only: fire on every match rather than once (default once). */
+  /** `when` only: fire each time the condition comes to hold rather than once (default once). */
   repeat?: boolean;
   /** RimZ-owned worktree for every fire, created at the first fire when missing. */
   worktree?: string;

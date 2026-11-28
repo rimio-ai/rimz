@@ -36,10 +36,6 @@ pub enum TeamBindingFailure {
     Scope(#[from] arm::DeliveryScopeFailure),
     #[error(transparent)]
     Arm(#[from] arm::ArmFailure),
-    #[error(
-        "A ci.* or pr.* binding from the root checkout needs an explicit scope. Set match = {{ branch = \"<name>\" }}, match = {{ path = \"<worktree-path>\" }}, or match = {{ branch = \"*\" }} for every checkout RimZ watches, launch with -w <worktree>, or watch it with: rimz shell -- gh run watch --exit-status"
-    )]
-    RootCheckout,
 }
 
 pub fn validate_launch(
@@ -61,7 +57,7 @@ pub fn validate_launch(
             let selector = parse_signal_selector(name, &binding.signal, Some(&binding.matches))
                 .map_err(super::ScheduleErr::from)?;
             if default_signal_match_key(&selector, &binding.matches) == Some("path") {
-                return Err(TeamBindingFailure::RootCheckout);
+                return Err(arm::DeliveryScopeFailure::RootCheckout.into());
             }
             Ok(())
         })();

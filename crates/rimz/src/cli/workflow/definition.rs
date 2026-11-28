@@ -249,7 +249,7 @@ fn header(
         let command = resolve::command("run", &[target], root, None, flags);
         let rimz = resolve::rimz_prefix(root);
         let task = format!(
-            "{rimz} loop add '<task>' --workflow {}{} --every '<duration>'",
+            "{rimz} loop add '<task>' --workflow {}{} --cron '<expression>'",
             crate::cli::usage::shell_command([name]),
             if worktree { " --each-worktree" } else { "" },
         );

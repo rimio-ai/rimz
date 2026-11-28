@@ -365,7 +365,7 @@ fn shared_watch_state_keeps_strike_disabled_reason_out_of_next() {
         &schedule::parse_trigger(
             "struck",
             &TaskEntry {
-                every: Some("1h".into()),
+                cron: Some("0 * * * *".into()),
                 ..TaskEntry::default()
             },
         ),

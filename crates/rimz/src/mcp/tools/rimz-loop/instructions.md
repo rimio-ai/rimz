@@ -1,1 +1,1 @@
-Use `schedule` to launch an agent, a team, or a workflow later, or each time a clock, signal, or condition arrives; managing a task stays with the `rimz loop` commands in the guide `rimz-loop/managing`.
+Use `schedule` to launch an agent, a team, or a workflow later, on a cron schedule, or when a condition comes to hold; managing a task stays with the `rimz loop` commands in the guide `rimz-loop/managing`.

@@ -185,16 +185,15 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     if args.until.is_some() {
         bail!("--until is no longer accepted; fire on a condition with --when");
     }
-    let repeats_by_clock = args.every.is_some() || args.cron.is_some();
     if args.repeat {
-        if repeats_by_clock {
-            bail!("--repeat cannot be used with --every or --cron; they repeat already");
+        if args.cron.is_some() {
+            bail!("--repeat cannot be used with --cron; it repeats already");
         }
-        if args.signal.is_none() && args.when.is_empty() {
-            bail!("--repeat requires --signal or --when");
+        if args.when.is_empty() {
+            bail!("--repeat requires --when");
         }
     }
-    let repeats = repeats_by_clock || args.repeat;
+    let repeats = args.cron.is_some() || args.repeat;
     if let Some(limit) = args.overlap_limit {
         anyhow::ensure!(
             args.overlap.as_deref() == Some("queue"),
@@ -221,19 +220,8 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
         }
     }
     if args.each_worktree {
-        let used = [
-            (args.signal.is_some(), "--signal"),
-            (args.in_after.is_some(), "--in"),
-            (args.at.is_some(), "--at"),
-        ]
-        .into_iter()
-        .filter_map(|(used, flag)| used.then_some(flag))
-        .collect::<Vec<_>>();
-        if !used.is_empty() {
-            bail!(
-                "--each-worktree cannot use {}; fan-out needs --when, --every, or --cron",
-                used.join(", ")
-            );
+        if args.at.is_some() {
+            bail!("--each-worktree cannot use --at; fan-out needs --when or --cron");
         }
         if !repeats {
             bail!(
@@ -253,8 +241,8 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
                 "--project tasks cannot use --each-worktree; per-worktree fan-out is machine state",
             ),
             (
-                !repeats_by_clock && !(args.signal.is_some() && args.repeat),
-                "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
+                args.cron.is_none(),
+                "--project tasks must repeat; set --cron",
             ),
         ]
         .into_iter()
@@ -262,10 +250,6 @@ fn validate_add_args(args: &AddArgs) -> Result<()> {
     });
     if let Some(message) = project_error.flatten() {
         bail!(message);
-    }
-    parse_matches(&args.matches)?;
-    if !args.matches.is_empty() && args.signal.is_none() {
-        bail!("--match requires --signal");
     }
     if let Some(kind) = &args.provider
         && rimz::agents::find_definition(kind).is_none()
@@ -303,7 +287,7 @@ fn resolve_add_workspace(args: &AddArgs) -> Result<rimz::ResolvedWorkspace> {
 
 /// The stored `timeout`: `--timeout`, else `loop.default-timeout`, else the scheduled default.
 /// A command needs a deadline it can reach, so `--timeout 0s` is refused the way `--for` and
-/// `--in` are.
+/// a zero `--at` delay are.
 fn task_timeout(raw: Option<&str>) -> Result<String> {
     let Some(raw) = raw else {
         let configured = MachineConfig::load_lenient().r#loop.default_timeout.clone();
@@ -321,7 +305,6 @@ fn build_task_entry(
     name: &str,
     workspace: &rimz::ResolvedWorkspace,
 ) -> Result<TaskEntry> {
-    let matches = parse_matches(&args.matches)?;
     let timing = resolve_add_timing(args, name)?;
     let (kind, target) = launch_kind(args);
     let shell = kind == rimz::config::LaunchKind::Shell;
@@ -346,12 +329,9 @@ fn build_task_entry(
         overlap_limit: args.overlap_limit,
         root: workspace.project_root.clone(),
         fire_at: timing.fire_at,
-        every: args.every.clone(),
         cron: args.cron.clone(),
-        signal: args.signal.clone(),
         when: (!args.when.is_empty()).then(|| args.when.clone()),
         hold: args.hold.clone(),
-        matches: (!matches.is_empty()).then_some(matches),
         repeat: args.repeat,
         once_per_checkout: args.once_per_checkout.then_some(true),
         deadline: timing.deadline,
@@ -360,8 +340,7 @@ fn build_task_entry(
     if args.once_per_checkout && schedule::TaskShape::compile(name, &entry).is_ephemeral() {
         bail!(
             "--once-per-checkout cannot be used on a one-shot: its first fire removes the task, \
-             so launch memory never acts; make it repeat with --every, --cron, or --repeat beside \
-             --signal or --when"
+             so launch memory never acts; make it repeat with --cron, or --repeat beside --when"
         );
     }
     Ok(entry)
@@ -506,33 +485,13 @@ fn scoped_tasks(args: ScopeArgs, globals: &GlobalFlags) -> Result<Vec<(String, L
         .collect()
 }
 
-fn parse_matches(raw: &[String]) -> Result<BTreeMap<String, String>> {
-    raw.iter()
-        .map(|pair| {
-            let (key, value) = pair
-                .split_once('=')
-                .ok_or_else(|| anyhow::anyhow!("invalid --match `{pair}`; expected KEY=VALUE"))?;
-            if key.is_empty() {
-                bail!("invalid --match `{pair}`; KEY must not be empty");
-            }
-            Ok((key.to_owned(), value.to_owned()))
-        })
-        .collect()
-}
-
 fn resolve_add_timing(args: &AddArgs, name: &str) -> Result<AddTiming> {
     let now = Timestamp::now().to_zoned_datetime(MachineConfig::load_lenient().time_zone());
     let mut timing = AddTiming {
         fire_at: None,
         deadline: None,
     };
-    if let Some(raw) = args.in_after.as_deref() {
-        let duration = schedule::parse_delay(raw).map_err(|err| match err {
-            schedule::DelayRefusal::Zero => anyhow::anyhow!("--in {err}"),
-            schedule::DelayRefusal::Unreadable(_) => anyhow::anyhow!("{err}"),
-        })?;
-        timing.fire_at = Some(schedule::delayed_instant(duration, now.timestamp())?);
-    } else if let Some(at) = args.at.as_deref() {
+    if let Some(at) = args.at.as_deref() {
         timing.fire_at = Some(schedule::resolve_once_at(name, at, &now)?);
     }
     Ok(timing)
@@ -737,7 +696,7 @@ const TEAM_IDLE_NOTE: &str = "note: an agent left idle holds later fires; add `-
 /// only an agent task's note names it. A `--once-per-checkout` task owes none: its launch
 /// memory, not the idle agent, holds the later fires.
 fn idle_note(args: &AddArgs, launch: &LoopLaunch) -> Option<&'static str> {
-    let repeats = args.every.is_some() || args.cron.is_some() || args.repeat;
+    let repeats = args.cron.is_some() || args.repeat;
     if !repeats || launch.print.is_some() || args.overlap.is_some() || args.once_per_checkout {
         return None;
     }

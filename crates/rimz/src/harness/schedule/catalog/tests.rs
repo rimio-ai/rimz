@@ -21,7 +21,7 @@ fn room_reaping_preserves_other_rooms() {
             "actionless",
             &TaskEntry {
                 root: root.clone(),
-                signal: Some("ci.failed".into()),
+                when: Some(vec!["ci=failed".into()]),
                 ..TaskEntry::default()
             },
         )
@@ -124,7 +124,7 @@ fn task(label: &str) -> TaskEntry {
         timeout: Some("1m".to_owned()),
         label: Some(label.to_owned()),
         root: PathBuf::from("/repo"),
-        every: Some("1h".to_owned()),
+        cron: Some("0 * * * *".to_owned()),
         ..TaskEntry::default()
     }
 }
@@ -399,7 +399,7 @@ fn empty_project_layer_keeps_its_project_root() {
 #[test]
 fn malformed_schedule_stays_visible_with_valid_action() {
     let mut entry = task("still runnable manually");
-    entry.cron = Some("0 7 * * *".to_owned());
+    entry.fire_at = Some(jiff::Timestamp::UNIX_EPOCH);
     let catalog = TaskCatalog::from_layers(
         Tasks::default(),
         Tasks(BTreeMap::from([("broken".to_owned(), entry)])),
@@ -421,14 +421,14 @@ fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
     let mut entry = task("wait");
     assert!(!super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
-    entry.every = None;
+    entry.cron = None;
     assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
-    entry.every = Some("15m".to_owned());
+    entry.cron = Some("*/15 * * * *".to_owned());
     entry.deadline = Some(jiff::Timestamp::UNIX_EPOCH);
     assert!(super::super::TaskShape::compile("task", &entry).is_ephemeral());
 
-    entry.every = None;
+    entry.cron = None;
     entry.signal = Some("ci.failed".to_owned());
     entry.wait_meta = Some(crate::config::WaitMeta {
         armed_at: jiff::Timestamp::UNIX_EPOCH,
@@ -450,14 +450,14 @@ fn ephemeral_tasks_are_one_shot_or_deadline_bound() {
 #[test]
 fn when_and_signal_rows_fire_once_unless_repeat_and_clocks_always_repeat() {
     let base = TaskEntry {
-        every: None,
+        cron: None,
         ..task("row")
     };
     let rows = [
         (
             "every",
             TaskEntry {
-                every: Some("1h".into()),
+                cron: Some("0 * * * *".into()),
                 ..base.clone()
             },
             false,

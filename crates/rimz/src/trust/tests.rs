@@ -296,7 +296,7 @@ fn a_project_rows_command_enters_the_trust_hash() {
     ]
     .map(|command| {
         let config: ProjectConfig = toml::from_str(&format!(
-            "[tasks.x]\n{command}\ntimeout = '1m'\nevery = '1h'\n"
+            "[tasks.x]\n{command}\ntimeout = '1m'\ncron = '0 * * * *'\n"
         ))
         .unwrap();
         executable_surface_hash(&config)
@@ -307,7 +307,7 @@ fn a_project_rows_command_enters_the_trust_hash() {
 
 #[test]
 fn a_mistyped_project_row_still_loads_trust_and_hashes_its_raw_command() {
-    let valid = "[tasks.good]\nargs = ['true']\ntimeout = '1m'\nevery = '1h'\n";
+    let valid = "[tasks.good]\nargs = ['true']\ntimeout = '1m'\ncron = '0 * * * *'\n";
     for (bad, changed) in [
         ("command = 'cargo test'", "command = 'cargo check'"),
         ("command = 42", "command = 43"),
@@ -324,7 +324,7 @@ fn a_mistyped_project_row_still_loads_trust_and_hashes_its_raw_command() {
             "command = ['true']\nrepeat = 'no'",
         ),
     ] {
-        let text = |row: &str| format!("{valid}[tasks.bad]\n{row}\nevery = '1h'\n");
+        let text = |row: &str| format!("{valid}[tasks.bad]\n{row}\ncron = '0 * * * *'\n");
         let project = project_with(&text(bad));
         let home = tempdir().unwrap();
         let before = status_with_roots(project.path(), home.path()).unwrap();
@@ -408,7 +408,7 @@ fn smart_compact_role_and_profile_fields_do_not_enter_trust_hash() {
 
 #[test]
 fn loop_overlap_fields_do_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
+    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n";
     let configured = format!("{base}overlap='queue'\noverlap-limit=3\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     let value = serde_json::to_value(&entry.tasks.0["x"]).unwrap();
@@ -422,7 +422,7 @@ fn loop_overlap_fields_do_not_enter_project_trust_hash() {
 
 #[test]
 fn loop_once_per_checkout_does_not_enter_project_trust_hash() {
-    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
+    let base = "[tasks.x]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n";
     let configured = format!("{base}once-per-checkout=true\n");
     let entry: crate::config::LoopConfig = toml::from_str(&configured).unwrap();
     assert!(entry.tasks.0["x"].dedupes_checkout());

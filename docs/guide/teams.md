@@ -219,7 +219,7 @@ When the coder registers, RimZ arms a standing subscription pinned to that sessi
 
 The subscription lives with the session, not with the definition. Resume, restart, and re-adding a role arm it again; stopping or losing the session removes it, and a signal that fires in between is never replayed. `rimz teams show forge#feat-rate-limits` separates what the definition declares from what is armed right now and whether it has fired, and `rimz loop remove <name>` takes one down by the task name shown there.
 
-A `ci.*` or `pr.*` binding needs a scope, so launch that team with `-w NAME` or from a linked worktree. RimZ requires an explicit branch or path match on a fresh root-checkout launch, before it creates anything. To give one role the whole project, use `match: {branch: "*"}` for every checkout RimZ watches and every branch a task holds; `match: {team: "*"}` receives team signals across cohorts. [Configuration](./configuration.md#teams) owns the binding fields, and [Loops](./loops.md#fire-on-a-signal) covers the signal families and everything else a subscription can do.
+A `ci.*` or `pr.*` binding needs a scope, so launch that team with `-w NAME` or from a linked worktree. RimZ requires an explicit branch or path match on a fresh root-checkout launch, before it creates anything. To give one role the whole project, use `match: {branch: "*"}` for every checkout RimZ watches and every branch a task holds; `match: {team: "*"}` receives team signals across cohorts. [Configuration](./configuration.md#teams) owns the binding fields, and [Loops](./loops.md#signals) covers the signal families.
 
 ## Come back to a team, or take it down
 

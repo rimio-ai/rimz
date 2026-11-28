@@ -242,13 +242,13 @@ fn every_duration_field_is_parsed() {
         ),
         (
             BlockName::Schedule,
-            json!({ "name": "n", "trigger": "in", "value": "soon", "tool": "agent",
+            json!({ "name": "n", "trigger": "at", "value": "soon", "tool": "agent",
                     "arguments": { "profile": "p", "prompt": "x" } }),
             "`value`",
         ),
         (
             BlockName::Schedule,
-            json!({ "name": "n", "trigger": "every", "value": "0m", "tool": "agent",
+            json!({ "name": "n", "trigger": "at", "value": "0m", "tool": "agent",
                     "arguments": { "profile": "p", "prompt": "x" } }),
             "`value`",
         ),
@@ -497,22 +497,17 @@ fn the_tool_refusals_hold_for_both_callers() {
         ),
         (
             BlockName::Schedule,
-            booking(json!({ "match": { "k": "v" } })),
-            "`match` takes a `signal` trigger",
-        ),
-        (
-            BlockName::Schedule,
             booking(json!({ "for": "5m" })),
             "`for` takes a `when` trigger",
         ),
         (
             BlockName::Schedule,
             booking(json!({ "repeat": true })),
-            "`repeat` takes a `signal` or `when` trigger",
+            "`repeat` takes a `when` trigger",
         ),
         (
             BlockName::Schedule,
-            json!({ "name": "n", "trigger": "in", "value": "5m", "tool": "agent",
+            json!({ "name": "n", "trigger": "at", "value": "5m", "tool": "agent",
                                       "arguments": { "profile": "p", "prompt": "x" }, "overlap": "skip" }),
             "`overlap` takes a repeating trigger",
         ),
@@ -533,7 +528,7 @@ fn the_tool_refusals_hold_for_both_callers() {
         ),
         (
             BlockName::Schedule,
-            json!({ "name": "n", "trigger": "signal", "value": " ", "tool": "agent",
+            json!({ "name": "n", "trigger": "cron", "value": " ", "tool": "agent",
                                       "arguments": { "profile": "p", "prompt": "x" } }),
             "`value` is blank",
         ),
@@ -632,8 +627,7 @@ fn a_booking_takes_what_the_loop_scheduler_takes() {
         object
     };
     let past_a_year = [
-        booking("in", "400d", json!({})),
-        booking("every", "400d", json!({})),
+        booking("at", "400d", json!({})),
         booking("when", "ci=passed", json!({ "for": "400d" })),
     ];
     let got: Vec<_> = past_a_year
@@ -645,7 +639,7 @@ fn a_booking_takes_what_the_loop_scheduler_takes() {
             )
         })
         .collect();
-    assert_eq!(got, vec![(None, None); 3]);
+    assert_eq!(got, vec![(None, None); 2]);
 
     // The `schedule` tool books the `workflow` tool's own arguments, which its catalog parses.
     let tool_workflow = json!({ "name": "n", "trigger": "cron", "value": "0 9 * * *",

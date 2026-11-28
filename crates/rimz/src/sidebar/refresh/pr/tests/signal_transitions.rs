@@ -1481,11 +1481,13 @@ fn signal_and_condition_demand_read_a_branch_alike_through_the_poll() {
         root: root.path().to_owned(),
         signal: signal.map(str::to_owned),
         matches: signal.map(|_| BTreeMap::from([("branch".to_owned(), BRANCH.to_owned())])),
+        // A row on a signal is a team binding's, the one writer of such a row.
+        team: signal.map(|_| "binding#main".parse().unwrap()),
         when: when.map(|when| vec![when.to_owned()]),
         dir: when.map(|_| root.path().to_owned()),
         repeat: signal.is_some(),
-        args: vec!["true".to_owned()],
-        timeout: Some("1m".to_owned()),
+        args: when.map(|_| vec!["true".to_owned()]).unwrap_or_default(),
+        timeout: when.map(|_| "1m".to_owned()),
         ..TaskEntry::default()
     };
     let signal = ("signal".to_owned(), task(Some("ci.passed"), None));

@@ -19,8 +19,8 @@ use anyhow::Context;
 use crate::config::{LaunchKind, OverlapPolicy, TaskEntry, TaskTarget};
 use crate::harness::prose::{span, verbatim};
 use crate::harness::when;
-use crate::utils::time::{CalendarAt, DurationUnit, parse_duration_units};
-use jiff::{SignedDuration, Timestamp, ZonedDateTime};
+use crate::utils::time::{CalendarAt, DurationUnit, OnceAt, parse_duration_units};
+use jiff::{Timestamp, ZonedDateTime};
 
 pub mod arm;
 pub mod arming;
@@ -232,7 +232,7 @@ pub enum TaskActionErr {
         hint: String,
     },
     #[error(
-        "loop task `{name}` sets `each-worktree` on a trigger that fires once, which would remove the task after its first checkout; set `repeat = true` beside `when`, or fire on `every` or `cron`"
+        "loop task `{name}` sets `each-worktree` on a trigger that fires once, which would remove the task after its first checkout; set `repeat = true` beside `when`, or fire on `cron`"
     )]
     OneShotFanOut { name: String },
 }
@@ -463,14 +463,12 @@ pub enum ScheduleErr {
     /// The stored row does not decode, so it has no trigger to read: the refusal is the error.
     #[error(transparent)]
     Refused(TaskActionErr),
-    #[error("schedule `{name}` needs a firing time: set `every = \"30m\"` or `cron = \"...\"`")]
+    #[error("schedule `{name}` needs a firing time: set `cron = \"...\"`")]
     NoTime { name: String },
-    #[error(
-        "schedule `{name}` sets conflicting schedule fields; use one of `cron`, `every`, or `fire-at`"
-    )]
+    #[error("schedule `{name}` sets conflicting schedule fields; use one of `cron` or `fire-at`")]
     TimeConflict { name: String },
     #[error(
-        "schedule `{name}` sets conflicting trigger fields; use one of `when`, `signal`, `watch`, `cron`, `every`, or `fire-at`"
+        "schedule `{name}` sets conflicting trigger fields; use one of `when`, `signal`, `watch`, `cron`, or `fire-at`"
     )]
     TriggerConflict { name: String },
     #[error("schedule `{name}` sets `match` without `signal`")]
@@ -478,7 +476,7 @@ pub enum ScheduleErr {
     #[error(transparent)]
     Selector(#[from] crate::harness::signal::SelectorErr),
     #[error(
-        "schedule `{name}` sets `repeat` without `signal` or `when`; `every` and `cron` repeat already, and other triggers fire once"
+        "schedule `{name}` sets `repeat` without `signal` or `when`; `cron` repeats already, and other triggers fire once"
     )]
     RepeatWithoutSignal { name: String },
     #[error("schedule `{name}` sets `for` without `when`")]
@@ -499,7 +497,7 @@ pub enum ScheduleErr {
     #[error("schedule `{name}` has an empty watched command")]
     BadWatch { name: String },
     #[error(
-        "schedule `{name}` has an invalid one-shot time `{value}`; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
+        "schedule `{name}` has an invalid one-shot time `{value}`; use a delay above zero (`30m`, `2h`) or a clock time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`)"
     )]
     BadOnceAt { name: String, value: String },
     #[error("schedule `{name}` has a one-shot time `{value}` in the past")]
@@ -527,8 +525,6 @@ pub enum ScheduleErr {
         "schedule `{name}` has a cron expression `{value}` that never fires: no selected month has the selected day of month"
     )]
     CronNeverFires { name: String, value: String },
-    #[error("schedule `{name}` has an invalid `every` value `{value}`; use a duration like `30m`")]
-    BadEvery { name: String, value: String },
     #[error(transparent)]
     BadName(#[from] crate::harness::name::NameErr),
 }
@@ -586,30 +582,17 @@ fn lifecycle_kind(entry: &TaskEntry) -> TaskKind {
     TaskKind::Routine
 }
 
-/// Whether the row's trigger fires again after a fire: `every` and `cron` by nature, a
-/// `signal` or `when` row only with `repeat` or a team binding's `team`, since team arming
-/// writes standing bindings alone.
+/// Whether the row's trigger fires again after a fire: `cron` by nature, a `signal` or `when`
+/// row only with `repeat` or a team binding's `team`, since team arming writes standing
+/// bindings alone.
 pub(crate) fn repeats(entry: &TaskEntry) -> bool {
-    entry.every.is_some()
-        || entry.cron.is_some()
+    entry.cron.is_some()
         || ((entry.repeat || entry.team.is_some())
             && (entry.signal.is_some() || entry.when.is_some()))
 }
 
 fn ephemeral_lifetime(entry: &TaskEntry) -> bool {
     !repeats(entry) || entry.deadline.is_some() || entry.watch.is_some() || entry.fire_at.is_some()
-}
-
-/// A normalized interval schedule.
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct IntervalSpec {
-    pub minutes: u32,
-}
-
-impl IntervalSpec {
-    fn new(minutes: u32) -> Self {
-        Self { minutes }
-    }
 }
 
 /// `at` to the minute in the machine's time zone, as listings and wakes print an instant.
@@ -619,11 +602,9 @@ fn local_minute(at: Timestamp) -> String {
         .to_string()
 }
 
-/// A parsed schedule: interval, a raw cron escape hatch, or the absolute instant of a `fire-at`
-/// row.
+/// A parsed schedule: a cron expression, or the absolute instant of a `fire-at` row.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Schedule {
-    Interval(IntervalSpec),
     Cron(CronSpec),
     Instant(Timestamp),
 }
@@ -633,7 +614,6 @@ impl Schedule {
     fn describe(&self) -> String {
         match self {
             Schedule::Cron(cron) => format!("cron `{}`", cron.source),
-            Schedule::Interval(spec) => format!("every {}", format_minutes(spec.minutes)),
             Schedule::Instant(at) => format!("once at {}", local_minute(*at)),
         }
     }
@@ -642,9 +622,6 @@ impl Schedule {
     /// armed or fired. First-sight arming is owned by the elder firing module.
     fn due(&self, last_fire: Timestamp, now: &ZonedDateTime) -> bool {
         match self {
-            Schedule::Interval(spec) => {
-                now.timestamp().duration_since(last_fire).as_secs() >= i64::from(spec.minutes) * 60
-            }
             Schedule::Cron(cron) => cron.due(last_fire, now),
             Schedule::Instant(at) => last_fire < *at && *at <= now.timestamp(),
         }
@@ -655,9 +632,6 @@ impl Schedule {
     /// which means the elder should fire on its next tick.
     fn next_after(&self, last_fire: Timestamp, now: &ZonedDateTime) -> Option<Timestamp> {
         match self {
-            Schedule::Interval(spec) => last_fire
-                .checked_add(SignedDuration::from_secs(i64::from(spec.minutes) * 60))
-                .ok(),
             Schedule::Cron(cron) => cron.next_after(last_fire, now),
             Schedule::Instant(at) => (last_fire < *at).then_some(*at),
         }
@@ -1126,39 +1100,13 @@ impl TaskTiming {
     }
 }
 
-/// Why an `in` value cannot be a delay.
-#[derive(Debug, PartialEq, Eq)]
-pub enum DelayRefusal {
-    Unreadable(String),
-    Zero,
-}
-
-impl std::fmt::Display for DelayRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unreadable(reason) => f.write_str(reason),
-            Self::Zero => f.write_str("must be greater than zero"),
-        }
-    }
-}
-
-/// The delay an `in` value names, which a loop task and a wait read alike.
-pub fn parse_delay(raw: &str) -> Result<Duration, DelayRefusal> {
-    let delay = crate::utils::time::parse_compact_duration(raw)
-        .map_err(|err| DelayRefusal::Unreadable(err.to_string()))?;
-    if delay.is_zero() {
-        return Err(DelayRefusal::Zero);
-    }
-    Ok(delay)
-}
-
-/// The instant a one-shot `--in` fires: `delay` after `now`, rounded up to the next whole
+/// The instant a one-shot delay fires: `delay` after `now`, rounded up to the next whole
 /// minute, so its `once at` label names the minute the scheduler fires it.
-pub fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timestamp> {
+fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timestamp> {
     const MINUTE: i128 = 60_000_000_000;
     let target = now
         .checked_add(delay)
-        .context("resolving --in against the clock")?
+        .context("resolving the delay against the clock")?
         .as_nanosecond();
     let rounded = target.div_euclid(MINUTE) * MINUTE
         + if target.rem_euclid(MINUTE) == 0 {
@@ -1166,12 +1114,13 @@ pub fn delayed_instant(delay: Duration, now: Timestamp) -> anyhow::Result<Timest
         } else {
             MINUTE
         };
-    Timestamp::from_nanosecond(rounded).context("rounding --in to the next scheduler minute")
+    Timestamp::from_nanosecond(rounded).context("rounding the delay to the next scheduler minute")
 }
 
-/// Resolve a one-shot `--at` (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`) to the first
-/// matching instant strictly after `now`, in `now`'s zone. A dated time at or before `now` is
-/// refused as in the past.
+/// Resolve a one-shot `at` to its instant in `now`'s zone: a delay (`30m`) to that long after
+/// `now`, rounded up to the minute, and a clock time (`HH:MM`, `YYYY-MM-DD HH:MM`, or
+/// `<weekday> HH:MM`) to its first instant strictly after `now`. A dated time at or before
+/// `now` is refused as in the past.
 pub fn resolve_once_at(
     name: &str,
     raw: &str,
@@ -1181,7 +1130,10 @@ pub fn resolve_once_at(
         name: name.to_owned(),
         value: raw.to_owned(),
     };
-    let at = CalendarAt::parse(raw).ok_or_else(bad)?;
+    let at = match OnceAt::parse(raw).ok_or_else(bad)? {
+        OnceAt::Delay(delay) => return delayed_instant(delay, now.timestamp()).map_err(|_| bad()),
+        OnceAt::Clock(at) => at,
+    };
     let candidate = at.resolve(now).ok_or_else(bad)?;
     if matches!(at, CalendarAt::Dated(..)) && candidate <= now.timestamp() {
         return Err(ScheduleErr::PastOnceAt {
@@ -1202,9 +1154,6 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
             });
         }
         TimingFields::Cron(cron) => Schedule::Cron(CronSpec::parse(name, cron)?),
-        TimingFields::Every(every) => {
-            Schedule::Interval(IntervalSpec::new(parse_every(name, every)?))
-        }
         TimingFields::Instant(at) => Schedule::Instant(at),
         TimingFields::Missing => {
             return Err(ScheduleErr::NoTime {
@@ -1214,7 +1163,7 @@ fn parse_schedule(name: &str, entry: &TaskEntry) -> Result<ParsedSchedule, Sched
     };
     Ok(ParsedSchedule {
         schedule,
-        once: entry.every.is_none() && entry.cron.is_none(),
+        once: entry.cron.is_none(),
     })
 }
 
@@ -1226,7 +1175,7 @@ pub fn parse_trigger(name: &str, entry: &TaskEntry) -> Result<ParsedTrigger, Sch
             detail: refused.detail.clone(),
         }));
     }
-    let has_schedule = entry.every.is_some() || entry.cron.is_some() || entry.fire_at.is_some();
+    let has_schedule = entry.cron.is_some() || entry.fire_at.is_some();
     let has_signal = entry.signal.is_some();
     let has_watch = entry.watch.is_some();
     let has_when = entry.when.is_some();
@@ -1322,56 +1271,19 @@ fn validate_watch(name: &str, spec: &crate::config::WatchSpec) -> Result<(), Sch
 enum TimingFields<'a> {
     Conflict,
     Cron(&'a str),
-    Every(&'a str),
     Instant(Timestamp),
     Missing,
 }
 
 impl<'a> TimingFields<'a> {
     fn classify(entry: &'a TaskEntry) -> Self {
-        if let Some(at) = entry.fire_at {
-            return if entry.cron.is_some() || entry.every.is_some() {
-                Self::Conflict
-            } else {
-                Self::Instant(at)
-            };
-        }
-        match (entry.cron.as_deref(), entry.every.as_deref()) {
-            (Some(cron), None) => Self::Cron(cron),
+        match (entry.fire_at, entry.cron.as_deref()) {
             (Some(_), Some(_)) => Self::Conflict,
-            (None, Some(every)) => Self::Every(every),
+            (Some(at), None) => Self::Instant(at),
+            (None, Some(cron)) => Self::Cron(cron),
             (None, None) => Self::Missing,
         }
     }
-}
-
-fn parse_every(name: &str, raw: &str) -> Result<u32, ScheduleErr> {
-    parse_interval_minutes(raw).map_err(|()| ScheduleErr::BadEvery {
-        name: name.to_owned(),
-        value: raw.to_owned(),
-    })
-}
-
-fn parse_interval_minutes(raw: &str) -> Result<u32, ()> {
-    let value = raw.trim();
-    if value.len() < 2 {
-        return Err(());
-    }
-    let unit = value.chars().last().ok_or(())?;
-    let digits = &value[..value.len() - unit.len_utf8()];
-    let amount: u64 = digits.parse().map_err(|_| ())?;
-    if amount == 0 {
-        return Err(());
-    }
-    let seconds = match unit {
-        's' => amount,
-        'm' => amount.checked_mul(60).ok_or(())?,
-        'h' => amount.checked_mul(60 * 60).ok_or(())?,
-        'd' => amount.checked_mul(24 * 60 * 60).ok_or(())?,
-        _ => return Err(()),
-    };
-    let minutes = seconds.div_ceil(60);
-    u32::try_from(minutes).map_err(|_| ())
 }
 
 /// A cron expression parsed once: each field's selected values as a bit set, beside the source
@@ -1652,16 +1564,6 @@ fn cron_month_has_day(months: u64, days: u64) -> bool {
             let length = CRON_MONTH_DAYS[usize::from(month - 1)];
             days & ((1u64 << (length + 1)) - 2) != 0
         })
-}
-
-fn format_minutes(minutes: u32) -> String {
-    if minutes >= 1440 && minutes.is_multiple_of(1440) {
-        format!("{}d", minutes / 1440)
-    } else if minutes >= 60 && minutes.is_multiple_of(60) {
-        format!("{}h", minutes / 60)
-    } else {
-        format!("{minutes}m")
-    }
 }
 
 fn minute_bucket(timestamp: Timestamp) -> i64 {

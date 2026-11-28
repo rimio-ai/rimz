@@ -35,11 +35,11 @@ fn clock(name: &str, seconds: i64) -> TaskRow {
     timed(
         name,
         TaskEntry {
-            every: Some("1h".into()),
+            fire_at: Some(now() + SignedDuration::from_secs(seconds)),
             ..TaskEntry::default()
         },
         None,
-        Some(now() + SignedDuration::from_secs(seconds - 3600)),
+        None,
     )
 }
 
@@ -588,7 +588,7 @@ fn held_states_sort_last_and_do_not_supply_next() {
         ..off
     };
     let entry = TaskEntry {
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         ..TaskEntry::default()
     };
     let mut tasks = vec![
@@ -618,7 +618,7 @@ fn running_clock_retains_scheduled_next_through_pause() {
     let mut row = timed(
         "running-clock",
         TaskEntry {
-            every: Some("1h".into()),
+            cron: Some("0 * * * *".into()),
             ..TaskEntry::default()
         },
         Some(Arming {
@@ -634,7 +634,7 @@ fn running_clock_retains_scheduled_next_through_pause() {
     let output = frame(&room(vec![row]), 100, 24, true);
     assert_eq!(
         output.lines().next(),
-        Some("loop · ▸ 1 running · next: running-clock in 5m")
+        Some("loop · ▸ 1 running · next: running-clock in 13m")
     );
 }
 

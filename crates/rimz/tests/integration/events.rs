@@ -129,13 +129,13 @@ fn events_emit_rejects_reserved_names_and_non_object_payloads() {
 }
 
 #[test]
-fn events_emit_distinguishes_started_disabled_and_sibling_subscriptions() {
+fn events_emit_distinguishes_started_and_sibling_subscriptions() {
     let env = Env::new();
     env.record(&env.project_root);
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.subscriber]\nargs = [\"true\"]\ntimeout = \"1m\"\nrepeat = true\nroot = {:?}\nsignal = \"deploy.done\"\n",
+            "[tasks.subscriber]\nteam = \"forge#main\"\nwait = {{ kind = \"claude\", session = \"s\", handle = \"@coder\" }}\nprompt = \"go\"\nroot = {:?}\nsignal = \"deploy.done\"\n",
             env.project_root
         ),
     )
@@ -155,17 +155,6 @@ fn events_emit_distinguishes_started_disabled_and_sibling_subscriptions() {
         started.contains("· fired 1 task\n  subscriber\n"),
         "{started}"
     );
-    let output = env
-        .rimz()
-        .args(["loop", "disable", "subscriber"])
-        .output()
-        .unwrap();
-    assert!(output.status.success());
-    let disabled = emit("deploy.done");
-    assert!(
-        disabled.contains("· fired no task\n  subscriber: did not start\n"),
-        "{disabled}"
-    );
 }
 
 #[test]
@@ -174,7 +163,7 @@ fn events_emit_names_tasks_whose_match_excluded_the_signal() {
     env.record(&env.project_root);
     let task = |name: &str, extra: &str| {
         format!(
-            "[tasks.{name}]\nargs = [\"true\"]\ntimeout = \"1m\"\nrepeat = true\nroot = {:?}\nsignal = \"deploy.done\"\n{extra}",
+            "[tasks.{name}]\nteam = \"forge#main\"\nwait = {{ kind = \"claude\", session = \"s\", handle = \"@coder\" }}\nprompt = \"go\"\nroot = {:?}\nsignal = \"deploy.done\"\n{extra}",
             env.project_root
         )
     };

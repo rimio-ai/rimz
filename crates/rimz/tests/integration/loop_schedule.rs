@@ -42,7 +42,7 @@ fn loop_views_keep_finished_headers_without_a_current_record() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\nargs=['true']\ntimeout='1m'\nevery='1h'\nonce-per-checkout=true\nroot={:?}\n",
+            "[tasks.old]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\nonce-per-checkout=true\nroot={:?}\n",
             env.project_root
         ),
     );
@@ -225,7 +225,7 @@ fn tick_fires_instance_despite_same_named_foreign_machine() {
     std::fs::create_dir(&other).unwrap();
     write_loop_config(
         &env,
-        &format!("[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\nevery='1m'\n"),
+        &format!("[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\ncron='* * * * *'\n"),
     );
     write_loop_instances(
         &env,
@@ -260,7 +260,7 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
     std::fs::create_dir(&other).unwrap();
     env.record(&other);
     let text = format!(
-        "# keep this comment\n[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\nevery='1h'\n"
+        "# keep this comment\n[tasks.same]\nroot={other:?}\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n"
     );
     write_loop_config(&env, &text);
 
@@ -311,6 +311,7 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
                         args: vec!["true".to_owned()],
                         timeout: Some("1m".to_owned()),
                         signal: Some("ci.failed".into()),
+                        team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
                         ..TaskEntry::default()
                     },
                 )])),
@@ -323,7 +324,7 @@ fn adding_machine_refuses_foreign_root_without_mutation() {
             .collect();
         let (stdout, error) = loop_fail(
             &env,
-            &["loop", "add", "same", "--every", "1h", "--", "true"],
+            &["loop", "add", "same", "--cron", "0 * * * *", "--", "true"],
         );
         assert!(!stdout.contains("added loop task"), "{stdout}");
         assert!(
@@ -344,19 +345,27 @@ fn adding_machine_replaces_same_root() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.same]\nroot={:?}\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+            "[tasks.same]\nroot={:?}\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
             env.project_root
         ),
     );
     loop_ok(
         &env,
-        &["loop", "add", "same", "--every", "2h", "--", "false"],
+        &[
+            "loop",
+            "add",
+            "same",
+            "--cron",
+            "0 */2 * * *",
+            "--",
+            "false",
+        ],
     );
     let config: LoopConfig =
         toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
     let entry = &config.tasks.0["same"];
     assert_eq!(entry.args, ["false"]);
-    assert_eq!(entry.every.as_deref(), Some("2h"));
+    assert_eq!(entry.cron.as_deref(), Some("0 */2 * * *"));
     assert_eq!(entry.resolved_root(), env.project_root);
 }
 
@@ -370,17 +379,25 @@ fn adding_machine_refuses_rootless_row() {
             root: env.project_root.clone(),
             args: vec!["true".to_owned()],
             timeout: Some("1m".to_owned()),
-            signal: Some("ci.failed".into()),
+            when: Some(vec!["ci=failed".into()]),
             ..TaskEntry::default()
         },
     )]));
     write_loop_instances(&env, instances.clone());
     let text =
-        "# no project owns this row\n[tasks.same]\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
+        "# no project owns this row\n[tasks.same]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n";
     write_loop_config(&env, text);
     let (stdout, error) = loop_fail(
         &env,
-        &["loop", "add", "same", "--every", "2h", "--", "false"],
+        &[
+            "loop",
+            "add",
+            "same",
+            "--cron",
+            "0 */2 * * *",
+            "--",
+            "false",
+        ],
     );
     assert!(!stdout.contains("added loop task"), "{stdout}");
     assert!(
@@ -419,10 +436,10 @@ fn loop_list_skips_machine_tasks_without_absolute_roots() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.skip-bare]\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.skip-relative]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.skip-dot]\nroot='.'\nargs=['true']\ntimeout='1m'\nevery='1h'\n\
-         [tasks.rooted]\nroot={:?}\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+            "[tasks.skip-bare]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.skip-relative]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.skip-dot]\nroot='.'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n\
+         [tasks.rooted]\nroot={:?}\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
             env.project_root,
         ),
     );
@@ -472,7 +489,7 @@ fn loop_show_reports_machine_task_root_problem() {
     let env = Env::new();
     write_loop_config(
         &env,
-        "[tasks.one]\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+        "[tasks.one]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
     );
     let output = env.rimz().args(["loop", "show", "one"]).output().unwrap();
     assert_eq!(output.status.code(), Some(1), "{output:?}");
@@ -493,7 +510,7 @@ fn loop_tick_skips_machine_tasks_without_absolute_roots() {
     let env = Env::new();
     write_loop_config(
         &env,
-        "[tasks.one]\nargs=['true']\ntimeout='1m'\nevery='1h'\n[tasks.two]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n",
+        "[tasks.one]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n[tasks.two]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n",
     );
     let output = env.rimz().args(["loop", "tick"]).output().unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -502,11 +519,19 @@ fn loop_tick_skips_machine_tasks_without_absolute_roots() {
 #[test]
 fn adding_machine_refuses_relative_row() {
     let env = Env::new();
-    let text = "[tasks.same]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\nevery='1h'\n";
+    let text = "[tasks.same]\nroot='nowhere/x'\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n";
     write_loop_config(&env, text);
     let (stdout, error) = loop_fail(
         &env,
-        &["loop", "add", "same", "--every", "2h", "--", "false"],
+        &[
+            "loop",
+            "add",
+            "same",
+            "--cron",
+            "0 */2 * * *",
+            "--",
+            "false",
+        ],
     );
     assert!(!stdout.contains("added loop task"), "{stdout}");
     let reason = format!(
@@ -528,7 +553,7 @@ fn removing_rootless_machine_row_succeeds() {
         write_loop_config(
             &env,
             &format!(
-                "[tasks.same]\nargs=['true']\ntimeout='1m'\nevery='1h'\n{}",
+                "[tasks.same]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n{}",
                 if remembers {
                     "once-per-checkout=true\n"
                 } else {
@@ -551,7 +576,7 @@ fn renaming_rootless_machine_row_succeeds() {
         write_loop_config(
             &env,
             &format!(
-                "[tasks.same]\nargs=['true']\ntimeout='1m'\nevery='1h'\n{}",
+                "[tasks.same]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n{}",
                 if remembers {
                     "once-per-checkout=true\n"
                 } else {
@@ -583,13 +608,12 @@ fn adding_instance_removes_only_same_root_machine() {
     for root in [&other, &env.project_root] {
         write_loop_config(
             &env,
-            &format!("[tasks.same]\nroot={root:?}\nargs=['true']\ntimeout='1m'\nevery='1h'\n"),
+            &format!(
+                "[tasks.same]\nroot={root:?}\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\n"
+            ),
         );
 
-        loop_ok(
-            &env,
-            &["loop", "add", "same", "--signal", "ci.failed", "--", "true"],
-        );
+        loop_ok(&env, &["loop", "add", "same", "--at", "5m", "--", "true"]);
 
         let config: LoopConfig =
             toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).unwrap()).unwrap();
@@ -1383,157 +1407,6 @@ fn window_condition_waits_for_room_in_the_provider_window() {
 }
 
 #[test]
-fn trunk_signal_fires_only_through_git_source() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "trunk",
-            "--signal",
-            "trunk.moved",
-            "--repeat",
-            "--",
-            "true",
-        ],
-    );
-    let refused = env
-        .rimz()
-        .args(["events", "emit", "trunk.moved"])
-        .output()
-        .unwrap();
-    assert!(!refused.status.success());
-    assert!(String::from_utf8_lossy(&refused.stderr).contains("reserved"));
-    crate::common::room::seed_sidebar_heartbeat(
-        &env.runtime_paths(),
-        MuxName::Zellij,
-        &env.resolve_workspace(&env.project_root).session_name,
-        "trunk",
-    );
-    loop_ok(&env, &["events", "emit", "trunk.moved", "--source", "git"]);
-    assert_eq!(
-        wait_for_loop_report(&env, "trunk").result,
-        LoopRunResult::Completed
-    );
-}
-
-#[test]
-fn worktree_created_fires_a_loop_subscriber() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    for args in [
-        vec!["init", "-b", "main"],
-        vec![
-            "-c",
-            "user.name=Test",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "--allow-empty",
-            "-m",
-            "initial",
-        ],
-    ] {
-        assert!(
-            Command::new("git")
-                .arg("-C")
-                .arg(&env.project_root)
-                .args(args)
-                .status()
-                .unwrap()
-                .success()
-        );
-    }
-    loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "created",
-            "--signal",
-            "worktree.created",
-            "--repeat",
-            "--",
-            "true",
-        ],
-    );
-    crate::common::room::seed_sidebar_heartbeat(
-        &env.runtime_paths(),
-        MuxName::Zellij,
-        &env.resolve_workspace(&env.project_root).session_name,
-        "created",
-    );
-    loop_ok(&env, &["worktree", "new", "signal-test"]);
-    assert_eq!(
-        wait_for_loop_report(&env, "created").result,
-        LoopRunResult::Completed
-    );
-}
-
-#[test]
-fn forge_behind_signal_fires_matching_task_and_skips_merged_sibling() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    for (name, signal) in [("behind", "pr.behind"), ("merged", "pr.merged")] {
-        loop_ok(
-            &env,
-            &[
-                "loop",
-                "add",
-                name,
-                "--signal",
-                signal,
-                "--match",
-                "branch=feature",
-                "--repeat",
-                "--",
-                "true",
-            ],
-        );
-    }
-    crate::common::room::seed_sidebar_heartbeat(
-        &env.runtime_paths(),
-        MuxName::Zellij,
-        &env.resolve_workspace(&env.project_root).session_name,
-        "behind",
-    );
-    for branch in ["feature", "other"] {
-        loop_ok(
-            &env,
-            &[
-                "events",
-                "emit",
-                "pr.behind",
-                "--source",
-                "forge",
-                "--json",
-                &json!({"branch": branch}).to_string(),
-            ],
-        );
-    }
-    // The behind fire's passing check is a quiet fire; the merged sibling's skip is the one row.
-    assert_eq!(
-        wait_for_loop_report(&env, "behind").result,
-        LoopRunResult::Completed
-    );
-    wait_for_loop_run_records(&env, "merged SignalSkipped", |records| {
-        records
-            .iter()
-            .any(|record| record.task == "merged" && record.result == LoopRunResult::SignalSkipped)
-    });
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1, "{records:?}");
-    assert!(
-        records
-            .iter()
-            .any(|record| record.task == "merged" && record.result == LoopRunResult::SignalSkipped),
-        "{records:?}"
-    );
-}
-
-#[test]
 fn wildcard_team_binding_arms_at_root_and_delivers_across_worktrees() {
     let env = Env::new();
     env.record(&env.project_root);
@@ -1804,7 +1677,7 @@ fn team_signal_registration_preserves_same_named_machine_configuration() {
         return;
     };
     let config = format!(
-        "[tasks.team-forge-feature-team-coder-ci-failed]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\nroot = {:?}\n",
+        "[tasks.team-forge-feature-team-coder-ci-failed]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\nroot = {:?}\n",
         env.project_root.display().to_string()
     );
     write_loop_config(&env, &config);
@@ -1978,6 +1851,7 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
                 "@claude#main",
                 TaskEntry {
                     signal: Some(signal.to_owned()),
+                    team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
                     matches: matching("instance", instance),
                     ..TaskEntry::default()
                 },
@@ -1996,8 +1870,8 @@ fn team_idle_and_root_end_hooks_deliver_only_to_the_matching_instance() {
         assert_eq!(evidence.payload["instance"], "forge#feature-team");
         assert_pending_message(&env, "sess-team-observer", signal);
         let instances = read_loop_instances(&env);
-        assert!(!instances.0.contains_key("matching"));
-        assert!(instances.0.contains_key("sibling"));
+        // A team binding stands past its delivery.
+        assert!(instances.0.contains_key("matching") && instances.0.contains_key("sibling"));
     }
 }
 
@@ -2050,6 +1924,7 @@ fn team_signal_payload_handles_round_trip_beside_teamless_role_rivals() {
         "@claude#main",
         TaskEntry {
             signal: Some("team.idle".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("instance", "forge#feature-team"),
             ..TaskEntry::default()
         },
@@ -2258,7 +2133,7 @@ fn loop_one_shots_store_an_absolute_instant() {
     env.record(&env.project_root);
     let before = jiff::Timestamp::now();
     for (name, trigger) in [
-        ("later", ["--in", "3d"]),
+        ("later", ["--at", "3d"]),
         ("weekly", ["--at", "fri 09:30"]),
         ("dated", ["--at", "2099-01-02 03:04"]),
     ] {
@@ -2267,10 +2142,7 @@ fn loop_one_shots_store_an_absolute_instant() {
             &["loop", "add", name, trigger[0], trigger[1], "--", "true"],
         );
         let entry = &read_loop_instances(&env).0[name];
-        assert!(
-            entry.every.is_none() && entry.cron.is_none(),
-            "{name}: {entry:?}"
-        );
+        assert!(entry.cron.is_none(), "{name}: {entry:?}");
         let fire_at = entry.fire_at.expect("a one-shot stores fire-at");
         assert!(fire_at > before, "{name}: {fire_at}");
         assert!(out.contains("trigger: fires once at 20"), "{name}: {out}");
@@ -2300,8 +2172,8 @@ fn loop_one_shots_store_an_absolute_instant() {
             "loop",
             "add",
             "weekly",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--at",
             "fri 09:30",
             "--",
@@ -2312,13 +2184,13 @@ fn loop_one_shots_store_an_absolute_instant() {
     let error = String::from_utf8_lossy(&conflict.stderr);
     assert_eq!(conflict.status.code(), Some(2), "{error}");
     assert!(
-        error.contains("the argument '--every <EVERY>' cannot be used with '--at <AT>'"),
+        error.contains("the argument '--cron <CRON>' cannot be used with '--at <AT>'"),
         "{error}"
     );
 }
 
 #[test]
-fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
+fn signal_siblings_keep_bindings_and_a_match_delivers_to_each() {
     let env = Env::new();
     env.record(&env.project_root);
     env.install_agent_hooks("claude");
@@ -2330,6 +2202,7 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("branch", "feature-loop"),
             repeat: true,
             ..TaskEntry::default()
@@ -2374,7 +2247,7 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
             .iter()
             .all(|record| record.result == LoopRunResult::Delivered)
     );
-    instances.0.remove("once");
+    // A signal row is a team binding's, which stands past a fire with or without `repeat`.
     assert_eq!(read_loop_instances(&env), instances);
     let messages = env.store().list_pending_messages().unwrap();
     assert_eq!(messages.len(), 2);
@@ -2394,7 +2267,7 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
         (
             "clock",
             TaskEntry {
-                every: Some("15m".to_owned()),
+                cron: Some("*/15 * * * *".to_owned()),
                 ..TaskEntry::default()
             },
         ),
@@ -2402,6 +2275,7 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
             "signal",
             TaskEntry {
                 signal: Some("deploy.done".to_owned()),
+                team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
                 repeat: true,
                 ..TaskEntry::default()
             },
@@ -2452,6 +2326,7 @@ fn non_hook_end_retires_matching_subscription_before_delivery() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("branch", "feature-loop"),
             repeat: true,
             ..TaskEntry::default()
@@ -2511,6 +2386,7 @@ fn sibling_fire_retires_only_the_durably_ended_subscription() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             repeat: true,
             ..TaskEntry::default()
         },
@@ -2564,6 +2440,7 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             repeat: true,
             ..TaskEntry::default()
         },
@@ -2599,6 +2476,7 @@ fn side_conversation_registration_hook_retires_ended_subscription() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             repeat: true,
             ..TaskEntry::default()
         },
@@ -2637,6 +2515,7 @@ fn repeat_side_conversation_hook_reconciles_nothing() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             repeat: true,
             ..TaskEntry::default()
         },
@@ -2684,6 +2563,7 @@ fn revived_session_subscription_survives_matching_signal() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.done".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             repeat: true,
             ..TaskEntry::default()
         },
@@ -2830,7 +2710,7 @@ fn external_tick_fires_a_machine_task_without_a_workspace_record() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.machine-tick]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.machine-tick]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -2877,8 +2757,8 @@ fn external_tick_discovers_a_trusted_project_without_a_workspace_record() {
             "add",
             "project-tick",
             "--project",
-            "--every",
-            "1m",
+            "--cron",
+            "* * * * *",
             "--",
             "sh",
             "-c",
@@ -3014,7 +2894,7 @@ fn loop_birth_saves_shell_lookups_only_for_manual_fires_and_keeps_the_terminal_p
         write_loop_config(
             &env,
             &format!(
-                "[tasks.lookup]\nroot = {:?}\nevery = '1h'\ntimeout = '1m'\n{effect}",
+                "[tasks.lookup]\nroot = {:?}\ncron = '0 * * * *'\ntimeout = '1m'\n{effect}",
                 env.project_root,
             ),
         );
@@ -3076,7 +2956,7 @@ fn external_tick_yields_a_root_with_a_fresh_sidebar() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.open-root]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.open-root]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -3111,7 +2991,7 @@ fn a_shell_fire_carries_a_fire_id_that_names_its_task() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.fire-env]\nargs = [\"sh\", \"-c\", \"printf %s \\\"$RIMZ_LOOP_FIRE\\\" > {0}.tmp && mv {0}.tmp {0}\"]\ntimeout = \"1m\"\nroot = \"{1}\"\nevery = \"1h\"\n",
+            "[tasks.fire-env]\nargs = [\"sh\", \"-c\", \"printf %s \\\"$RIMZ_LOOP_FIRE\\\" > {0}.tmp && mv {0}.tmp {0}\"]\ntimeout = \"1m\"\nroot = \"{1}\"\ncron = \"0 * * * *\"\n",
             seen.display(),
             env.project_root.display(),
         ),
@@ -3133,7 +3013,7 @@ fn an_unreadable_task_record_stops_a_fire_and_shows_in_doctor() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.held]\nargs = [\"touch\", \"{}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "[tasks.held]\nargs = [\"touch\", \"{}\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"0 * * * *\"\n",
             ran.display(),
             env.project_root.display(),
         ),
@@ -3171,7 +3051,7 @@ fn external_tick_refuses_when_the_systemd_user_manager_is_unreachable() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.unreachable-bus]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1m\"\n",
+            "[tasks.unreachable-bus]\nargs = [\"sh\", \"-c\", \"touch {}\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             marker.display(),
             env.project_root.display(),
         ),
@@ -3213,7 +3093,7 @@ fn external_tick_records_a_spawn_failure_without_retrying_or_striking() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.missing-runner]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "[tasks.missing-runner]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             env.project_root.display(),
         ),
     );
@@ -3362,53 +3242,6 @@ fn a_paused_fire_at_runner_records_nothing_and_is_retried_once_live() {
     assert!(read_loop_instances(&env).0.contains_key("raced"));
 }
 
-#[test]
-fn signal_emit_records_a_spawn_failure_without_reporting_the_task_as_fired() {
-    let env = Env::new();
-    env.record(&env.project_root);
-    write_loop_config(
-        &env,
-        &format!(
-            "[tasks.missing-runner]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nsignal = \"deploy.finished\"\n",
-            env.project_root.display(),
-        ),
-    );
-    let payload = json!({"outcome": "failure", "attempt": 2});
-    let output = env
-        .rimz()
-        .args([
-            "events",
-            "emit",
-            "deploy.finished",
-            "--json",
-            &payload.to_string(),
-        ])
-        .env("RIMZ_BIN", env.home_root.join("missing-rimz"))
-        .output()
-        .expect("rimz events emit");
-    assert!(
-        output.status.success(),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let records = read_loop_run_records(&env);
-    assert_eq!(records.len(), 1, "{records:?}");
-    let record = &records[0];
-    assert_eq!(record.task, "missing-runner");
-    assert_eq!(record.result, LoopRunResult::StartFailed);
-    assert_eq!(record.duration_ms, None);
-    let signal = record.signal.as_ref().expect("signal forensics");
-    assert_eq!(signal.name.as_str(), "deploy.finished");
-    assert_eq!(&signal.payload, payload.as_object().unwrap());
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("fired no task"), "{stdout}");
-    assert!(
-        stdout.contains("  missing-runner: did not start"),
-        "{stdout}"
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn external_tick_records_a_failed_scope_handoff() {
@@ -3420,7 +3253,7 @@ fn external_tick_records_a_failed_scope_handoff() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.failed-handoff]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "[tasks.failed-handoff]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             env.project_root.display(),
         ),
     );
@@ -3473,7 +3306,7 @@ fn external_tick_does_not_record_a_fast_run_as_a_failed_start() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.fast-run]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\ndeadline = \"1970-01-01T00:00:01Z\"\n",
+            "[tasks.fast-run]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\ndeadline = \"1970-01-01T00:00:01Z\"\n",
             env.project_root.display(),
         ),
     );
@@ -3625,7 +3458,7 @@ fn loop_watch_reloads_tasks_without_reprobing_workspace() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.watch-reloaded]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.watch-reloaded]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             env.project_root.display()
         ),
     );
@@ -3733,7 +3566,7 @@ fn watch_build_move(hold: bool) {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.after-build-move]\nroot = {:?}\nargs = ['true']\ntimeout = '1m'\nevery = '15m'\n",
+            "[tasks.after-build-move]\nroot = {:?}\nargs = ['true']\ntimeout = '1m'\ncron = '*/15 * * * *'\n",
             env.project_root
         ),
     );
@@ -3809,6 +3642,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
         "@claude",
         TaskEntry {
             signal: Some("deploy.finished".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("outcome", "failure"),
             prompt: Some("Inspect deployment".to_owned()),
             repeat: true,
@@ -3904,6 +3738,7 @@ fn emitted_signal_reaches_the_matching_wait_consumer() {
         "@claude",
         TaskEntry {
             signal: Some("pr.dequeued".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("branch", "feature-signal"),
             prompt: Some("Fix the queue failure".to_owned()),
             repeat: true,
@@ -3983,6 +3818,7 @@ fn lifecycle_signal_wakes_only_for_the_matching_agent_session() {
         "@claude",
         TaskEntry {
             signal: Some("agent.idle".to_owned()),
+            team: Some(rimz::ids::TeamInstanceId::new("binding", None).unwrap()),
             matches: matching("session", "reviewer-session"),
             prompt: Some("review finished".to_owned()),
             repeat: true,
@@ -4198,14 +4034,14 @@ fn loop_project_trust_controls_visibility_execution_and_precedence() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.shared]\nargs = [\"sh\", \"-c\", \"printf machine\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.shared]\nargs = [\"sh\", \"-c\", \"printf machine\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             env.project_root.display()
         ),
     );
     write_project_config(
         &env,
-        "[tasks.repo-check]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n\
-         [tasks.shared]\nargs = [\"sh\", \"-c\", \"printf project\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+        "[tasks.repo-check]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n\
+         [tasks.shared]\nargs = [\"sh\", \"-c\", \"printf project\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n",
     );
 
     let list = loop_ok(&env, &["loop", "list"]);
@@ -4250,11 +4086,11 @@ fn project_task_enablement_is_scoped_by_project_root() {
     std::fs::create_dir_all(&other).expect("other project");
     write_project_config_at(
         &env.project_root,
-        "[tasks.nightly]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+        "[tasks.nightly]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n",
     );
     write_project_config_at(
         &other,
-        "[tasks.nightly]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+        "[tasks.nightly]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n",
     );
     loop_ok_root(&env, &env.project_root, &["trust", "grant"]);
     loop_ok_root(&env, &other, &["trust", "grant"]);
@@ -4295,7 +4131,7 @@ fn trusted_project_task_edits_repin_trust() {
     );
     write_project_config(
         &env,
-        "[tasks.first]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+        "[tasks.first]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n",
     );
     grant_project_trust(&env);
     let dismissal = env
@@ -4313,8 +4149,8 @@ fn trusted_project_task_edits_repin_trust() {
             "add",
             "second",
             "--project",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "true",
         ],
@@ -4357,8 +4193,8 @@ fn first_project_task_grants_fresh_config() {
             "add",
             "fresh",
             "--project",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "true",
         ],
@@ -4388,8 +4224,8 @@ fn first_project_task_grants_fresh_config() {
             "add",
             "home",
             "--project",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "true",
         ])
@@ -4406,12 +4242,12 @@ fn project_task_edit_does_not_grant_foreign_change() {
     let env = Env::new();
     write_project_config(
         &env,
-        "[tasks.remove-me]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n",
+        "[tasks.remove-me]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n",
     );
     grant_project_trust(&env);
     write_project_config(
         &env,
-        "[tasks.remove-me]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"15m\"\n\n\
+        "[tasks.remove-me]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n\n\
          [[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
     );
 
@@ -4432,7 +4268,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
     write_loop_config(
         &env,
         &format!(
-            "# keep unrelated task comment\n[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n",
+            "# keep unrelated task comment\n[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"0 * * * *\"\n",
             env.project_root.display()
         ),
     );
@@ -4443,7 +4279,7 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
             "loop",
             "add",
             "probe",
-            "--in",
+            "--at",
             "5m",
             "--",
             "sh",
@@ -4483,9 +4319,17 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 
     loop_ok(
         &env,
-        &["loop", "add", "swap", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "swap",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
-    loop_ok(&env, &["loop", "add", "swap", "--in", "5m", "--", "true"]);
+    loop_ok(&env, &["loop", "add", "swap", "--at", "5m", "--", "true"]);
     assert!(read_loop_instances(&env).0.contains_key("swap"));
     assert!(
         !std::fs::read_to_string(loop_config_path(&env))
@@ -4511,15 +4355,14 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
             "add",
             "project-once",
             "--project",
-            "--in",
+            "--at",
             "5m",
             "--",
             "true",
         ],
     );
     assert!(
-        error.contains("--project tasks must repeat")
-            && error.contains("--every, --cron, or --signal with --repeat"),
+        error.contains("--project tasks must repeat; set --cron"),
         "{error}"
     );
 }
@@ -4528,7 +4371,10 @@ fn loop_task_storage_policy_and_manual_fire_preserve_one_shots() {
 fn loop_multi_name_enable_disable_resolves_before_writing() {
     let env = Env::new();
     for name in ["first", "second"] {
-        loop_ok(&env, &["loop", "add", name, "--every", "15m", "--", "true"]);
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--cron", "*/15 * * * *", "--", "true"],
+        );
     }
     for verb in ["disable", "enable"] {
         let before = read_loop_arming(&env);
@@ -4559,7 +4405,10 @@ fn loop_multi_name_enable_disable_resolves_before_writing() {
 fn loop_multi_name_remove_reports_each_outcome() {
     let env = Env::new();
     for name in ["first", "second"] {
-        loop_ok(&env, &["loop", "add", name, "--every", "15m", "--", "true"]);
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--cron", "*/15 * * * *", "--", "true"],
+        );
     }
     let output = env
         .rimz()
@@ -4588,11 +4437,19 @@ fn loop_add_new_task_follows_template_and_remove_restores_it() {
         }
         loop_ok(
             &env,
-            &["loop", "add", "first", "--every", "15m", "--", "true"],
+            &[
+                "loop",
+                "add",
+                "first",
+                "--cron",
+                "*/15 * * * *",
+                "--",
+                "true",
+            ],
         );
         rendered.push(std::fs::read_to_string(loop_config_path(&env)).unwrap());
         expected.push(format!(
-            "{template}\n[tasks.first]\nkind = \"shell\"\nargs = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"15m\"\n",
+            "{template}\n[tasks.first]\nkind = \"shell\"\nargs = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\ncron = \"*/15 * * * *\"\n",
             env.project_root
         ));
         loop_ok(&env, &["loop", "remove", "first"]);
@@ -4607,7 +4464,15 @@ fn loop_add_keeps_commented_default_timeout_at_root() {
     let env = Env::new();
     loop_ok(
         &env,
-        &["loop", "add", "first", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "first",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
     let path = loop_config_path(&env);
     let text = std::fs::read_to_string(&path).unwrap();
@@ -4638,8 +4503,8 @@ fn loop_add_new_project_task_follows_comments_without_a_leading_blank_line() {
                 "add",
                 "one",
                 "--project",
-                "--every",
-                "15m",
+                "--cron",
+                "*/15 * * * *",
                 "--",
                 "true",
             ],
@@ -4647,7 +4512,7 @@ fn loop_add_new_project_task_follows_comments_without_a_leading_blank_line() {
         rendered.push(std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap());
         let separator = if seed.is_empty() { "" } else { "\n" };
         expected.push(format!(
-            "{seed}{separator}[tasks.one]\nkind = \"shell\"\nargs = [\"true\"]\ntimeout = \"2h\"\nevery = \"15m\"\n"
+            "{seed}{separator}[tasks.one]\nkind = \"shell\"\nargs = [\"true\"]\ntimeout = \"2h\"\ncron = \"*/15 * * * *\"\n"
         ));
     }
     assert_eq!(rendered, expected);
@@ -4660,13 +4525,13 @@ fn loop_add_new_task_follows_root_settings_and_trailing_comments() {
     write_loop_config(&env, seed);
     loop_ok(
         &env,
-        &["loop", "add", "one", "--every", "15m", "--", "true"],
+        &["loop", "add", "one", "--cron", "*/15 * * * *", "--", "true"],
     );
     let text = std::fs::read_to_string(loop_config_path(&env)).unwrap();
     assert_eq!(
         text,
         format!(
-            "{seed}\n[tasks.one]\nkind = \"shell\"\nargs = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"15m\"\n",
+            "{seed}\n[tasks.one]\nkind = \"shell\"\nargs = [\"true\"]\nroot = {:?}\ntimeout = \"2h\"\ncron = \"*/15 * * * *\"\n",
             env.project_root
         )
     );
@@ -4692,15 +4557,16 @@ fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
             } else {
                 format!("root = {:?}\n", env.project_root)
             };
-            let first =
-                format!("[tasks.one]\n{root}args = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n");
+            let first = format!(
+                "[tasks.one]\n{root}args = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n"
+            );
             let next = match (following_section, project) {
                 (false, _) => "",
                 (true, false) => "\n# Throttle settings\n[throttle]\nstagger = \"10s\"\n",
                 (true, true) => "\n# Agent settings\n[agents]\n",
             };
             let seed = format!("{first}{comments}{next}");
-            let mut args = vec!["loop", "add", "two", "--every", "2h"];
+            let mut args = vec!["loop", "add", "two", "--cron", "0 */2 * * *"];
             let path = if project {
                 write_project_config(&env, &seed);
                 args.push("--project");
@@ -4713,7 +4579,7 @@ fn loop_add_new_task_keeps_preceding_task_comments_and_following_sections() {
             loop_ok(&env, &args);
             rendered.push(std::fs::read_to_string(path).unwrap());
             expected.push(format!(
-                "{first}{comments}\n[tasks.two]\nkind = \"shell\"\nargs = [\"false\"]\n{root}timeout = \"2h\"\nevery = \"2h\"\n{next}"
+                "{first}{comments}\n[tasks.two]\nkind = \"shell\"\nargs = [\"false\"]\n{root}timeout = \"2h\"\ncron = \"0 */2 * * *\"\n{next}"
             ));
         }
     }
@@ -4725,25 +4591,25 @@ fn loop_add_replacing_first_machine_task_keeps_header_comments() {
     let env = Env::new();
     let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
     let next = format!(
-        "\n# Two note\n[tasks.two]\nroot = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"7d\"\n",
+        "\n# Two note\n[tasks.two]\nroot = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 0 * * 0\"\n",
         env.project_root
     );
     write_loop_config(
         &env,
         &format!(
-            "{heading}root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n{next}",
+            "{heading}root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n{next}",
             env.project_root
         ),
     );
 
     loop_ok(
         &env,
-        &["loop", "add", "one", "--every", "2h", "--", "false"],
+        &["loop", "add", "one", "--cron", "0 */2 * * *", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{heading}kind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n{next}",
+            "{heading}kind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\ncron = \"0 */2 * * *\"\n{next}",
             env.project_root
         )
     );
@@ -4753,10 +4619,11 @@ fn loop_add_replacing_first_machine_task_keeps_header_comments() {
 fn loop_add_replacing_first_project_task_keeps_header_comments() {
     let env = Env::new();
     let heading = "# Project loops\n\n# One note\n[tasks.one] # header note\n";
-    let next = "\n# Two note\n[tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"7d\"\n";
+    let next =
+        "\n# Two note\n[tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 0 * * 0\"\n";
     write_project_config(
         &env,
-        &format!("{heading}args = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n{next}"),
+        &format!("{heading}args = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n{next}"),
     );
 
     loop_ok(
@@ -4766,8 +4633,8 @@ fn loop_add_replacing_first_project_task_keeps_header_comments() {
             "add",
             "one",
             "--project",
-            "--every",
-            "2h",
+            "--cron",
+            "0 */2 * * *",
             "--",
             "false",
         ],
@@ -4775,7 +4642,7 @@ fn loop_add_replacing_first_project_task_keeps_header_comments() {
     assert_eq!(
         std::fs::read_to_string(env.project_root.join(".rimz/config.toml")).unwrap(),
         format!(
-            "{heading}kind = \"shell\"\nargs = [\"false\"]\ntimeout = \"2h\"\nevery = \"2h\"\n{next}"
+            "{heading}kind = \"shell\"\nargs = [\"false\"]\ntimeout = \"2h\"\ncron = \"0 */2 * * *\"\n{next}"
         )
     );
 }
@@ -4785,19 +4652,19 @@ fn loop_add_new_task_keeps_explicit_tasks_header_comments() {
     let env = Env::new();
     let original = format!(
         "# lead\n[tasks]\n\n# One note\n[tasks.one]\n\
-         root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+         root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
         env.project_root
     );
     write_loop_config(&env, &original);
 
     loop_ok(
         &env,
-        &["loop", "add", "two", "--every", "2h", "--", "false"],
+        &["loop", "add", "two", "--cron", "0 */2 * * *", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{original}\n[tasks.two]\nkind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n",
+            "{original}\n[tasks.two]\nkind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\ncron = \"0 */2 * * *\"\n",
             env.project_root
         )
     );
@@ -4810,19 +4677,19 @@ fn loop_add_replacing_task_keeps_explicit_tasks_header_comments() {
     write_loop_config(
         &env,
         &format!(
-            "{heading}root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+            "{heading}root = {:?}\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
             env.project_root
         ),
     );
 
     loop_ok(
         &env,
-        &["loop", "add", "one", "--every", "2h", "--", "false"],
+        &["loop", "add", "one", "--cron", "0 */2 * * *", "--", "false"],
     );
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         format!(
-            "{heading}kind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\nevery = \"2h\"\n",
+            "{heading}kind = \"shell\"\nargs = [\"false\"]\nroot = {:?}\ntimeout = \"2h\"\ncron = \"0 */2 * * *\"\n",
             env.project_root
         )
     );
@@ -4835,8 +4702,8 @@ fn loop_remove_first_task_keeps_template_comments() {
         &env,
         "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
          # default-timeout = \"2h\"\n\n\
-         [tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\n\
-         [tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n",
+         [tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n\n\
+         [tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 0 * * 0\"\n",
     );
 
     let output = loop_ok(&env, &["loop", "remove", "one"]);
@@ -4845,7 +4712,7 @@ fn loop_remove_first_task_keeps_template_comments() {
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
         "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
          # default-timeout = \"2h\"\n\n\
-         [tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n"
+         [tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 0 * * 0\"\n"
     );
 }
 
@@ -4854,16 +4721,16 @@ fn loop_remove_last_task_keeps_preceding_task_comments() {
     let env = Env::new();
     write_loop_config(
         &env,
-        "[tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
+        "[tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n\
          # every = \"30m\"   # faster cadence during release week\n\
-         # Weekly cleanup\n[tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1w\"\n",
+         # Weekly cleanup\n[tasks.two]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 0 * * 0\"\n",
     );
 
     let output = loop_ok(&env, &["loop", "remove", "two"]);
     assert_eq!(output, "removed loop task `two`\n");
     assert_eq!(
         std::fs::read_to_string(loop_config_path(&env)).unwrap(),
-        "[tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n\
+        "[tasks.one]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n\
          # every = \"30m\"   # faster cadence during release week\n\
          # Weekly cleanup\n"
     );
@@ -4875,7 +4742,15 @@ fn loop_enable_disable_pause_workflow() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "probe",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
     let (_stdout, error) = loop_fail(&env, &["loop", "pause", "probe"]);
     assert!(
@@ -4930,7 +4805,15 @@ fn loop_enable_disable_pause_workflow() {
 
     loop_ok(
         &env,
-        &["loop", "add", "second", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "second",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
     let disabled = loop_ok(&env, &["loop", "disable", "--all"]);
     assert!(
@@ -4965,8 +4848,8 @@ fn loop_repeated_failures_auto_disable_notify_once_and_enable() {
             "loop",
             "add",
             "watchdog",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "sh",
             "-c",
@@ -5036,8 +4919,8 @@ fn loop_task_mutations_move_and_clear_overlays() {
     write_loop_config(
         &env,
         &format!(
-            "# keep unrelated task comment\n[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"1h\"\n\
-             [tasks.old]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "# keep unrelated task comment\n[tasks.keep]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"0 * * * *\"\n\
+             [tasks.old]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
@@ -5076,12 +4959,28 @@ fn loop_task_mutations_move_and_clear_overlays() {
     assert!(!read_loop_strikes(&env).contains_key(&machine_task_key("new")));
     loop_ok(
         &env,
-        &["loop", "add", "swap", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "swap",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
     loop_ok(&env, &["loop", "pause", "swap", "--for", "2h"]);
     let replaced = loop_ok(
         &env,
-        &["loop", "add", "swap", "--every", "30m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "swap",
+            "--cron",
+            "*/30 * * * *",
+            "--",
+            "true",
+        ],
     );
     assert!(
         replaced.contains("arming: reset")
@@ -5102,7 +5001,7 @@ fn loop_rename_keeps_the_tasks_runs_by_their_fire_id() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "old", "--every", "15m", "--", "true"],
+        &["loop", "add", "old", "--cron", "*/15 * * * *", "--", "true"],
     );
     let own = task_id(&env, "old");
     let other = rimz::ids::TaskId::new();
@@ -5202,7 +5101,7 @@ fn a_renamed_task_keeps_its_state_and_a_re_added_name_inherits_none() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "old", "--every", "15m", "--", "true"],
+        &["loop", "add", "old", "--cron", "*/15 * * * *", "--", "true"],
     );
     let id = task_id(&env, "old");
     loop_ok(&env, &["loop", "disable", "old"]);
@@ -5230,7 +5129,7 @@ fn a_renamed_task_keeps_its_state_and_a_re_added_name_inherits_none() {
     loop_ok(&env, &["loop", "remove", "new"]);
     loop_ok(
         &env,
-        &["loop", "add", "new", "--every", "15m", "--", "true"],
+        &["loop", "add", "new", "--cron", "*/15 * * * *", "--", "true"],
     );
     assert_ne!(task_id(&env, "new"), id);
     assert_eq!(read_loop_strikes(&env).get(&key), None);
@@ -5246,7 +5145,7 @@ fn a_renamed_task_keeps_its_state_and_a_re_added_name_inherits_none() {
 #[test]
 fn loop_rename_without_a_room_does_not_create_state() {
     for definition in [
-        "args = ['true']\ntimeout = '1m'\nevery = '15m'",
+        "args = ['true']\ntimeout = '1m'\ncron = '*/15 * * * *'",
         "args = ['true']\ntimeout = '1m'\nwhen = ['pr=open']",
     ] {
         let env = Env::new();
@@ -5288,8 +5187,8 @@ fn loop_rename_rejects_collisions_and_reports_missing() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.old]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n\
-             [tasks.existing]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.old]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n\
+             [tasks.existing]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
@@ -5335,7 +5234,15 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
         .rimz()
         .current_dir(&linked)
         .args([
-            "loop", "add", "where", "--every", "15m", "--", "sh", "-c", probe,
+            "loop",
+            "add",
+            "where",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "sh",
+            "-c",
+            probe,
         ])
         .output()
         .expect("add check from linked worktree");
@@ -5381,7 +5288,7 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
 
     let mut config = std::fs::read_to_string(loop_config_path(&env)).unwrap();
     config.push_str(&format!(
-        "\n[tasks.legacy]\nroot = {root:?}\ndir = {linked:?}\nargs = [\"sh\", \"-c\", {probe:?}]\ntimeout = \"1m\"\nevery = \"15m\"\n"
+        "\n[tasks.legacy]\nroot = {root:?}\ndir = {linked:?}\nargs = [\"sh\", \"-c\", {probe:?}]\ntimeout = \"1m\"\ncron = \"*/15 * * * *\"\n"
     ));
     std::fs::write(loop_config_path(&env), config).unwrap();
     loop_ok(&env, &["loop", "fire", "legacy"]);
@@ -5412,8 +5319,8 @@ fn loop_check_added_from_a_worktree_runs_at_the_root_and_legacy_dir_rows_keep_th
             "add",
             "project-where",
             "--project",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "sh",
             "-c",
@@ -5524,8 +5431,8 @@ fn quiet_fires_leave_only_their_summary_until_a_failure_or_a_one_shot_keeps_them
             "loop",
             "add",
             "steady",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--timeout",
             "1m",
             "--",
@@ -5994,7 +5901,7 @@ fn a_run_whose_record_lost_engaged_continues_and_is_kept() {
         );
         config.push_str(&format!(
             "[tasks.{task}]\nargs = ['sh', '-c', {hold:?}]\ntimeout = '1h'\nroot = {:?}\n\
-             every = '1h'\n",
+             cron = '0 * * * *'\n",
             env.project_root
         ));
         write_loop_config(&env, &config);
@@ -6072,8 +5979,8 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
             "loop",
             "add",
             "history",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "sh",
             "-c",
@@ -6098,8 +6005,8 @@ fn loop_check_outcomes_report_once_and_render_from_their_runs() {
             "loop",
             "add",
             "history",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "sh",
             "-c",
@@ -6148,7 +6055,15 @@ fn a_fired_run_ended_by_its_unparsable_definition_saves_its_rows() {
     loop_ok(
         &env,
         &[
-            "loop", "add", "unread", "--every", "1h", "--", "sh", "-c", &script,
+            "loop",
+            "add",
+            "unread",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "sh",
+            "-c",
+            &script,
         ],
     );
     // A live room: the fire births no sidebar, whose first tick would advance the run and
@@ -6277,7 +6192,7 @@ fn loop_poll_until_delivers_once_or_expires() {
                 }),
                 prompt: Some("merge now".to_owned()),
                 root: env.project_root.clone(),
-                every: Some("2m".to_owned()),
+                cron: Some("*/2 * * * *".to_owned()),
                 deadline: Some(Timestamp::now() + SignedDuration::from_mins(30)),
                 ..TaskEntry::default()
             },
@@ -6309,7 +6224,7 @@ fn loop_poll_until_delivers_once_or_expires() {
                 }),
                 prompt: Some("too late".to_owned()),
                 root: expired.project_root.clone(),
-                every: Some("2m".to_owned()),
+                cron: Some("*/2 * * * *".to_owned()),
                 deadline: Some(Timestamp::from_second(1).unwrap()),
                 ..TaskEntry::default()
             },
@@ -6339,7 +6254,7 @@ fn loop_list_uses_room_arm_stamp_for_next_fire() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.next]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.next]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"* * * * *\"\n",
             env.project_root.display()
         ),
     );
@@ -6375,7 +6290,7 @@ fn malformed_schedule_stays_visible_and_manual_action_remains_runnable() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.invalid]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\ncron = \"0 7 * * *\"\n",
+            "[tasks.invalid]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"0 7 * *\"\n",
             env.project_root.display()
         ),
     );
@@ -6416,7 +6331,7 @@ fn loop_legacy_run_record_renders_through_list_and_show() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.legacy]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.legacy]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             env.project_root.display()
         ),
     );
@@ -6455,7 +6370,7 @@ fn loop_show_wait_survives_unavailable_workspace_enrichment() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+            "[tasks.wake]\nroot = {:?}\ncron = \"0 * * * *\"\n\
              wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
             env.project_root,
         ),
@@ -6483,7 +6398,7 @@ fn loop_show_wait_survives_unreadable_store_enrichment() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.wake]\nroot = {:?}\nevery = \"1h\"\n\
+            "[tasks.wake]\nroot = {:?}\ncron = \"0 * * * *\"\n\
              wait = {{ kind = \"claude\", session = \"session\", handle = \"@reader\" }}\n",
             env.project_root,
         ),
@@ -6510,7 +6425,7 @@ fn loop_overlap_records_the_holder_and_keeps_the_task() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "busy", "--every", "1h", "--", "true"],
+        &["loop", "add", "busy", "--cron", "0 * * * *", "--", "true"],
     );
     let holder = RunLockInfo {
         pid: 42_424,
@@ -6530,7 +6445,7 @@ fn loop_overlap_records_the_holder_and_keeps_the_task() {
     assert_eq!(record.result, LoopRunResult::Overlapped);
     let show = loop_ok(&env, &["loop", "show", "busy"]);
     assert!(
-        show.starts_with("busy · routine · every 1h · ▸ running 25m · pid 42424\n")
+        show.starts_with("busy · routine · cron `0 * * * *` · ▸ running 25m · pid 42424\n")
             && show.contains("  1 fire skipped while the active run holds the lock\n")
             && show.contains("  stop with `rimz loop stop busy`\n")
             && !show
@@ -6588,7 +6503,7 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "busy", "--every", "1h", "--", "true"],
+        &["loop", "add", "busy", "--cron", "0 * * * *", "--", "true"],
     );
     loop_ok(&env, &["loop", "fire", "busy"]);
     // The fire returns once its run starts; LAST reads the run's report.
@@ -6636,7 +6551,10 @@ fn loop_list_shows_a_running_task_beside_its_last_result() {
 fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
     let env = Env::new();
     env.record(&env.project_root);
-    loop_ok(&env, &["loop", "add", "fan", "--every", "1h", "--", "true"]);
+    loop_ok(
+        &env,
+        &["loop", "add", "fan", "--cron", "0 * * * *", "--", "true"],
+    );
     let holder = RunLockInfo {
         pid: 42_424,
         started_at: Timestamp::now() - SignedDuration::from_secs(3 * 60),
@@ -6655,7 +6573,7 @@ fn loop_list_adds_one_row_per_held_lock_no_task_claims() {
         .find(|line| line.trim_start().starts_with("later "))
         .unwrap();
     assert!(
-        fan.contains("every 1h") && fan.contains("▸ running 3m"),
+        fan.contains("cron `0 * * * *`") && fan.contains("▸ running 3m"),
         "{list}"
     );
     assert!(later.contains("▸ running 3m"), "{list}");
@@ -6666,7 +6584,10 @@ fn loop_list_warns_once_when_the_run_locks_cannot_be_listed() {
     let env = Env::new();
     env.record(&env.project_root);
     for name in ["first", "second"] {
-        loop_ok(&env, &["loop", "add", name, "--every", "1h", "--", "true"]);
+        loop_ok(
+            &env,
+            &["loop", "add", name, "--cron", "0 * * * *", "--", "true"],
+        );
     }
     // A file where the locks directory belongs makes listing it fail.
     let locks = loop_run_lock_path(&env, "first");
@@ -6709,7 +6630,8 @@ fn loop_watch_keeps_acting_results_after_skipped_signals() {
                                 root: env.project_root.clone(),
                                 args: vec!["true".to_owned()],
                                 timeout: Some("1m".to_owned()),
-                                signal: Some("ci.failed".into()),
+                                when: Some(vec!["ci=failed".into()]),
+                                repeat: true,
                                 ..TaskEntry::default()
                             },
                         )
@@ -6770,7 +6692,7 @@ fn loop_watch_picks_up_a_quiet_fire_that_appends_nothing_to_the_log() {
     seed_loop_watch_room(&env);
     loop_ok(
         &env,
-        &["loop", "add", "hushed", "--every", "1h", "--", "true"],
+        &["loop", "add", "hushed", "--cron", "0 * * * *", "--", "true"],
     );
     let frame = loop_watch_across(
         &env,
@@ -6814,7 +6736,7 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                         root: env.project_root.clone(),
                         args: vec!["true".to_owned()],
                         timeout: Some("1m".to_owned()),
-                        every: Some("1h".into()),
+                        cron: Some("0 * * * *".into()),
                         ..TaskEntry::default()
                     },
                 ),
@@ -6825,7 +6747,7 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                         dir: Some(checkout),
                         args: vec!["true".to_owned()],
                         timeout: Some("1m".to_owned()),
-                        every: Some("1h".into()),
+                        cron: Some("0 * * * *".into()),
                         ..TaskEntry::default()
                     },
                 ),
@@ -6835,7 +6757,7 @@ fn loop_watch_scopes_to_the_whole_callers_room() {
                         root: elsewhere,
                         args: vec!["true".to_owned()],
                         timeout: Some("1m".to_owned()),
-                        every: Some("1h".into()),
+                        cron: Some("0 * * * *".into()),
                         ..TaskEntry::default()
                     },
                 ),
@@ -6885,7 +6807,7 @@ fn loop_watch_stays_silent_when_a_task_run_lock_cannot_be_read() {
     seed_loop_watch_room(&env);
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--every", "1h", "--", "true"],
+        &["loop", "add", "probe", "--cron", "0 * * * *", "--", "true"],
     );
     // A directory where the run lock file belongs makes opening the lock fail.
     std::fs::create_dir_all(loop_run_lock_path(&env, "probe")).unwrap();
@@ -6910,7 +6832,7 @@ fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.remote-task]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\nevery = \"15m\"\n",
+            "[tasks.remote-task]\nargs = [\"true\"]\ntimeout = \"1m\"\nroot = \"{}\"\ncron = \"*/15 * * * *\"\n",
             elsewhere.display()
         ),
     );
@@ -6939,7 +6861,10 @@ fn loop_watch_stays_silent_when_the_locks_directory_cannot_be_listed() {
 fn loop_stop_reaches_a_run_holding_only_a_per_checkout_lock() {
     let env = Env::new();
     env.record(&env.project_root);
-    loop_ok(&env, &["loop", "add", "fan", "--every", "1h", "--", "true"]);
+    loop_ok(
+        &env,
+        &["loop", "add", "fan", "--cron", "0 * * * *", "--", "true"],
+    );
     let mut runner = Command::new("sleep")
         .arg("30")
         .spawn()
@@ -6986,8 +6911,8 @@ fn loop_stop_ends_and_loop_show_lists_each_alive_launch_of_the_tasks_fires() {
             "loop",
             "add",
             "stamped",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--timeout",
             "1m",
             "--",
@@ -7172,7 +7097,15 @@ fn loop_stop_ends_a_fire_runs_agent_in_whatever_pane_hosts_it() {
         let pin = env.resolve_workspace(&elsewhere);
         loop_ok(
             &env,
-            &["loop", "add", "printed", "--every", "1h", "--", "true"],
+            &[
+                "loop",
+                "add",
+                "printed",
+                "--cron",
+                "0 * * * *",
+                "--",
+                "true",
+            ],
         );
         let fire = rimz::ids::FireId::new(&task_id(&env, "printed"));
         let ready = env.project_root.join("agent.ready");
@@ -7313,7 +7246,15 @@ fn loop_stop_without_active_run_reports_no_active_run() {
     env.record(&env.project_root);
     loop_ok(
         &env,
-        &["loop", "add", "idle", "--every", "15m", "--", "true"],
+        &[
+            "loop",
+            "add",
+            "idle",
+            "--cron",
+            "*/15 * * * *",
+            "--",
+            "true",
+        ],
     );
     let stopped = loop_ok(&env, &["loop", "stop", "idle"]);
     assert!(stopped.contains("loop `idle`: no active run"), "{stopped}");
@@ -7334,8 +7275,8 @@ fn terminal_check_runs_interactive_shell_to_completion() {
             "loop",
             "add",
             "shell-probe",
-            "--every",
-            "15m", // A bound on the failure only: the check exits on its own, and a
+            "--cron",
+            "*/15 * * * *", // A bound on the failure only: the check exits on its own, and a
             // shell stopped by terminal job control is what runs into it.
             "--timeout",
             "60s",
@@ -7391,8 +7332,8 @@ fn terminal_check_outlived_by_its_session_leader_runs_to_completion() {
             "loop",
             "add",
             "shell-probe",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--timeout",
             "20s",
             "--",
@@ -7445,8 +7386,8 @@ fn manual_check_clears_the_agent_identity_overlay() {
             "loop",
             "add",
             "identity",
-            "--every",
-            "15m",
+            "--cron",
+            "*/15 * * * *",
             "--",
             "sh",
             "-c",
@@ -7547,7 +7488,7 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
     // A failing check keeps its run's row, which `loop logs` still reads once the task is gone.
     loop_ok(
         &env,
-        &["loop", "add", "probe", "--every", "1h", "--", "false"],
+        &["loop", "add", "probe", "--cron", "0 * * * *", "--", "false"],
     );
     let before = run_mark(&env, "probe");
     loop_ok(&env, &["loop", "fire", "probe"]);
@@ -7594,7 +7535,7 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
 
     let show = display("show");
     assert!(
-        show.contains("every 1h") && show.contains("manual"),
+        show.contains("cron `0 * * * *`") && show.contains("manual"),
         "{show}"
     );
     loop_ok(&env, &["loop", "remove", "probe"]);
@@ -7619,90 +7560,6 @@ fn loop_show_and_logs_drop_only_the_active_run_when_the_lock_lookup_fails() {
             && error.contains("no loop task named `ghost`"),
         "{error}"
     );
-}
-
-#[test]
-fn loop_add_persists_machine_and_project_signal_triggers() {
-    let env = Env::new();
-    let added = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "machine-signal",
-            "--signal",
-            "ci.failed",
-            "--match",
-            "branch=feature",
-            "--repeat",
-            "--",
-            "true",
-        ],
-    );
-    assert!(
-        added.contains("trigger: fires on ci.failed [branch=feature]"),
-        "{added}"
-    );
-    let machine: LoopConfig =
-        toml::from_str(&std::fs::read_to_string(loop_config_path(&env)).expect("read loop config"))
-            .expect("parse loop config");
-    let machine_task = &machine.tasks.0["machine-signal"];
-    assert_eq!(machine_task.signal.as_deref(), Some("ci.failed"));
-    assert_eq!(
-        machine_task
-            .matches
-            .as_ref()
-            .and_then(|matches| matches.get("branch"))
-            .map(String::as_str),
-        Some("feature")
-    );
-
-    let project_added = loop_ok(
-        &env,
-        &[
-            "loop",
-            "add",
-            "project-signal",
-            "--project",
-            "--signal",
-            "ci.failed",
-            "--match",
-            "branch=feature",
-            "--repeat",
-            "--",
-            "true",
-        ],
-    );
-    assert!(
-        project_added.contains("fires on ci.failed"),
-        "{project_added}"
-    );
-    let config_path = env.project_root.join(".rimz/config.toml");
-    let project_text = std::fs::read_to_string(&config_path).expect("project config");
-    assert!(
-        project_text.contains("[tasks.project-signal]"),
-        "{project_text}"
-    );
-    assert!(
-        project_text.contains("signal = \"ci.failed\"")
-            && project_text.contains("[tasks.project-signal.match]")
-            && project_text.contains("branch = \"feature\""),
-        "{project_text}"
-    );
-    let trusted = rimz::trust::status_with_roots(&env.project_root, &env.rimz_home())
-        .expect("project trust after add");
-    assert_eq!(trusted.state, rimz::trust::TrustState::Trusted);
-    let trusted_hash = trusted.current_hash.expect("trusted surface hash");
-
-    std::fs::write(
-        &config_path,
-        project_text.replace("branch = \"feature\"", "branch = \"success\""),
-    )
-    .expect("change project signal match");
-    let stale = rimz::trust::status_with_roots(&env.project_root, &env.rimz_home())
-        .expect("project trust after signal change");
-    assert_eq!(stale.state, rimz::trust::TrustState::Stale);
-    assert_ne!(stale.current_hash.as_deref(), Some(trusted_hash.as_str()));
 }
 
 #[cfg(unix)]
@@ -7734,7 +7591,15 @@ fn loop_add_from_an_empty_dir_caller_anchors_at_its_checkout() {
             &workspace.workspace_id,
             &env.project_root,
         ))
-        .args(["loop", "add", "from-empty", "--every", "1h", "--", "true"])
+        .args([
+            "loop",
+            "add",
+            "from-empty",
+            "--cron",
+            "0 * * * *",
+            "--",
+            "true",
+        ])
         .output()
         .expect("rimz loop add");
     assert!(
@@ -7762,12 +7627,19 @@ fn loop_add_rejects_invalid_action_shapes() {
     env.record(&env.project_root);
     let cases = [
         (
-            vec!["loop", "add", "missing", "--every", "15m"],
+            vec!["loop", "add", "missing", "--cron", "*/15 * * * *"],
             "a shell task needs its command after `--`: `rimz loop add <name> ... -- <command>`",
         ),
         (
             vec![
-                "loop", "add", "wait", "--wait", "--every", "15m", "--", "true",
+                "loop",
+                "add",
+                "wait",
+                "--wait",
+                "--cron",
+                "*/15 * * * *",
+                "--",
+                "true",
             ],
             "unexpected argument '--wait'",
         ),
@@ -7775,61 +7647,26 @@ fn loop_add_rejects_invalid_action_shapes() {
             vec![
                 "loop",
                 "add",
-                "match",
-                "--match",
-                "status=failed",
-                "--every",
-                "15m",
-                "--",
-                "true",
-            ],
-            "--match requires --signal",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "bad-match",
-                "--signal",
-                "ci.failed",
-                "--match",
-                "status",
-                "--repeat",
-                "--",
-                "true",
-            ],
-            "invalid --match `status`; expected KEY=VALUE",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "signal-schedule",
-                "--signal",
-                "ci.failed",
-                "--every",
-                "15m",
-                "--",
-                "true",
-            ],
-            "cannot be used with",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
                 "repeat-clock",
-                "--every",
-                "15m",
+                "--cron",
+                "*/15 * * * *",
                 "--repeat",
                 "--",
                 "true",
             ],
-            "--repeat cannot be used with --every or --cron; they repeat already",
+            "--repeat cannot be used with --cron; it repeats already",
         ),
         (
             vec![
-                "loop", "add", "until", "--until", "1h", "--every", "15m", "--", "true",
+                "loop",
+                "add",
+                "until",
+                "--until",
+                "1h",
+                "--cron",
+                "*/15 * * * *",
+                "--",
+                "true",
             ],
             "--until is no longer accepted; fire on a condition with --when",
         ),
@@ -7844,25 +7681,30 @@ fn loop_add_rejects_invalid_action_shapes() {
                 "--",
                 "true",
             ],
-            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
-        ),
-        (
-            vec![
-                "loop",
-                "add",
-                "project-signal-once",
-                "--project",
-                "--signal",
-                "ci.failed",
-                "--",
-                "true",
-            ],
-            "--project tasks must repeat; set --every, --cron, or --signal with --repeat",
+            "--project tasks must repeat; set --cron",
         ),
     ];
     for (args, expected) in cases {
         let (_stdout, error) = loop_fail(&env, &args);
         assert!(error.contains(expected), "rimz {args:?}: {error}");
+    }
+    for value in ["soon", "0m"] {
+        let (_stdout, error) =
+            loop_fail(&env, &["loop", "add", "once", "--at", value, "--", "true"]);
+        assert!(
+            error.contains(&format!(
+                "schedule `once` has an invalid one-shot time `{value}`; use a delay above zero \
+                 (`30m`, `2h`) or a clock time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`)"
+            )),
+            "--at {value}: {error}"
+        );
+    }
+    for flag in ["--every", "--in", "--signal", "--match"] {
+        let (_stdout, error) = loop_fail(&env, &["loop", "add", "old", flag, "x", "--", "true"]);
+        assert!(
+            error.contains(&format!("unexpected argument '{flag}' found")),
+            "{flag}: {error}"
+        );
     }
     assert!(read_loop_instances(&env).0.is_empty());
 }
@@ -8518,7 +8360,15 @@ fn matching(key: &str, value: &str) -> Option<BTreeMap<String, String>> {
     Some(BTreeMap::from([(key.to_owned(), value.to_owned())]))
 }
 
-fn write_loop_instances(env: &Env, tasks: Tasks) {
+/// Writes the room's instance rows. A row on a signal is a team binding's, the one writer of
+/// such a row, so a fixture row that sets `signal` without `team` gets a binding's `team`.
+fn write_loop_instances(env: &Env, mut tasks: Tasks) {
+    for entry in tasks.0.values_mut() {
+        if entry.signal.is_some() && entry.team.is_none() {
+            entry.team =
+                Some(rimz::ids::TeamInstanceId::new("binding", None).expect("team instance"));
+        }
+    }
     let path = loop_instances_path(env);
     std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
     std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))

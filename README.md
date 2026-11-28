@@ -251,7 +251,7 @@ rimz loop add standup --cron '0 7 * * 1-5' --agent claude -- \
     "Summarize what landed on main since yesterday and flag anything that needs review"
 
 # Every 15 minutes: run the tests, and start an agent only when they fail
-rimz loop add watchdog --every 15m -- \
+rimz loop add watchdog --cron '*/15 * * * *' -- \
     sh -c 'cargo test || rimz agents codex "Fix the failing test."'
 ```
 
@@ -264,15 +264,15 @@ rimz shell -- 'tail -n0 -F build.log | grep -m1 -F READY'      # a new matching 
 rimz watch pr=merged                                           # the checkout's pull request merges
 ```
 
-**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#fire-on-a-signal) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, agent and team lifecycle signals from what the room already watches, and workflow run signals as each run moves and ends, and anything can emit its own. Narrow a task to one branch with `--match branch=<name>`. On GitHub, `pr.behind`, `pr.conflicted`, `pr.queued`, and `pr.dequeued` also report a PR falling behind its base, gaining conflicts, or entering and leaving the merge queue. The [loop reference](./docs/reference/cli/loop.md#built-in-signals) lists when each signal fires and what it carries.
+**Wake on a signal.** A timer guesses when something will happen; a [signal](./docs/guide/loops.md#signals) is the thing itself. RimZ emits `ci.passed` and `ci.failed`, `pr.opened`, `pr.merged` and `pr.closed`, `trunk.moved`, `worktree.created` and `worktree.removed`, agent and team lifecycle signals from what the room already watches, and workflow run signals as each run moves and ends, and anything can emit its own. A task fires on the state a signal reports with `--when`, and a workflow step or a team role hears the signal itself. On GitHub, `pr.behind`, `pr.conflicted`, `pr.queued`, and `pr.dequeued` also report a PR falling behind its base, gaining conflicts, or entering and leaving the merge queue. The [loop reference](./docs/reference/cli/loop.md#built-in-signals) lists when each signal fires and what it carries.
 
 ```sh
-# Start a fixer each time CI fails on the feature branch
-rimz loop add ci-red --signal ci.failed --match branch=feature --repeat --agent codex -- \
+# Start a fixer each time CI turns red on the feature branch
+rimz loop add ci-red --when 'ci[feature]=failed' --repeat --agent codex -- \
     -w ci-red "Fix the failing checks."
 
-# Run a script once, on the next merge
-rimz loop add merged --signal pr.merged -- ./scripts/announce-release.sh
+# Run a script once, when the checkout's pull request merges
+rimz loop add merged --when pr=merged -- ./scripts/announce-release.sh
 
 # Your own signal: a git hook, a deploy script, or another agent emits it
 rimz events emit deploy.finished --json '{"env":"prod","version":"1.4.2"}'

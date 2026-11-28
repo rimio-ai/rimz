@@ -601,7 +601,7 @@ fn empty_history_hints_only_for_clock_triggers() {
             ..Default::default()
         },
         TaskEntry {
-            every: Some("1h".into()),
+            cron: Some("0 * * * *".into()),
             ..Default::default()
         },
     ] {
@@ -610,7 +610,7 @@ fn empty_history_hints_only_for_clock_triggers() {
         let text = String::from_utf8(out).unwrap();
         assert_eq!(
             text.contains("try `rimz loop fire sweep`"),
-            entry.every.is_some(),
+            entry.cron.is_some(),
             "{text}"
         );
         assert!(text.starts_with("no runs recorded"), "{text}");
@@ -2735,7 +2735,7 @@ fn interval_timing(
     let entry = TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("15m".to_owned()),
+        cron: Some("*/15 * * * *".to_owned()),
         ..TaskEntry::default()
     };
     schedule::TaskTiming::evaluate(

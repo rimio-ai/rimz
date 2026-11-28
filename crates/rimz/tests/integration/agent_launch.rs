@@ -3664,7 +3664,7 @@ fn user_shell_subagents_list_inspects_the_channel() {
         "wait-child",
         rimz::config::TaskEntry {
             root: env.project_root.clone(),
-            signal: Some("deploy.done".to_owned()),
+            fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
             wait: Some(rimz::config::TaskTarget {
                 kind: AgentKind::new_unchecked("codex"),
                 session: AgentSessionId::from("swift-child"),

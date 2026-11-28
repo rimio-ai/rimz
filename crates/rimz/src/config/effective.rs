@@ -84,9 +84,7 @@ pub enum ProjectTasksErr {
         field: &'static str,
         fix: &'static str,
     },
-    #[error(
-        "task `{task}` must repeat; set `every` or `cron`, or `signal` with `repeat = true`, for project tasks"
-    )]
+    #[error("task `{task}` must repeat; set `cron` for project tasks")]
     MustRepeat { task: String },
     #[error(transparent)]
     Schedule(#[from] ScheduleErr),

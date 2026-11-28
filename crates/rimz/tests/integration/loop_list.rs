@@ -10,7 +10,7 @@ fn task(root: &Path) -> TaskEntry {
         root: root.to_owned(),
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         ..TaskEntry::default()
     }
 }
@@ -596,7 +596,7 @@ fn show_resolves_worktree_names_and_lists_ambiguous_tasks_and_wakeups() {
         "rimz loop show card-ux-merged",
         "rimz loop show review",
         "+ 1 wake-ups",
-        "every 1h",
+        "cron `0 * * * *`",
     ] {
         assert!(text.contains(fragment), "missing {fragment}: {text}");
     }
@@ -735,13 +735,13 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
     let env = Env::new();
     let clock = task(&env.project_root);
     let one_off = TaskEntry {
-        every: None,
+        cron: None,
         fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
         ..clock.clone()
     };
     let resident = TaskEntry {
-        every: None,
-        signal: Some("pr.merged".into()),
+        cron: None,
+        when: Some(vec!["pr=merged".into()]),
         ..clock.clone()
     };
     config(
@@ -753,8 +753,6 @@ fn lifecycle_sections_and_retired_one_offs_are_explicit() {
             (
                 "fleet".into(),
                 TaskEntry {
-                    signal: None,
-                    when: Some(vec!["pr=merged".into()]),
                     repeat: true,
                     each_worktree: true,
                     ..resident
@@ -942,7 +940,7 @@ fn disabled_one_off_displays_its_state() {
         Tasks(BTreeMap::from([(
             "disabled".into(),
             TaskEntry {
-                every: None,
+                cron: None,
                 fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
                 ..task(&env.project_root)
             },
@@ -960,7 +958,7 @@ fn disabled_one_off_displays_its_state() {
 fn plain_one_off_ignores_a_former_resident_launch() {
     let env = Env::new();
     let entry = TaskEntry {
-        every: None,
+        cron: None,
         fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
         ..task(&env.project_root)
     };
@@ -989,7 +987,7 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
             (
                 "and".into(),
                 TaskEntry {
-                    every: None,
+                    cron: None,
                     when: Some(vec!["pr=merged && ci=passed && pr.queue=queued".into()]),
                     ..task(&env.project_root)
                 },
@@ -997,7 +995,7 @@ fn condition_counts_and_unhealthy_wake_ups_are_visible() {
             (
                 "or".into(),
                 TaskEntry {
-                    every: None,
+                    cron: None,
                     when: Some(vec!["pr=merged || ci=passed".into()]),
                     ..task(&env.project_root)
                 },
@@ -1291,11 +1289,11 @@ fn other_room_hints_act_on_that_room() {
     );
     write_project_config(
         &env,
-        "[tasks.local]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.local]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
     );
     write_project_config_at(
         &other,
-        "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
     );
     let instances = env
         .state_path_for(&other)
@@ -1460,6 +1458,7 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
                         handle: "@coder#feature".into(),
                     }),
                     signal: Some(signal.into()),
+                    team: Some("forge#main".parse().unwrap()),
                     matches: Some(BTreeMap::from([(
                         "path".into(),
                         checkout.to_string_lossy().into_owned(),
@@ -1504,7 +1503,7 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
         text.contains("ci.failed pr.{conflicted,dequeued,merged}"),
         "{text}"
     );
-    assert_eq!(text.matches("sweep ·").count(), 1, "{text}");
+    assert_eq!(text.matches("team forge#main ·").count(), 1, "{text}");
     assert!(text.contains("in 1 worktree\n"), "{text}");
     assert!(!text.contains("rimz loop list --all"), "{text}");
     assert!(
@@ -1518,18 +1517,6 @@ fn subscriptions_collapse_but_json_keeps_real_names() {
         serde_json::from_str(&loop_ok(&env, &["loop", "list", "--json"])).unwrap();
     assert_eq!(value["rooms"][0]["tasks"].as_array().unwrap().len(), 4);
     assert_eq!(value["rooms"][0]["tasks"][0]["name"], "generated-0");
-
-    let mut tasks = read_loop_instances(&env);
-    let mut named = tasks.0["generated-0"].clone();
-    named.loop_task = None;
-    tasks.0.insert("user-one".into(), named.clone());
-    tasks.0.insert("user-two".into(), named);
-    write_loop_instances(&env, tasks);
-    let text = loop_ok(&env, &["loop", "list", "--all"]);
-    assert!(
-        text.contains("user-one") && text.contains("user-two") && text.contains("6 tasks"),
-        "{text}"
-    );
 }
 
 #[test]
@@ -1553,6 +1540,7 @@ fn wake_ups_group_each_owner_once_across_states_and_suffixes() {
                         handle: "@coder#feature".into(),
                     }),
                     signal: Some(format!("ci.signal{index}")),
+                    team: Some("forge#main".parse().unwrap()),
                     label: (name == "labelled").then(|| "gate docs".into()),
                     ..TaskEntry::default()
                 },
@@ -1585,7 +1573,7 @@ fn wake_ups_group_each_owner_once_across_states_and_suffixes() {
         ]),
     );
     let text = loop_ok(&env, &["loop", "list", "--all"]);
-    assert_eq!(text.matches("sweep ·").count(), 1, "{text}");
+    assert_eq!(text.matches("team forge#main ·").count(), 1, "{text}");
     assert!(
         text.contains("ci.{signal0,signal1,signal2,signal3}"),
         "{text}"
@@ -1634,7 +1622,7 @@ fn inactive_tasks_do_not_request_attention_for_old_failures() {
     );
     write_project_config(
         &env,
-        "[tasks.not-enabled]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+        "[tasks.not-enabled]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
     );
     loop_ok(&env, &["trust", "grant"]);
     write_loop_run_records(
@@ -1745,7 +1733,7 @@ fn malformed_task_record_warns_without_hiding_local_or_remote_tasks() {
 fn each_worktree_uses_acting_history_and_launch_count() {
     let env = Env::new();
     let mut entry = task(&env.project_root);
-    entry.every = None;
+    entry.cron = None;
     entry.once_per_checkout = Some(true);
     entry.each_worktree = true;
     entry.when = Some(vec!["pr=merged".into()]);
@@ -2047,7 +2035,7 @@ fn timer_fixture(code: i32, units: bool) -> (Env, PathBuf, PathBuf) {
             (
                 "once".into(),
                 TaskEntry {
-                    every: None,
+                    cron: None,
                     fire_at: Some("2099-06-15T12:00:00Z".parse().unwrap()),
                     ..clock.clone()
                 },
@@ -2055,8 +2043,9 @@ fn timer_fixture(code: i32, units: bool) -> (Env, PathBuf, PathBuf) {
             (
                 "merged".into(),
                 TaskEntry {
-                    every: None,
-                    signal: Some("pr.merged".into()),
+                    cron: None,
+                    when: Some(vec!["pr=merged".into()]),
+                    repeat: true,
                     ..clock
                 },
             ),
@@ -2230,7 +2219,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         let mut entry = match name.as_str() {
             "lost" | "parked-lost" => wake(root),
             "invalid" => TaskEntry {
-                every: Some("soon".into()),
+                cron: Some("soon".into()),
                 ..task(root)
             },
             "running-each" => TaskEntry {
@@ -2251,7 +2240,7 @@ fn every_cause_reads_alike_in_list_and_reader() {
         if name == "blocked" {
             write_project_config_at(
                 root,
-                "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\nevery = \"1h\"\n",
+                "[tasks.blocked]\nargs = [\"true\"]\ntimeout = \"1m\"\ncron = \"0 * * * *\"\n",
             );
             continue;
         }
@@ -3282,7 +3271,7 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
         ..Default::default()
     };
     seed_agent_launch(&env, &env.project_root, "coder", coder, None);
-    let check = ["--every", "1h", "--", "true"];
+    let check = ["--cron", "0 * * * *", "--", "true"];
     let booking = |name: &'static str| [&[name][..], &check[..]].concat();
 
     add_as(&env, Some("launch_coder"), &booking("booked"));
@@ -3311,7 +3300,7 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
     add_as(
         &env,
         Some("launch_coder"),
-        &["shared", "--project", "--every", "1h", "--", "true"],
+        &["shared", "--project", "--cron", "0 * * * *", "--", "true"],
     );
 
     let project: toml::Value = toml::from_str(
@@ -3373,8 +3362,8 @@ fn an_agent_booking_records_its_chain_and_shows_its_booker() {
             "elsewhere",
             "--root",
             other_root,
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--",
             "true",
         ],

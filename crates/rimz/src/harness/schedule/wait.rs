@@ -1104,7 +1104,7 @@ impl WaitRequest {
 pub fn at_refusal(error: ScheduleErr, field: &str) -> anyhow::Error {
     match error {
         ScheduleErr::BadOnceAt { value, .. } => anyhow!(
-            "{field} `{value}` is not a time; use `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`"
+            "{field} `{value}` is neither a delay above zero (`30m`, `2h`) nor a clock time (`HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`)"
         ),
         ScheduleErr::PastOnceAt { value, .. } => {
             anyhow!("{field} `{value}` is in the past; choose a later time")

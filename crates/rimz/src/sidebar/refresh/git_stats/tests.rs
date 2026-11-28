@@ -492,9 +492,9 @@ fn live_forge_signal_tasks_hold_their_literal_branch_under_the_project_root() {
                 .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
                 .collect(),
         ),
+        // A row on a signal is a team binding's, the one writer of such a row.
+        team: Some("binding#main".parse().unwrap()),
         repeat: true,
-        args: vec!["true".to_owned()],
-        timeout: Some("1m".to_owned()),
         ..TaskEntry::default()
     };
     let tasks = Tasks(BTreeMap::from([
@@ -511,6 +511,9 @@ fn live_forge_signal_tasks_hold_their_literal_branch_under_the_project_root() {
                 repeat: false,
                 when: Some(vec!["ci[sig/a]=passed".to_owned()]),
                 dir: Some(root.path().to_owned()),
+                team: None,
+                args: vec!["true".to_owned()],
+                timeout: Some("1m".to_owned()),
                 ..signal("", &[])
             },
         ),

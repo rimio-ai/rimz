@@ -77,7 +77,7 @@ fn a_briefing_lists_only_the_waits_its_agent_armed_itself() {
         .replace_machine(
             "nightly-check",
             &crate::config::TaskEntry {
-                every: Some("30m".to_owned()),
+                cron: Some("*/30 * * * *".to_owned()),
                 prompt: Some("check the build".to_owned()),
                 wait: Some(target.clone()),
                 root: dir.path().to_path_buf(),

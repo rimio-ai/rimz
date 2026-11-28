@@ -196,6 +196,26 @@ impl CalendarAt {
     }
 }
 
+/// A one-shot time as `at` takes it: a delay above zero (`30m`, `2h`) or a clock time. The two
+/// forms never meet, since a clock time always holds `:` and a delay never does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OnceAt {
+    Delay(Duration),
+    Clock(CalendarAt),
+}
+
+impl OnceAt {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
+        if raw.contains(':') {
+            return CalendarAt::parse(raw).map(Self::Clock);
+        }
+        parse_compact_duration(raw)
+            .ok()
+            .filter(|delay| !delay.is_zero())
+            .map(Self::Delay)
+    }
+}
+
 /// Failures while parsing RimZ's compact duration and wall-clock inputs.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum TimeInputErr {

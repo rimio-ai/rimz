@@ -17,7 +17,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest as _, Sha256};
 
 use crate::harness::when::WhenExpr;
-use crate::utils::time::CalendarAt;
+use crate::utils::time::OnceAt;
 
 mod template;
 mod typescript;
@@ -416,10 +416,7 @@ pub(in crate::harness) struct Workflow {
 #[serde(rename_all = "lowercase")]
 pub enum ScheduleTrigger {
     At,
-    In,
-    Every,
     Cron,
-    Signal,
     When,
 }
 
@@ -452,21 +449,19 @@ pub struct Schedule {
     pub name: String,
     /// What fires the booking.
     pub trigger: ScheduleTrigger,
-    /// The trigger's argument: a clock time, delay, interval, cron expression, signal name, or
-    /// condition.
+    /// The trigger's argument: for `at`, a delay (`30m`, `2h`) or a clock time (`HH:MM`,
+    /// `<weekday> HH:MM`, `YYYY-MM-DD HH:MM`); for `cron`, a five-field expression; for `when`,
+    /// a condition.
     pub value: String,
     /// What each fire launches.
     pub tool: ScheduleTool,
     /// The object `tool` takes as a call of its own, without `worktree` (pass top-level
     /// `worktree`).
     pub arguments: Map<String, Value>,
-    /// `signal` only: payload fields that must equal these values (`*` matches any value).
-    #[serde(rename = "match")]
-    pub matches: Option<BTreeMap<String, String>>,
     /// `when` only: how long the condition must hold before firing.
     #[serde(rename = "for")]
     pub hold: Option<String>,
-    /// `signal` or `when` only: fire on every match rather than once (default once).
+    /// `when` only: fire each time the condition comes to hold rather than once (default once).
     #[serde(default)]
     pub repeat: bool,
     /// RimZ-owned worktree for every fire, created at the first fire when missing.
@@ -677,28 +672,17 @@ impl Block for Schedule {
     type Result = ScheduleResult;
 
     fn refusal(&self, caller: Caller) -> Option<String> {
-        use ScheduleTrigger::{At, Cron, Every, In, Signal, When};
+        use ScheduleTrigger::{At, Cron, When};
         if let Some(blank) = blank_field(&[("name", &self.name)]) {
             return Some(blank);
-        }
-        if self.matches.is_some() && self.trigger != Signal {
-            return Some("`match` takes a `signal` trigger".to_owned());
-        }
-        if self
-            .matches
-            .as_ref()
-            .is_some_and(|matches| matches.contains_key(""))
-        {
-            return Some("a `match` key is empty".to_owned());
         }
         if self.hold.is_some() && self.trigger != When {
             return Some("`for` takes a `when` trigger".to_owned());
         }
-        let by_clock = matches!(self.trigger, Every | Cron);
-        if self.repeat && !matches!(self.trigger, Signal | When) {
-            return Some("`repeat` takes a `signal` or `when` trigger".to_owned());
+        if self.repeat && self.trigger != When {
+            return Some("`repeat` takes a `when` trigger".to_owned());
         }
-        if self.overlap.is_some() && !by_clock && !self.repeat {
+        if self.overlap.is_some() && !self.repeats() {
             return Some("`overlap` takes a repeating trigger".to_owned());
         }
         if let Some(name) = self.worktree.as_deref() {
@@ -716,19 +700,12 @@ impl Block for Schedule {
         {
             return Some(reason);
         }
-        if let Some(reason) = self.matches.iter().flatten().find_map(|(key, value)| {
-            nul_refusal("match", Some(key)).or_else(|| nul_refusal("match", Some(value)))
-        }) {
-            return Some(reason);
-        }
         if self.arguments.contains_key("worktree") {
             return Some("`arguments.worktree`: pass top-level `worktree` instead".to_owned());
         }
         let value_refusal = match self.trigger {
             At => at_refusal("value", &self.value),
-            In | Every => delay_refusal("value", Some(&self.value)),
             When => when_refusal("value", &self.value),
-            Signal => blank_field(&[("value", &self.value)]),
             // The cron grammar lives with the loop scheduler, which the booking reaches.
             Cron => blank_field(&[("value", &self.value)]),
         };
@@ -751,7 +728,7 @@ impl Block for Now {
 impl Schedule {
     /// Whether the booking's trigger can fire more than once.
     pub(crate) fn repeats(&self) -> bool {
-        matches!(self.trigger, ScheduleTrigger::Every | ScheduleTrigger::Cron) || self.repeat
+        self.trigger == ScheduleTrigger::Cron || self.repeat
     }
 
     /// `arguments`, with top-level `worktree` merged in, as the launch each fire stores. A fire
@@ -949,8 +926,8 @@ pub(in crate::harness) fn reads(
     Ok(condition.truth(readings))
 }
 
-/// A duration in the loop scheduler's grammar, which a booking's `in`, `every`, and `for` reach:
-/// more than zero, with no cap.
+/// A duration in the loop scheduler's grammar, which a booking's `for` reaches: more than zero,
+/// with no cap.
 fn delay_refusal(field: &str, raw: Option<&str>) -> Option<String> {
     match crate::utils::time::parse_compact_duration(raw?) {
         Err(error) => Some(format!("`{field}`: {error}")),
@@ -976,8 +953,7 @@ fn interval_refusal(field: &str, raw: Option<&str>) -> Option<String> {
         return Some(format!("`{field}`: must be greater than zero"));
     }
     let day = std::time::Duration::from_secs(24 * 60 * 60);
-    (matches!(field, "every" | "check_in") && interval >= day)
-        .then(|| format!("`{field}`: must be less than 24h"))
+    (interval >= day).then(|| format!("`{field}`: must be less than 24h"))
 }
 
 fn when_refusal(field: &str, condition: &str) -> Option<String> {
@@ -985,9 +961,12 @@ fn when_refusal(field: &str, condition: &str) -> Option<String> {
     Some(format!("`{field}`: {error}"))
 }
 
-fn at_refusal(field: &str, clock: &str) -> Option<String> {
-    CalendarAt::parse(clock).is_none().then(|| {
-        format!("`{field}`: `{clock}` is not `HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`")
+fn at_refusal(field: &str, raw: &str) -> Option<String> {
+    OnceAt::parse(raw).is_none().then(|| {
+        format!(
+            "`{field}`: `{raw}` is neither a delay above zero (`30m`, `2h`) nor a clock time \
+             (`HH:MM`, `<weekday> HH:MM`, or `YYYY-MM-DD HH:MM`)"
+        )
     })
 }
 

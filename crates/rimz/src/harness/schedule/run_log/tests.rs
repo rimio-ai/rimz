@@ -1261,7 +1261,7 @@ fn a_workflow_report_strikes_or_resets_once_per_run() {
     let entry = crate::config::TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         root: root.path().into(),
         ..crate::config::TaskEntry::default()
     };
@@ -1396,7 +1396,7 @@ fn a_run_that_gave_up_on_capacity_reports_a_neutral_throttle_skip() {
     let entry = crate::config::TaskEntry {
         args: vec!["true".to_owned()],
         timeout: Some("1m".to_owned()),
-        every: Some("1h".into()),
+        cron: Some("0 * * * *".into()),
         root: root.path().into(),
         ..crate::config::TaskEntry::default()
     };

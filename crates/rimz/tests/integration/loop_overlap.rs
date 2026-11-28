@@ -13,7 +13,7 @@ fn fixture(policy: &str, limit: Option<usize>) -> Env {
     write_loop_config(
         &env,
         &format!(
-            "[tasks.busy]\nroot={:?}\nargs=['true']\ntimeout='1m'\nsignal='trunk.moved'\nrepeat=true\noverlap={policy:?}\n{}",
+            "[tasks.busy]\nroot={:?}\nargs=['true']\ntimeout='1m'\ncron='0 0 1 1 *'\noverlap={policy:?}\n{}",
             env.project_root,
             limit
                 .map(|limit| format!("overlap-limit={limit}\n"))
@@ -439,37 +439,6 @@ fn coalesce_records_each_arrival_and_drains_the_merged_newest_trigger() {
 }
 
 #[test]
-fn one_signal_firing_stamps_all_waiting_subscribers_identically() {
-    let env = fixture("coalesce", None);
-    let config = std::fs::read_to_string(env.rimz_home().join("loop.toml"))
-        .unwrap()
-        .replace("trunk.moved", "build.moved");
-    write_loop_config(
-        &env,
-        &format!(
-            "{config}\n{}",
-            config.replace("[tasks.busy]", "[tasks.other]")
-        ),
-    );
-    let _busy = holder(&env);
-    let _other = hold_loop_run_lock(
-        &task_run_lock_path(&env, "other"),
-        &RunLockInfo {
-            pid: 42_424,
-            started_at: Timestamp::now(),
-        },
-    );
-    loop_ok(&env, &["events", "emit", "build.moved"]);
-    wait_for_loop_run_records(&env, "both signal subscribers deferred", |records| {
-        records.len() == 2
-    });
-    assert_eq!(
-        show(&env, "busy")["backlog"]["triggers"][0]["arrived_at"],
-        show(&env, "other")["backlog"]["triggers"][0]["arrived_at"]
-    );
-}
-
-#[test]
 fn coalesce_drains_the_latest_fired_signal_when_runners_arrive_backwards() {
     let env = fixture("coalesce", None);
     let lock = holder(&env);
@@ -608,12 +577,12 @@ fn drain_drops_a_task_broken_by_hand_edit_without_a_row() {
 #[test]
 fn drain_drops_definitions_that_cannot_enqueue_without_a_row() {
     for definition in [
-        "args=['true']\ntimeout='1m'\nevery='1h'",
-        "args=['true']\ntimeout='1m'\nevery='1h'\noverlap='skip'",
-        "agent='claude'\nprompt='work'\nevery='1h'\nstay=true\neach-worktree=true",
+        "args=['true']\ntimeout='1m'\ncron='0 * * * *'",
+        "args=['true']\ntimeout='1m'\ncron='0 * * * *'\noverlap='skip'",
+        "agent='claude'\nprompt='work'\ncron='0 * * * *'\nstay=true\neach-worktree=true",
         "args=['true']\ntimeout='1m'\nwhen=['pr=merged']",
-        "wait={kind='claude',session='s',handle='@claude'}\nevery='1h'\nprompt='work'",
-        "workflow='missing'\nevery='1h'",
+        "wait={kind='claude',session='s',handle='@claude'}\ncron='0 * * * *'\nprompt='work'",
+        "workflow='missing'\ncron='0 * * * *'",
         "args=['true']\ntimeout='1m'",
     ] {
         let env = fixture("coalesce", None);
@@ -719,8 +688,8 @@ fn catalog_rename_moves_backlog_and_redefinition_and_removal_clear_it() {
                         "loop",
                         "add",
                         "busy",
-                        "--every",
-                        "1h",
+                        "--cron",
+                        "0 * * * *",
                         "--overlap",
                         "coalesce",
                         "--",
@@ -757,8 +726,8 @@ fn overlap_flags_persist_for_machine_and_project_tasks() {
             "loop",
             "add",
             "busy",
-            "--every",
-            "1h",
+            "--cron",
+            "0 * * * *",
             "--overlap",
             "queue",
             "--overlap-limit",
@@ -830,7 +799,7 @@ fn add_refuses_overlap_on_unsupported_shapes_and_invalid_limits() {
             .rimz()
             .args(
                 [
-                    vec!["loop", "add", "busy", "--every", "1h"],
+                    vec!["loop", "add", "busy", "--cron", "0 * * * *"],
                     flags,
                     vec!["--", "true"],
                 ]
@@ -851,7 +820,7 @@ fn loaded_machine_and_project_tasks_refuse_invalid_overlap_fields() {
     for project in [false, true] {
         let env = Env::new();
         env.record(&env.project_root);
-        let fields = "[tasks.busy]\nargs=['true']\ntimeout='1m'\nevery='1h'\noverlap='coalesce'\noverlap-limit=2\n";
+        let fields = "[tasks.busy]\nargs=['true']\ntimeout='1m'\ncron='0 * * * *'\noverlap='coalesce'\noverlap-limit=2\n";
         if project {
             std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
             std::fs::write(env.project_root.join(".rimz/config.toml"), fields).unwrap();
@@ -888,7 +857,7 @@ fn loaded_machine_and_project_tasks_refuse_invalid_overlap_fields() {
         for project in [false, true] {
             let env = Env::new();
             env.record(&env.project_root);
-            let fields = format!("[tasks.busy]\n{row}\nevery='1h'\noverlap='allow'\n");
+            let fields = format!("[tasks.busy]\n{row}\ncron='0 * * * *'\noverlap='allow'\n");
             if project {
                 std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
                 std::fs::write(env.project_root.join(".rimz/config.toml"), fields).unwrap();
@@ -921,7 +890,7 @@ fn drain_rechecks_project_trust_and_records_its_refusal() {
     std::fs::create_dir_all(env.project_root.join(".rimz")).unwrap();
     std::fs::write(
         env.project_root.join(".rimz/config.toml"),
-        "[tasks.busy]\nargs=['true']\ntimeout='1m'\nsignal='trunk.moved'\nrepeat=true\noverlap='coalesce'\n",
+        "[tasks.busy]\nargs=['true']\ntimeout='1m'\ncron='0 0 1 1 *'\noverlap='coalesce'\n",
     )
     .unwrap();
     loop_ok(&env, &["loop", "enable", "busy"]);

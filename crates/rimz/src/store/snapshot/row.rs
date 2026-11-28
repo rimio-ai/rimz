@@ -875,7 +875,7 @@ pub struct BookingWait {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub blocker: Option<BookingBlocker>,
     /// A trigger that is no condition, in the loop's own words (`once at 2026-11-14 03:00`,
-    /// `every 30m`).
+    /// ``cron `*/30 * * * *` ``).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timing: Option<String>,
     /// Every unmet term joins a sibling on the card that has not fired: the entry fires

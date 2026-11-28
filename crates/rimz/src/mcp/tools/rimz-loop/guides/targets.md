@@ -4,7 +4,7 @@ Every fire runs its target through the `rimz` CLI rather than in-process, so NUL
 
 A missing worktree is created in the project root's repository rather than your checkout.
 
-A `signal` or `when` fire appends its evidence line (``Rule `ci-fix` fired here. ci.failed on feat-x #91 @88824c2``) to an agent's or team leader's prompt and to workflow agent and message steps, and passes it as `RIMZ_LOOP_TRIGGER` to workflow commands and checks, so the prompt need not restate what fired it.
+A `when` fire appends its evidence line (``Rule `ci-fix` fired here. ci: failed``) to an agent's or team leader's prompt and to workflow agent and message steps, and passes it as `RIMZ_LOOP_TRIGGER` to workflow commands and checks, so the prompt need not restate what fired it.
 
 ## Agent
 

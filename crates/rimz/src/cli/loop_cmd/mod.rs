@@ -186,39 +186,20 @@ struct AddArgs {
     /// Refused: fire on a condition with `--when` instead.
     #[arg(long, value_name = "DUR")]
     until: Option<String>,
-    /// One-shot time: `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`.
-    #[arg(long, conflicts_with_all = ["every", "cron", "in_after", "signal"])]
+    /// Fire once: after a delay such as `30m` or `3d`, rounded up to the next minute, or at a
+    /// clock time `HH:MM`, `YYYY-MM-DD HH:MM`, or `<weekday> HH:MM`.
+    #[arg(long, conflicts_with = "cron")]
     at: Option<String>,
-    /// Repeat interval, such as `15m` or `2h`; daily and weekday times take --cron.
-    #[arg(long, conflicts_with_all = ["at", "cron", "in_after", "signal"])]
-    every: Option<String>,
     /// Five-field cron expression (names, steps, and `@daily`-style macros accepted).
-    #[arg(long, conflicts_with_all = ["at", "every", "in_after", "signal"])]
+    #[arg(long, conflicts_with = "at")]
     cron: Option<String>,
-    /// Fire once after a duration such as `30m` or `3d`, rounded up to the next minute.
-    #[arg(
-        long = "in",
-        value_name = "DUR",
-        conflicts_with_all = ["at", "every", "cron", "signal"]
-    )]
-    in_after: Option<String>,
-    /// Fire when a signal with this name is emitted.
-    #[arg(
-        long,
-        value_name = "NAME",
-        conflicts_with_all = ["at", "every", "cron", "in_after"]
-    )]
-    signal: Option<String>,
     /// Fire when a state expression holds; repeated clauses are ANDed.
-    #[arg(long, value_name = "EXPR", conflicts_with_all = ["at", "every", "cron", "in_after", "signal", "until"])]
+    #[arg(long, value_name = "EXPR", conflicts_with_all = ["at", "cron", "until"])]
     when: Vec<String>,
     /// Require the whole condition to hold continuously for this duration.
     #[arg(long = "for", value_name = "DUR", requires = "when")]
     hold: Option<String>,
-    /// Require a top-level signal payload field to equal this value.
-    #[arg(long = "match", value_name = "KEY=VALUE", requires = "signal")]
-    matches: Vec<String>,
-    /// Keep a --signal or --when task after a fire, so it fires again; without it, it fires once.
+    /// Keep a --when task after a fire, so it fires again; without it, it fires once.
     #[arg(long)]
     repeat: bool,
     /// Start at most one successful scheduled run per checkout; refused on a one-shot.

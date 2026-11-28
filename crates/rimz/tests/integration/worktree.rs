@@ -944,7 +944,7 @@ fn loop_tasks_hold_sweep_listing_and_cleanup_but_not_explicit_removal() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\n",
+            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\ncron = '0 * * * *'\n",
             env.project_root.display(),
             path.display()
         ),

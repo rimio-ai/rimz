@@ -697,12 +697,12 @@ fn gc_reaps_dead_loop_delivery_schedule() {
              wait = {{ kind = \"claude\", session = \"sess-dead\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
-             every = \"1h\"\n\
+             cron = \"0 * * * *\"\n\
              [tasks.ended]\n\
              wait = {{ kind = \"claude\", session = \"sess-ended\", handle = \"@claude\" }}\n\
              prompt = \"wake up\"\n\
              root = \"{}\"\n\
-             every = \"1h\"\n",
+             cron = \"0 * * * *\"\n",
             env.project_root.display(),
             env.project_root.display()
         ),
@@ -760,7 +760,7 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
         "legacy-wake": {
             "prompt": "wake up",
             "root": root,
-            "every": "1h",
+            "cron": "0 * * * *",
         },
         "team-forge-live-coder-ci-failed": live,
     });
@@ -775,7 +775,9 @@ fn gc_reaps_instance_rows_without_an_action_and_keeps_user_rows() {
     let config_path = config_dir.join("loop.toml");
     std::fs::write(
         &config_path,
-        format!("[tasks.actionless]\nprompt = \"fix me\"\nroot = \"{root}\"\nevery = \"1h\"\n"),
+        format!(
+            "[tasks.actionless]\nprompt = \"fix me\"\nroot = \"{root}\"\ncron = \"0 * * * *\"\n"
+        ),
     )
     .expect("write loop config");
 
@@ -1388,7 +1390,7 @@ fn gc_keeps_loop_root_until_task_is_removed() {
     std::fs::write(
         env.rimz_home().join("loop.toml"),
         format!(
-            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\nevery = '1h'\n",
+            "[tasks.nightly]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ncron = '0 * * * *'\n",
             worktree.display()
         ),
     )
@@ -1430,7 +1432,7 @@ fn gc_fanout_does_not_pin_its_arming_directory() {
         .assert()
         .success();
     let worktree = env.home_root.join("project-worktrees/followup");
-    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\nevery = '1h'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
+    std::fs::write(env.rimz_home().join("loop.toml"), format!("[tasks.fanout]\nargs = ['true']\ntimeout = '1m'\nroot = '{}'\ndir = '{}'\ncron = '0 * * * *'\neach-worktree = true\n", env.project_root.display(), worktree.display())).unwrap();
     env.rimz()
         .arg("gc")
         .assert()

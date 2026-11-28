@@ -1428,9 +1428,9 @@ fn replacing_implicit_parent_keeps_harness_template_comments() {
 
 #[test]
 fn removing_loop_tasks_keeps_header_comments() {
-    let one = "[tasks.one]\ncheck = \"true\"\nevery = \"1h\"\n";
-    let two = "[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n";
-    let three = "\n# Third task\n[tasks.three]\ncheck = \"true\"\nevery = \"1d\"\n";
+    let one = "[tasks.one]\ncheck = \"true\"\ncron = \"0 * * * *\"\n";
+    let two = "[tasks.two]\ncheck = \"true\"\ncron = \"0 0 * * 0\"\n";
+    let three = "\n# Third task\n[tasks.three]\ncheck = \"true\"\ncron = \"0 0 * * *\"\n";
     let comments = "# every = \"30m\"   # faster cadence during release week\n# Weekly cleanup\n";
     let header = "# Supervised scheduled turns without a task-specific timeout use two hours.\n\
                   # default-timeout = \"2h\"\n\n";
@@ -1542,11 +1542,11 @@ fn set_document_value_groups_new_tasks_with_their_section() {
 #[test]
 fn replacing_loop_tasks_keeps_child_header_comments() {
     let heading = "# Machine loops\n\n# One note\n[tasks.one] # header note\n";
-    let old = "check = \"true\"\nevery = \"1h\"\n\
+    let old = "check = \"true\"\ncron = \"0 * * * *\"\n\
                # match note\n[tasks.one.match]\nexit = 0\n\
                # judge note\n[[tasks.one.judge]]\nagent = \"claude\"\nprompt = \"ready?\"\n";
     let comments = "# match note\n# judge note\n";
-    let next = "\n# Two note\n[tasks.two]\ncheck = \"true\"\nevery = \"1w\"\n";
+    let next = "\n# Two note\n[tasks.two]\ncheck = \"true\"\ncron = \"0 0 * * 0\"\n";
     let mut rendered = Vec::new();
     let mut expected = Vec::new();
     for tail in [next, ""] {
@@ -1554,7 +1554,7 @@ fn replacing_loop_tasks_keeps_child_header_comments() {
             let mut doc: DocumentMut = format!("{heading}{old}{tail}").parse().unwrap();
             let mut replacement = Table::new();
             replacement.insert("check", toml_edit::value("false"));
-            replacement.insert("every", toml_edit::value("2h"));
+            replacement.insert("cron", toml_edit::value("0 */2 * * *"));
             let child = if keep_match {
                 let mut matches = Table::new();
                 matches.insert("exit", toml_edit::value(1));
@@ -1571,7 +1571,7 @@ fn replacing_loop_tasks_keeps_child_header_comments() {
             .unwrap();
             rendered.push(doc.to_string());
             expected.push(format!(
-                "{heading}check = \"false\"\nevery = \"2h\"\n{child}{comments}{tail}"
+                "{heading}check = \"false\"\ncron = \"0 */2 * * *\"\n{child}{comments}{tail}"
             ));
         }
     }
@@ -2338,7 +2338,7 @@ fn set_document_value_renders_inline_tables_as_table_blocks() {
     let mut doc = DocumentMut::new();
     let path = document_key_for_set(&parse_key("loop.tasks").expect("key"));
     let value = parse_edit_value(
-        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", every = "15m" }, self_wait = { wait = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", every = "1h" } }"#,
+        r#"{ pr_watch = { agent = "codex", prompt = "check CI", root = "/r", cron = "*/15 * * * *" }, self_wait = { wait = { kind = "claude", session = "s1", handle = "@planner" }, prompt = "resume", root = "/r", cron = "0 * * * *" } }"#,
     );
 
     set_document_value(&mut doc, &path, value).expect("set tasks");
@@ -3921,4 +3921,34 @@ fn unset_refuses_what_set_refuses_and_named_accounts() {
         std::fs::read_to_string(&core).unwrap(),
         "[accounts.claude.work]\n"
     );
+}
+
+#[test]
+fn setting_a_removed_trigger_on_a_task_is_refused_with_its_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let files =
+        MachineConfigFiles::from_paths(dir.path().join("config.toml"), dir.path().join("agents"));
+    let editor = ConfigEditor::new(files);
+    let signal = "a task no longer fires on `signal`: fire on a state with `when`, or have a \
+                  workflow `subscribe` to the signal";
+    for (field, value, detail) in [
+        (
+            "every",
+            "1h",
+            "a task no longer fires on `every`: write the interval as a `cron` expression \
+             (`*/30 * * * *` for every 30 minutes)",
+        ),
+        (
+            "in",
+            "1h",
+            "a task no longer fires on `in`: write the delay as `rimz loop add --at`",
+        ),
+        ("signal", "ci.failed", signal),
+        ("match", "{ branch = \"main\" }", signal),
+    ] {
+        let key = format!("loop.tasks.x.{field}");
+        let err = editor.set(&key, value).expect_err(field);
+        assert_eq!(err.to_string(), format!("{key}: {detail}"));
+    }
+    assert!(!dir.path().join("loop.toml").exists(), "nothing is written");
 }
