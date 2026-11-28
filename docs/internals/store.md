@@ -50,6 +50,7 @@ Four boundaries decide where new code goes:
 | [`run.rs`](../../crates/rimz/src/store/run.rs) | `RunRecord` and `RunStatus`, the durable codec, and `wake_run`. |
 | [`call.rs`](../../crates/rimz/src/store/call.rs) | `CallRecord`, one per launch an `agent` or `team` call gave a `schema` or a `timeout`, under `owned/calls/`: its codec, the locked create and read-modify-write, and the listing, which skips an unreadable record. The harness owns what the record means ([scripting.md](./harness/scripting.md#call-answers-and-timeouts)). |
 | [`workflow.rs`](../../crates/rimz/src/store/workflow.rs) | Workflow record and append-only journal codecs. The harness owns the locked transitions ([workflow.md](./harness/workflow.md)). |
+| [`workflow_run.rs`](../../crates/rimz/src/store/workflow_run.rs) | A script workflow run's record under `owned/workflow-runs/<id>/`, version 1, with its answer lines (`answers.<generation>.jsonl`, a result over 64 KiB in its own file under `results/`), its journal, and the sealed copies of its scripts under `files/<generation>/`. The record names how many bytes of each appended file it covers, and the next write cuts the file back to that length before it appends. The harness owns what the record means (`crates/rimz/src/harness/workflow_run/mod.rs`). |
 | [`sidecar.rs`](../../crates/rimz/src/store/sidecar.rs) | The stat-gated latest-wins sidecar store behind [`agent_context.rs`](../../crates/rimz/src/store/agent_context.rs), [`subagent_context.rs`](../../crates/rimz/src/store/subagent_context.rs), and [`mod_checkin.rs`](../../crates/rimz/src/store/mod_checkin.rs). |
 | [`mod_checkin.rs`](../../crates/rimz/src/store/mod_checkin.rs) | The latest-wins per-session check-in a provider mod's report upserts (mod version, provider version, report time), one sidecar per `(kind, agent_id)` under `live/mod_checkin/`, read by `rimz doctor`. |
 | [`active_time.rs`](../../crates/rimz/src/store/active_time.rs) | The per-session estimated active-time accumulator, serialized by per-record flocks. |
@@ -149,6 +150,7 @@ owned/agents/<handle>/scratch/                per-handle scratch
 owned/runs/<run_id>.json                      supervised-run records
 owned/calls/<launch_id>.json                  agent and team call records: schema, answer, deadline
 owned/workflows/<run-id>/                     live workflow record, inline definition root, journal and work directory
+owned/workflow-runs/<id>/                     a script workflow run's record, answer lines, journal, script copies, step directories
 owned/finished-workflows/<run-id>/            an ended run's whole home, moved, with its saved history.txt
 tmp/<handle>/, tmp/_unnamed/                  per-agent temp units
 tmp/_upload-<id>/                             one remote paste upload's files
@@ -180,6 +182,7 @@ This page owns the log, the caches derived from it, hook ingress, and the worksp
 | `owned/runs/` | [scripting.md](./harness/scripting.md#the-record) |
 | `owned/calls/` | [mcp.md](../reference/cli/mcp.md#hand-in-an-answer), `crates/rimz/src/store/call.rs::CallRecord` |
 | `owned/workflows/`, `owned/finished-workflows/` | [workflow.md](./harness/workflow.md#storage-and-isolation-boundary) |
+| `owned/workflow-runs/` | `crates/rimz/src/store/workflow_run.rs::Record` |
 | `records/loop-instances.json`, `out/<reader>/shell-*.output` | [loops.md](./harness/loops.md#where-tasks-live) |
 | `records/idle-stop.json` | [loops.md](./harness/loops.md#recovery-the-host-runs) |
 | `records/raised.json` | [Raised attention](#raised-attention) below |

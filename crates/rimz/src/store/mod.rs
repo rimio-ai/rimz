@@ -57,6 +57,7 @@ pub(crate) mod sidecar;
 pub mod snapshot;
 pub mod subagent_context;
 pub mod workflow;
+pub mod workflow_run;
 pub mod writer;
 
 use std::borrow::Cow;
