@@ -3,12 +3,13 @@
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
 use crate::common::wait::{
-    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, register_agent,
-    register_agent_with_owner, register_calling_agent, reset_minute, seed_signal_wait,
-    wait_instances, wait_ok,
+    agent_wait, agent_wait_at, loop_instances_path, publish_claude_5h, read_loop_run_records,
+    register_agent, register_agent_with_owner, register_calling_agent, reset_minute,
+    rewrite_loop_instances, seed_signal_wait, wait_instances, wait_ok,
 };
 use crate::common::{Env, canonical, retained_runs_refusal, zellij_trace_shim};
 use rimz::agents::{AgentLifecycleObservation, AskKind, LaunchParams, LifecycleSignal};
+use rimz::config::Tasks;
 use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId};
 use rimz::store::event::{EventKind, MessageEventMethod};
 use rimz::store::message::{
@@ -433,33 +434,29 @@ fn self_waits_put_lost_first_and_keep_long_redirects_whole() {
                 .unwrap()
                 .is_some()
     });
-    let mut tasks = wait_instances(&env);
-    tasks
-        .0
-        .get_mut(live)
-        .unwrap()
-        .wait_meta
-        .as_mut()
-        .unwrap()
-        .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(55);
-    tasks
-        .0
-        .get_mut(past)
-        .unwrap()
-        .wait_meta
-        .as_mut()
-        .unwrap()
-        .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(47);
-    let mut lost = tasks.0[live].clone();
-    lost.wait_meta.as_mut().unwrap().armed_at =
-        jiff::Timestamp::now() - jiff::SignedDuration::from_mins(41);
-    lost.label = Some("lost build".into());
-    tasks.0.insert("zz-lost".into(), lost);
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        tasks
+            .0
+            .get_mut(live)
+            .unwrap()
+            .wait_meta
+            .as_mut()
+            .unwrap()
+            .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(55);
+        tasks
+            .0
+            .get_mut(past)
+            .unwrap()
+            .wait_meta
+            .as_mut()
+            .unwrap()
+            .armed_at = jiff::Timestamp::now() - jiff::SignedDuration::from_mins(47);
+        let mut lost = tasks.0[live].clone();
+        lost.wait_meta.as_mut().unwrap().armed_at =
+            jiff::Timestamp::now() - jiff::SignedDuration::from_mins(41);
+        lost.label = Some("lost build".into());
+        tasks.0.insert("zz-lost".into(), lost);
+    });
     let text = wait_ok(&env, &["shell", "list"]);
     assert!(text.starts_with("@planner#main · 3 shells\n"), "{text}");
     assert!(
@@ -519,7 +516,7 @@ fn cancel_all_leaves_subscriptions_and_stops_only_self_watchers() {
 
 #[test]
 fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
-    use rimz::config::{LoopConfig, Tasks};
+    use rimz::config::LoopConfig;
     use std::collections::BTreeMap;
 
     let env = Env::new();
@@ -540,30 +537,27 @@ fn room_wait_body_matches_loop_cards_and_json_lists_the_same_rows() {
     let receipt: serde_json::Value =
         serde_json::from_str(&wait_ok(&env, &["watch", "--json", "pr=merged"])).unwrap();
     let root_name = receipt["name"].as_str().unwrap();
-    let mut tasks = wait_instances(&env);
-    let root = tasks.0[root_name].clone();
-    let mut child = root.clone();
-    child.wait.as_mut().unwrap().session = "child-session".into();
-    child.wait.as_mut().unwrap().handle = "@stale-child".into();
-    tasks.0.insert("child-wait".into(), child);
-    let mut orphan = root.clone();
-    orphan.wait.as_mut().unwrap().session = "missing".into();
-    orphan.wait.as_mut().unwrap().handle = "@stored".into();
-    tasks.0.insert("orphan-wait".into(), orphan);
-    let mut subscription = root.clone();
-    subscription.wait_meta = None;
-    subscription.fire_at = None;
-    subscription.signal = Some("ci.failed".into());
-    subscription.team = Some("forge#main".parse().unwrap());
-    tasks.0.insert("team-wake".into(), subscription.clone());
-    subscription.team = None;
-    subscription.loop_task = Some("sweep".into());
-    tasks.0.insert("resident-wake".into(), subscription.clone());
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    let mut subscription = rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        let root = tasks.0[root_name].clone();
+        let mut child = root.clone();
+        child.wait.as_mut().unwrap().session = "child-session".into();
+        child.wait.as_mut().unwrap().handle = "@stale-child".into();
+        tasks.0.insert("child-wait".into(), child);
+        let mut orphan = root.clone();
+        orphan.wait.as_mut().unwrap().session = "missing".into();
+        orphan.wait.as_mut().unwrap().handle = "@stored".into();
+        tasks.0.insert("orphan-wait".into(), orphan);
+        let mut subscription = root.clone();
+        subscription.wait_meta = None;
+        subscription.fire_at = None;
+        subscription.signal = Some("ci.failed".into());
+        subscription.team = Some("forge#main".parse().unwrap());
+        tasks.0.insert("team-wake".into(), subscription.clone());
+        subscription.team = None;
+        subscription.loop_task = Some("sweep".into());
+        tasks.0.insert("resident-wake".into(), subscription.clone());
+        subscription
+    });
     for name in [root_name, "child-wait", "orphan-wait"] {
         wait_ok(&env, &["loop", "disable", name]);
     }
@@ -1556,20 +1550,16 @@ fn lost_watcher_delivers_elapsed_and_the_existing_output_summary() {
     let armed_at = jiff::Timestamp::now()
         .checked_sub(std::time::Duration::from_secs(60))
         .unwrap();
-    let mut tasks = wait_instances(&env);
-    tasks
-        .0
-        .get_mut(name)
-        .unwrap()
-        .wait_meta
-        .as_mut()
-        .unwrap()
-        .armed_at = armed_at;
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        tasks
+            .0
+            .get_mut(name)
+            .unwrap()
+            .wait_meta
+            .as_mut()
+            .unwrap()
+            .armed_at = armed_at;
+    });
     std::fs::write(
         store.runtime_paths().lane_path("loop-fire.json"),
         serde_json::to_vec(&std::collections::BTreeMap::from([(name, armed_at)])).unwrap(),
@@ -1651,14 +1641,19 @@ fn live_watcher_of_a_checked_in_wait_is_not_lost_past_the_grace() {
     .unwrap();
     wait_ok(&env, &["loop", "tick"]);
     wait_for_loop_runs_to_exit(&env, name);
-    assert_eq!(wait_records(&env).len(), 1, "{:?}", wait_records(&env));
+    assert_eq!(
+        read_loop_run_records(&env).len(),
+        1,
+        "{:?}",
+        read_loop_run_records(&env)
+    );
     assert!(wait_instances(&env).0.contains_key(name));
 
     std::fs::write(&release, "").unwrap();
     wait_for_wait_records(&env, 2);
     wait_for_no_wait_instances(&env);
     wait_for_loop_runs_to_exit(&env, name);
-    let records = wait_records(&env);
+    let records = read_loop_run_records(&env);
     assert_eq!(records.len(), 2, "{records:?}");
     let verdict = records[1].watch.as_ref().unwrap();
     assert_eq!(
@@ -2120,12 +2115,10 @@ fn a_joined_shells_parked_checkin_is_canceled() {
     assert_eq!(checkin.status, MessageStatus::Queued, "{checkin:?}");
     wait_for_wait_records(&env, 1);
     wait_for_loop_runs_to_exit(&env, name);
-    let path = loop_instances_path(&env);
-    let mut rows: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    rows[name]["wait-meta"]["joined_until"] =
-        serde_json::json!(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(600));
-    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    rewrite_loop_instances(&env, |rows: &mut serde_json::Value| {
+        rows[name]["wait-meta"]["joined_until"] =
+            serde_json::json!(jiff::Timestamp::now() + jiff::SignedDuration::from_secs(600));
+    });
     std::fs::write(&release, "").unwrap();
     let records = wait_for_wait_records(&env, 2);
     assert_eq!(records[1].result.label(), "joined", "{records:?}");
@@ -2154,16 +2147,14 @@ fn retired_legacy_waits_show_in_loop_logs_with_their_reason() {
     wait_ok(&env, &["loop", "tick"]);
     wait_for_wait_records(&env, 1);
     wait_for_loop_runs_to_exit(&env, &fired);
-    let path = loop_instances_path(&env);
-    let mut rows: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let mut legacy = rows[&fired].clone();
-    legacy.as_object_mut().unwrap().remove("when");
-    legacy["watch"] = serde_json::json!({"pid": 4242});
-    rows[&fired] = legacy.clone();
-    legacy["watch"] = serde_json::json!({"file": "/repo/app.log", "grep": "ready"});
-    rows["wait-never-fired"] = legacy;
-    std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+    rewrite_loop_instances(&env, |rows: &mut serde_json::Value| {
+        let mut legacy = rows[&fired].clone();
+        legacy.as_object_mut().unwrap().remove("when");
+        legacy["watch"] = serde_json::json!({"pid": 4242});
+        rows[&fired] = legacy.clone();
+        legacy["watch"] = serde_json::json!({"file": "/repo/app.log", "grep": "ready"});
+        rows["wait-never-fired"] = legacy;
+    });
     wait_ok(&env, &["events", "emit", "deploy.done"]);
     assert!(
         wait_instances(&env).0.is_empty(),
@@ -2455,13 +2446,11 @@ fn a_live_join_claim_takes_a_shells_outcome_and_an_expired_one_lets_it_through()
         ))
         .unwrap();
         let name = receipt["name"].as_str().unwrap();
-        let path = crate::common::wait::loop_instances_path(&env);
-        let mut rows: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         let until = jiff::Timestamp::now()
             + jiff::SignedDuration::from_secs(if ahead { 600 } else { -600 });
-        rows[name]["wait-meta"]["joined_until"] = serde_json::json!(until);
-        std::fs::write(&path, serde_json::to_vec(&rows).unwrap()).unwrap();
+        rewrite_loop_instances(&env, |rows: &mut serde_json::Value| {
+            rows[name]["wait-meta"]["joined_until"] = serde_json::json!(until);
+        });
         std::fs::write(&release, "").unwrap();
         let records = wait_for_wait_records(&env, 1);
         assert_eq!(records[0].result.label(), result, "{records:?}");
@@ -2500,15 +2489,11 @@ fn a_signal_from_another_channel_wakes_a_starting_holder_and_not_a_namesake() {
     // The row a signal wait armed from `#beta` stores: the agent's launch and its
     // channel's handle.
     seed_signal_wait(&env, "deploy", "deploy.done", false);
-    let mut tasks = wait_instances(&env);
-    let target = tasks.0.get_mut("deploy").unwrap().wait.as_mut().unwrap();
-    target.session = AgentSessionId::from("launch-session");
-    target.handle = "@planner#beta".to_owned();
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        let target = tasks.0.get_mut("deploy").unwrap().wait.as_mut().unwrap();
+        target.session = AgentSessionId::from("launch-session");
+        target.handle = "@planner#beta".to_owned();
+    });
     let store = env.store();
     let workspace = env.resolve_workspace(&env.project_root);
     let source = store
@@ -2714,20 +2699,16 @@ fn watcher_survives_retiring_its_own_row_mid_fire() {
         LaunchParams::default(),
     );
     seed_signal_wait(&env, "audit", "shell.*", true);
-    let mut tasks = wait_instances(&env);
-    tasks
-        .0
-        .get_mut("audit")
-        .expect("sibling subscriber")
-        .wait
-        .as_mut()
-        .expect("pinned target")
-        .session = AgentSessionId::from("sibling-session");
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        tasks
+            .0
+            .get_mut("audit")
+            .expect("sibling subscriber")
+            .wait
+            .as_mut()
+            .expect("pinned target")
+            .session = AgentSessionId::from("sibling-session");
+    });
 
     let release = env.home_root.join("release");
     let receipt = wait_ok(
@@ -2800,17 +2781,13 @@ fn wait_cancel_before_watcher_start_prevents_command() {
     let receipt = wait_ok(&env, &["watch", "--json", "pr=merged"]);
     let receipt: serde_json::Value = serde_json::from_str(&receipt).unwrap();
     let name = receipt["name"].as_str().unwrap();
-    let mut tasks = wait_instances(&env);
-    let entry = tasks.0.get_mut(name).unwrap();
-    entry.when = None;
-    entry.watch = Some(rimz::config::WatchSpec::Command(
-        "touch command-started".to_owned(),
-    ));
-    std::fs::write(
-        loop_instances_path(&env),
-        serde_json::to_vec(&tasks).unwrap(),
-    )
-    .unwrap();
+    rewrite_loop_instances(&env, |tasks: &mut Tasks| {
+        let entry = tasks.0.get_mut(name).unwrap();
+        entry.when = None;
+        entry.watch = Some(rimz::config::WatchSpec::Command(
+            "touch command-started".to_owned(),
+        ));
+    });
 
     wait_ok(&env, &["shell", "cancel", name]);
     let output = env
@@ -3268,7 +3245,7 @@ fn a_watch_checks_in_once_at_its_due_time_and_keeps_waiting() {
     let (mut messages, history) = env.store().list_messages_and_history().unwrap();
     messages.extend(history);
     assert_eq!(messages.len(), 1, "{messages:?}");
-    assert_eq!(wait_records(&env).len(), 1);
+    assert_eq!(read_loop_run_records(&env).len(), 1);
 }
 
 #[test]
@@ -3296,11 +3273,11 @@ fn a_watch_cancelled_before_its_check_in_sends_none() {
         "a cancelled watch checked in: {messages:?}"
     );
     assert!(
-        wait_records(&env)
+        read_loop_run_records(&env)
             .iter()
             .all(|record| record.result.label() != "delivered"),
         "{:?}",
-        wait_records(&env)
+        read_loop_run_records(&env)
     );
 }
 
@@ -3651,12 +3628,20 @@ fn wait_until(env: &Env, description: &str, mut ready: impl FnMut() -> bool) {
     while !ready() {
         assert!(
             std::time::Instant::now() < deadline,
-            "timed out: {description}; pending messages: {:?}; run records: {:?}",
+            "timed out: {description}; pending messages: {:?}; run records: {:?}; wait-watch log: {}",
             env.store().list_pending_messages(),
-            wait_records(env)
+            read_loop_run_records(env),
+            wait_watch_log(env)
         );
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
+}
+
+/// The room's watcher log, where a watcher's errors and warnings land.
+fn wait_watch_log(env: &Env) -> String {
+    let path = env.store().paths().wait_watch_log();
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| format!("absent at {}: {err}", path.display()))
 }
 
 fn wait_for_wait_messages(env: &Env, count: usize) -> Vec<MessageRecord> {
@@ -3678,26 +3663,13 @@ fn wait_for_no_wait_instances(env: &Env) {
     });
 }
 
-fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("logs/loop-runs.log.jsonl")
-}
-
-fn wait_records(env: &Env) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
-    let path = loop_runs_path(env);
-    std::fs::read_to_string(path)
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
 fn wait_for_wait_records(
     env: &Env,
     count: usize,
 ) -> Vec<rimz::harness::schedule::run_log::LoopRunRecord> {
     let mut records = Vec::new();
     wait_until(env, &format!("expected {count} run records"), || {
-        records = wait_records(env);
+        records = read_loop_run_records(env);
         records.len() >= count
     });
     records

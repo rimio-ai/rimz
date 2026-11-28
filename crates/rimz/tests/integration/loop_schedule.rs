@@ -22,7 +22,9 @@ use rimz::store::run::{RunRecord, RunStatus};
 
 #[cfg(target_os = "linux")]
 use crate::common::wait::wait_for_loop_runs_to_exit;
-use crate::common::wait::{publish_claude_5h, reset_minute};
+use crate::common::wait::{
+    loop_runs_path, publish_claude_5h, read_loop_run_records, reset_minute, rewrite_loop_instances,
+};
 use crate::common::{Env, ScrubSessionEnvExt, canonical, retained_runs_refusal};
 #[path = "loop_kinds.rs"]
 mod kind_tests;
@@ -1744,10 +1746,11 @@ fn a_team_binding_stored_without_repeat_delivers_on_every_match_and_stays() {
     seed_team_signal_member(&env, &cwd, "sess-old-binding", None);
     team_signal_hook(&env, &cwd, "sess-old-binding", "SessionStart");
     // The row as an older RimZ stored a standing binding: no `repeat`, no `once`.
-    let mut stored = read_loop_instances(&env);
     let name = "team-forge-feature-team-coder-ci-failed";
-    stored.0.get_mut(name).unwrap().repeat = false;
-    write_loop_instances(&env, stored.clone());
+    let stored = rewrite_loop_instances(&env, |stored: &mut Tasks| {
+        stored.0.get_mut(name).unwrap().repeat = false;
+        stored.clone()
+    });
     let raw: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(loop_instances_path(&env)).unwrap()).unwrap();
     assert_eq!(
@@ -2335,11 +2338,12 @@ fn signal_siblings_keep_subscriptions_and_matches_consume_only_once() {
             ..TaskEntry::default()
         },
     );
-    let mut instances = read_loop_instances(&env);
-    let mut once = instances.0["standing"].clone();
-    once.repeat = false;
-    instances.0.insert("once".to_owned(), once);
-    write_loop_instances(&env, instances.clone());
+    let mut instances = rewrite_loop_instances(&env, |instances: &mut Tasks| {
+        let mut once = instances.0["standing"].clone();
+        once.repeat = false;
+        instances.0.insert("once".to_owned(), once);
+        instances.clone()
+    });
     loop_ok(
         &env,
         &[
@@ -2411,11 +2415,12 @@ fn session_end_hook_retires_all_own_deliveries_and_their_overlays() {
     }
     loop_ok(&env, &["loop", "disable", "clock"]);
     loop_ok(&env, &["loop", "pause", "signal", "--for", "2h"]);
-    let mut instances = read_loop_instances(&env);
-    let mut sibling = instances.0["clock"].clone();
-    sibling.wait.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
-    instances.0.insert("sibling".to_owned(), sibling.clone());
-    write_loop_instances(&env, instances);
+    let sibling = rewrite_loop_instances(&env, |instances: &mut Tasks| {
+        let mut sibling = instances.0["clock"].clone();
+        sibling.wait.as_mut().unwrap().session = AgentSessionId::from("sess-retire-sibling");
+        instances.0.insert("sibling".to_owned(), sibling.clone());
+        sibling
+    });
     write_loop_strikes(
         &env,
         &BTreeMap::from([
@@ -2458,11 +2463,12 @@ fn non_hook_end_retires_matching_subscription_before_delivery() {
         },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
-    let mut instances = read_loop_instances(&env);
-    let mut live = instances.0["ended"].clone();
-    live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
-    instances.0.insert("live".to_owned(), live.clone());
-    write_loop_instances(&env, instances);
+    let live = rewrite_loop_instances(&env, |instances: &mut Tasks| {
+        let mut live = instances.0["ended"].clone();
+        live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
+        instances.0.insert("live".to_owned(), live.clone());
+        live
+    });
     loop_ok(&env, &["loop", "enable", "ended"]);
     let key = project_task_key(&env.project_root, "ended");
     write_loop_strikes(&env, &BTreeMap::from([(key.clone(), 1_u32)]));
@@ -2516,14 +2522,15 @@ fn sibling_fire_retires_only_the_durably_ended_subscription() {
         },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
-    let mut instances = read_loop_instances(&env);
-    let template = instances.0["ended"].clone();
-    for (name, session) in [("live", "sess-live"), ("absent", "sess-never-registered")] {
-        let mut row = template.clone();
-        row.wait.as_mut().unwrap().session = AgentSessionId::from(session);
-        instances.0.insert(name.to_owned(), row);
-    }
-    write_loop_instances(&env, instances.clone());
+    let mut instances = rewrite_loop_instances(&env, |instances: &mut Tasks| {
+        let template = instances.0["ended"].clone();
+        for (name, session) in [("live", "sess-live"), ("absent", "sess-never-registered")] {
+            let mut row = template.clone();
+            row.wait.as_mut().unwrap().session = AgentSessionId::from(session);
+            instances.0.insert(name.to_owned(), row);
+        }
+        instances.clone()
+    });
     loop_ok(&env, &["loop", "enable", "ended"]);
     let key = project_task_key(&env.project_root, "ended");
     write_loop_strikes(&env, &BTreeMap::from([(key.clone(), 2_u32)]));
@@ -2569,11 +2576,12 @@ fn other_session_hook_retires_non_hook_ended_subscription() {
         },
     );
     register_running_agent(&env, "sess-live", "feature-loop");
-    let mut instances = read_loop_instances(&env);
-    let mut live = instances.0["ended"].clone();
-    live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
-    instances.0.insert("live".to_owned(), live.clone());
-    write_loop_instances(&env, instances);
+    let live = rewrite_loop_instances(&env, |instances: &mut Tasks| {
+        let mut live = instances.0["ended"].clone();
+        live.wait.as_mut().unwrap().session = AgentSessionId::from("sess-live");
+        instances.0.insert("live".to_owned(), live.clone());
+        live
+    });
     stamp_session_ended(&env, "sess-ended");
     run_hook(
         &env,
@@ -8362,20 +8370,6 @@ fn loop_instances_path(env: &Env) -> std::path::PathBuf {
         .join("records/loop-instances.json")
 }
 
-fn loop_runs_path(env: &Env) -> std::path::PathBuf {
-    env.rimz_home().join("logs/loop-runs.log.jsonl")
-}
-
-fn read_loop_run_records(env: &Env) -> Vec<LoopRunRecord> {
-    let path = loop_runs_path(env);
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    text.lines()
-        .map(|line| serde_json::from_str(line).expect("loop run record"))
-        .collect()
-}
-
 /// A detached loop runner can birth a cold room before the effect a test waits for, which takes
 /// past 15 s under gate load, so this bound guards a hung runner rather than timing a slow one.
 const LOOP_RUNNER_DEADLINE: Duration = Duration::from_secs(60);
@@ -8498,20 +8492,20 @@ fn write_loop_strikes(env: &Env, strikes: &BTreeMap<String, u32>) {
 /// project root: `loop add` no longer writes one, and `rimz watch` and team bindings arm
 /// their rows the same way.
 fn seed_wait(env: &Env, name: &str, session: &str, handle: &str, entry: TaskEntry) {
-    let mut instances = read_loop_instances(env);
-    instances.0.insert(
-        name.to_owned(),
-        TaskEntry {
-            root: env.project_root.clone(),
-            wait: Some(TaskTarget {
-                kind: AgentKind::new_unchecked("claude"),
-                session: AgentSessionId::from(session),
-                handle: handle.to_owned(),
-            }),
-            ..entry
-        },
-    );
-    write_loop_instances(env, instances);
+    rewrite_loop_instances(env, |instances: &mut Tasks| {
+        instances.0.insert(
+            name.to_owned(),
+            TaskEntry {
+                root: env.project_root.clone(),
+                wait: Some(TaskTarget {
+                    kind: AgentKind::new_unchecked("claude"),
+                    session: AgentSessionId::from(session),
+                    handle: handle.to_owned(),
+                }),
+                ..entry
+            },
+        );
+    });
 }
 
 fn matching(key: &str, value: &str) -> Option<BTreeMap<String, String>> {
@@ -8519,10 +8513,7 @@ fn matching(key: &str, value: &str) -> Option<BTreeMap<String, String>> {
 }
 
 fn write_loop_instances(env: &Env, tasks: Tasks) {
-    let path = loop_instances_path(env);
-    std::fs::create_dir_all(path.parent().expect("instances parent")).expect("mkdir state");
-    std::fs::write(path, serde_json::to_vec_pretty(&tasks).expect("json"))
-        .expect("write loop instances");
+    rewrite_loop_instances(env, |rows: &mut Tasks| *rows = tasks);
 }
 
 fn write_loop_fire_state(env: &Env, stamps: BTreeMap<String, Timestamp>) {
