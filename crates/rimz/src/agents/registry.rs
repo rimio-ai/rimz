@@ -153,6 +153,10 @@ pub fn runtime_names() -> impl Iterator<Item = &'static str> {
 
 /// The static definition for `kind`, for sites that need only const data
 /// (branding, capabilities, tool tables) without the behavioral trait.
+/// Plugin kinds are included, so the lookup goes through
+/// `adapters::plugin::loaded`, which reads `$RIMZ_HOME/agents.d` once per process.
+/// A lookup only built-ins can answer, such as a field every plugin spec leaves
+/// empty, scans `BUILTINS` instead.
 pub fn spec_by_kind(kind: &str) -> Option<&'static AgentSpec> {
     find_definition(kind).map(AgentDefinition::spec)
 }
