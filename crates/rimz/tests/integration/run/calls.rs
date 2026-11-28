@@ -225,7 +225,8 @@ fn owed_notices(env: &Env) -> Vec<rimz::store::message::MessageRecord> {
 }
 
 /// The host's `call-timeout` helper for launch `launch`, on the tracing Zellij shim listing
-/// terminals `panes`, each running its provider.
+/// terminals `panes`, each running its provider. The helper exits 0 when its stop fails and
+/// leaves the failure as a warning on stderr, so an assertion on what the stop ended prints it.
 fn call_timeout(env: &Env, launch: &str, panes: &[(u64, &str)]) -> std::process::Output {
     let workspace = env.resolve_workspace(&env.project_root);
     let listing = env.project_root.join("seat-panes.json");
@@ -496,7 +497,8 @@ fn the_call_timeout_stops_the_agent_and_reports_once() {
     assert!(output.status.success(), "{output:?}");
     assert!(
         process.try_wait().unwrap().is_some(),
-        "the stop ends the agent's own stand-in"
+        "the stop ends the agent's own stand-in: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let settled = rimz::harness::run::load(env.store().paths(), &record.run_id).unwrap();
     assert_eq!(settled.status, RunStatus::TimedOut, "{settled:?}");
@@ -557,7 +559,8 @@ fn a_resting_agents_timeout_is_its_newest_run() {
     assert!(output.status.success(), "{output:?}");
     assert!(
         process.try_wait().unwrap().is_some(),
-        "the stop ends the agent's own stand-in"
+        "the stop ends the agent's own stand-in: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     assert!(
         !live(&env, "tasker"),
@@ -626,7 +629,8 @@ fn a_one_task_run_that_completes_at_its_deadline_reports_once() {
     assert!(output.status.success(), "{output:?}");
     assert!(
         process.try_wait().unwrap().is_some(),
-        "the stop ends the agent's own stand-in"
+        "the stop ends the agent's own stand-in: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
     let runs = rimz::harness::run::list(env.store().paths()).unwrap();
     assert!(
