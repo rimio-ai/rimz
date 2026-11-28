@@ -372,7 +372,7 @@ pub(crate) struct WatchResult {
 /// What a workflow's `value` is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum WorkflowSource {
+pub enum WorkflowSource {
     Name,
     Path,
     Script,
@@ -509,7 +509,7 @@ pub enum Cause {
     Invalid,
     // A replayed call whose block or object differs from the one its log answers.
     Replay,
-    // A script that can run no further while no call of it is open.
+    // A script that can run no further while no call of it but a `workflow` call is open.
     Stuck,
     // A run that would launch past its launch cap.
     Launches,

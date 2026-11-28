@@ -1,7 +1,9 @@
 // Runs once in each fresh context, after the engine's globals and before the script. It takes
 // away what would let a replay take another path than the pass it replays (the clock, the time
 // zone, randomness, the weak collections), and adds `pipeline`, `parallel`, and `cases`. It gives
-// the engine the function that makes a call's failure the `Error` the script catches. Everything
+// the engine the function that makes a call's failure the `Error` the script catches, the maker of
+// a called workflow's own `cases` over its own `watch` and `now`, and the link from a called
+// body's promise to what settles its call. Everything
 // it calls once the script has run is taken here first, so a script that replaces `Reflect`,
 // `Error`, `Object`, a block, or a prototype's method changes nothing it does.
 (() => {
@@ -166,6 +168,7 @@
 
   // `cases` decides on `watch` and `reads` alone, so a case reads true just when a watch would
   // fire on it. Its own checks throw before any call, worded as `ms` and `reads` word theirs.
+  // Each body has its own, over the `watch` and `now` its calls are made through.
   const { watch, now, ms, reads } = globalThis
   const { isArray } = Array
   const { slice } = String.prototype
@@ -191,7 +194,7 @@
     : failCases(at + ': a duration is text, such as `30m`')
   // A watch counts its `timeout` in whole seconds: rounded up, so it never stops early.
   const seconds = left => (left > 0 ? ceil(left / 1000) : 0) + 's'
-  globalThis.cases = async (list, options = {}) => {
+  const casesOf = (watch, now) => async (list, options = {}) => {
     if (!isArray(list) || list.length === 0) failCases('takes a list of one or more cases')
     only(options, ['label', 'cwd', 'timeout'], 'the options take `label`, `cwd`, and `timeout`')
     const { label, cwd, timeout } = options
@@ -284,7 +287,11 @@
       if (kept && winner(read.readings) === index) return { outcome, readings: read.readings }
     }
   }
+  globalThis.cases = casesOf(watch, now)
+
+  const { then } = Promise.prototype
+  const link = (promise, settled, failed) => { apply(then, promise, [settled, failed]) }
 
   const { assign } = Object
-  return fields => assign(new NativeError(fields.reason), fields)
+  return { fail: fields => assign(new NativeError(fields.reason), fields), casesOf, link }
 })()

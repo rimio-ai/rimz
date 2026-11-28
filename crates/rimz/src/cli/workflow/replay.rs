@@ -46,6 +46,9 @@ pub(super) fn run(path: &Path, args: Option<&str>, answers: Option<&Path>) -> Re
         log: &log,
         caps: Caps::PASS,
         dir,
+        reader: None,
+        covered: answers.len().checked_sub(1),
+        steps: None,
     })
     .map_err(|reason| anyhow!("{}: {reason}", script.display()))?;
     let mut out = render::out();

@@ -67,6 +67,19 @@ pub(super) fn load(text: &str) -> Result<Loaded, String> {
     })
 }
 
+/// The body of a called workflow's script: as `load` takes it apart, or, for text that may
+/// leave `meta` out and does not start with an `export`, the whole text.
+pub(super) fn body(text: &str, meta_optional: bool) -> Result<String, String> {
+    if meta_optional {
+        let mut cursor = Cursor { text, at: 0 };
+        cursor.skip_space()?;
+        if cursor.word() != Some("export") {
+            return Ok(text.to_owned());
+        }
+    }
+    load(text).map(|loaded| loaded.body)
+}
+
 struct Cursor<'a> {
     text: &'a str,
     at: usize,

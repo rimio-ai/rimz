@@ -1,4 +1,5 @@
 use std::fs;
+use std::rc::Rc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -20,6 +21,9 @@ fn pass<'a>(text: &'a str, log: &'a Log) -> Pass<'a> {
         log,
         caps: Caps::PASS,
         dir: None,
+        reader: None,
+        covered: None,
+        steps: None,
     }
 }
 
@@ -70,7 +74,8 @@ fn recorded(body: &str, answers: Vec<Outcome>) -> Vec<Line> {
 fn first(body: &str, log: Vec<Line>, open_at_end: &[u64]) -> Option<u64> {
     let text = script(body);
     let log = Log::Recorded(log);
-    first_to_run(&pass(&text, &log), open_at_end).unwrap_or_else(|error| panic!("{error}"))
+    let replayed = replay(&pass(&text, &log)).unwrap_or_else(|error| panic!("{error}"));
+    first_to_run(&replayed, &log, open_at_end)
 }
 
 #[track_caller]
@@ -193,6 +198,7 @@ fn now_is_a_call_the_log_answers_and_takes_no_object() {
                 block: BlockName::Now,
                 object: json!({}),
                 digest: digest(BlockName::Now, &json!({})),
+                parent: None,
                 phase: None,
             }],
             returned(json!([1_764_268_800_000_u64, [refused, refused]]))
@@ -255,7 +261,7 @@ fn reads_decides_a_condition_on_the_watchs_three_valued_walk_and_makes_no_call()
 
 #[test]
 fn phase_and_log_make_no_call_and_each_call_carries_its_phase() {
-    let replay = answered(
+    let text = script(
         "const said = log('starting')\n\
          phase('Gate')\n\
          const gate = await shell({ command: 'gate' })\n\
@@ -264,8 +270,14 @@ fn phase_and_log_make_no_call_and_each_call_carries_its_phase() {
          log(`the gate exited ${gate.code}`)\n\
          await shell({ command: 'fix' })\n\
          return [said, phase('Done')]",
-        vec![result(json!({"code": 3})), result(json!({"code": 0}))],
     );
+    let log = Log::Answers(vec![result(json!({"code": 3})), result(json!({"code": 0}))]);
+    // The marks a pass made before the last line are those an earlier pass over one line made.
+    let replay = replay(&Pass {
+        covered: Some(1),
+        ..pass(&text, &log)
+    })
+    .unwrap();
     let titles: Vec<_> = replay
         .marks
         .iter()
@@ -333,33 +345,48 @@ fn a_renamed_phase_keeps_the_logs_answers() {
 /// Lines arrive in the order calls settle, so a mark is told new by the lines handed back before
 /// it, not by the calls made before it.
 #[test]
-fn a_mark_is_replayed_until_the_pass_hands_back_its_logs_last_line() {
+fn a_mark_is_replayed_when_the_runs_last_pass_covered_the_lines_before_it() {
     let body = "const a = shell({ command: 'a' })\n\
                 await shell({ command: 'b' })\n\
                 log('b settled')\n\
                 await a\n\
                 log('a settled')";
-    let marks = |lines: Vec<Line>| {
+    let marks = |lines: Vec<Line>, covered| {
         let text = script(body);
         let log = Log::Recorded(lines);
-        replay(&pass(&text, &log)).unwrap().marks
+        replay(&Pass {
+            covered,
+            ..pass(&text, &log)
+        })
+        .unwrap()
+        .marks
     };
     let settled = |line: &str, replayed| Mark {
         after: 2,
         replayed,
         progress: Progress::Log(line.to_owned()),
     };
+    let both = || {
+        vec![
+            line(2, "b", result(json!(2))),
+            line(1, "a", result(json!(1))),
+        ]
+    };
     assert_eq!(
         [
-            marks(vec![line(2, "b", result(json!(2)))]),
-            marks(vec![
-                line(2, "b", result(json!(2))),
-                line(1, "a", result(json!(1)))
-            ]),
+            marks(vec![line(2, "b", result(json!(2)))], None),
+            marks(vec![line(2, "b", result(json!(2)))], Some(0)),
+            marks(both(), Some(1)),
+            // Two lines arrived since a pass over none: neither mark was made before.
+            marks(both(), Some(0)),
+            marks(both(), Some(2)),
         ],
         [
             vec![settled("b settled", false)],
+            vec![settled("b settled", false)],
             vec![settled("b settled", true), settled("a settled", false)],
+            vec![settled("b settled", false), settled("a settled", false)],
+            vec![settled("b settled", true), settled("a settled", true)],
         ]
     );
 }
@@ -1118,7 +1145,7 @@ fn a_refused_call_fails_with_invalid_and_takes_no_number() {
             "workflow",
             "invalid",
             null,
-            "a workflow called from a script runs in its caller's run, which is not built yet"
+            "this walk of the script does not follow a call into another workflow"
         ])
     );
     assert!(
@@ -1580,5 +1607,510 @@ fn a_name_that_starts_with_import_is_not_read_as_an_import() {
     assert!(
         reason.starts_with("line 2: ") && !reason.contains("imports"),
         "{reason}"
+    );
+}
+
+/// A reader of called workflows: each `value` a script names, as (value, file name, text), and
+/// any other value refused.
+fn reading(scripts: &[(&str, &str, &str)]) -> Rc<Reader> {
+    let scripts: Vec<(String, String, String)> = scripts
+        .iter()
+        .map(|(value, name, text)| ((*value).to_owned(), (*name).to_owned(), (*text).to_owned()))
+        .collect();
+    Rc::new(move |calling: &Calling<'_>| {
+        if calling.source == WorkflowSource::Script {
+            return Ok(Called {
+                name: "script.js".to_owned(),
+                text: calling.value.to_owned(),
+                dir: None,
+            });
+        }
+        scripts
+            .iter()
+            .find(|(value, _, _)| value == calling.value)
+            .map(|(_, name, text)| Called {
+                name: name.clone(),
+                text: text.clone(),
+                dir: None,
+            })
+            .ok_or_else(|| format!("no workflow is installed as `{}`", calling.value))
+    })
+}
+
+/// Replay `body` over `lines` with `reader`.
+#[track_caller]
+fn called(body: &str, lines: Vec<Line>, reader: Rc<Reader>) -> Replay {
+    let text = script(body);
+    let log = Log::Recorded(lines);
+    replay(&Pass {
+        reader: Some(reader),
+        ..pass(&text, &log)
+    })
+    .unwrap_or_else(|error| panic!("{error}"))
+}
+
+fn logged(number: u64, block: BlockName, object: Value, outcome: Outcome) -> Line {
+    Line {
+        number,
+        block,
+        digest: digest(block, &object),
+        outcome,
+    }
+}
+
+/// Each call's number, block, and parent.
+fn made(replay: &Replay) -> Vec<(u64, BlockName, Option<u64>)> {
+    replay
+        .calls
+        .iter()
+        .map(|call| (call.number, call.block, call.parent))
+        .collect()
+}
+
+const CHILD: &str = "export const meta = { name: 'child', description: 'A called workflow' }\n\
+    const x = await shell({ command: 'x' })\n\
+    const won = await cases([{ when: 'pr=merged', outcome: 'merged' }])\n\
+    return [x, won.outcome]";
+
+#[test]
+fn a_called_workflows_calls_take_the_callers_numbers_and_name_their_parent() {
+    let replay = called(
+        "const a = await shell({ command: 'a' })\n\
+         const b = await workflow({ source: 'name', value: 'child' })\n\
+         return [a, b, await shell({ command: 'c' })]",
+        vec![
+            line(1, "a", result(json!(1))),
+            line(3, "x", result(json!("x"))),
+            logged(
+                4,
+                BlockName::Watch,
+                json!({ "when": "(pr=merged)" }),
+                result(json!({ "readings": { "pr": "merged" } })),
+            ),
+            line(5, "c", result(json!("c"))),
+        ],
+        reading(&[("child", "child.js", CHILD)]),
+    );
+    use BlockName::{Shell, Watch, Workflow};
+    assert_eq!(
+        made(&replay),
+        [
+            (1, Shell, None),
+            (2, Workflow, None),
+            (3, Shell, Some(2)),
+            (4, Watch, Some(2)),
+            (5, Shell, None),
+        ]
+    );
+    assert_eq!(
+        (replay.open, replay.end),
+        (vec![], returned(json!([1, ["x", "merged"], "c"])))
+    );
+}
+
+const LANE: &str = "export const meta = { name: 'lane', description: 'One lane' }\n\
+    phase('checking ' + args.lane)\n\
+    return await shell({ command: 'check ' + args.lane })";
+
+#[test]
+fn called_workflows_side_by_side_keep_their_numbers_and_phases_on_a_second_replay() {
+    let body = "return await pipeline(['p', 'q'], lane => workflow({ source: 'name', value: 'lane', args: { lane } }))";
+    let lines = || {
+        vec![
+            line(4, "check q", result(json!("q ok"))),
+            line(2, "check p", result(json!("p ok"))),
+        ]
+    };
+    let reader = reading(&[("lane", "lane.js", LANE)]);
+    let one = called(body, lines(), Rc::clone(&reader));
+    let two = called(body, lines(), reader);
+    assert_eq!(one.calls, two.calls);
+    let phases: Vec<_> = one
+        .calls
+        .iter()
+        .map(|call| {
+            (
+                call.number,
+                call.parent,
+                call.phase.as_deref().map(str::to_owned),
+            )
+        })
+        .collect();
+    assert_eq!(
+        phases,
+        [
+            (1, None, None),
+            (2, Some(1), Some("checking p".to_owned())),
+            (3, None, None),
+            (4, Some(3), Some("checking q".to_owned())),
+        ]
+    );
+    assert_eq!(one.end, returned(json!(["p ok", "q ok"])));
+}
+
+#[test]
+fn a_called_body_settles_its_call_with_what_it_returns_or_throws() {
+    let replay = called(
+        "const got = await workflow({ source: 'script', value: 'return args.n + 1', args: { n: 1 } })\n\
+         let thrown\n\
+         try { await workflow({ source: 'script', value: \"throw { why: 'no' }\" }) } catch (value) { thrown = value }\n\
+         return [got, thrown]",
+        Vec::new(),
+        reading(&[]),
+    );
+    assert_eq!(
+        (made(&replay), replay.open, replay.end),
+        (
+            vec![
+                (1, BlockName::Workflow, None),
+                (2, BlockName::Workflow, None)
+            ],
+            vec![],
+            returned(json!([2, { "why": "no" }]))
+        )
+    );
+}
+
+#[test]
+fn a_called_body_reads_its_own_files_and_throws_at_its_own_line() {
+    let dir = tempfile::tempdir().unwrap();
+    fs::write(dir.path().join("brief.md"), "Brief.").unwrap();
+    let files = dir.path().to_path_buf();
+    let reader: Rc<Reader> = Rc::new(move |_: &Calling<'_>| {
+        Ok(Called {
+            name: "child.js".to_owned(),
+            text: format!("{META}log(file('brief.md'))\nthrow new Error('boom')"),
+            dir: Some(files.clone()),
+        })
+    });
+    let replay = called(
+        "await workflow({ source: 'path', value: 'child' })",
+        Vec::new(),
+        reader,
+    );
+    assert_eq!(replay.end, End::Threw("boom (child.js:3)".to_owned()));
+    assert_eq!(
+        replay.marks.first().map(|mark| &mark.progress),
+        Some(&Progress::Log("Brief.".to_owned()))
+    );
+}
+
+#[test]
+fn a_called_workflow_that_cannot_be_read_fails_at_its_number() {
+    let replay = called(
+        "const tried = []\n\
+         for (const value of ['ghost', 'bare', 'broken']) {\n\
+           try { await workflow({ source: 'name', value }) } catch (failure) { tried.push([failure.block, failure.cause, failure.step, failure.reason]) }\n\
+         }\n\
+         return tried",
+        Vec::new(),
+        reading(&[
+            ("bare", "bare.js", "return 1"),
+            ("broken", "broken.js", &script("return 1 +* 2")),
+        ]),
+    );
+    assert_eq!(replay.open, Vec::<u64>::new());
+    let End::Returned(tried) = replay.end else {
+        panic!("{:?}", replay.end);
+    };
+    assert_eq!(
+        [tried[0].clone(), tried[1].clone()],
+        [
+            json!([
+                "workflow",
+                "invalid",
+                1,
+                "no workflow is installed as `ghost`"
+            ]),
+            json!([
+                "workflow",
+                "invalid",
+                2,
+                "bare.js: line 1: a workflow script starts with `export const meta = { name, description }`"
+            ]),
+        ]
+    );
+    assert!(
+        tried[2][3]
+            .as_str()
+            .is_some_and(|reason| reason.starts_with("broken.js: line 2: ")),
+        "{tried}"
+    );
+}
+
+#[test]
+fn a_line_answers_a_workflow_call_only_with_a_failure_before_its_body_ends() {
+    let slow = "export const meta = { name: 'slow', description: 'Waits' }\n\
+                await shell({ command: 'x' })\n\
+                return 'late'";
+    let quick = "export const meta = { name: 'quick', description: 'Returns' }\nreturn 'quick'";
+    let call = |value: &str| json!({ "source": "name", "value": value, "timeout": "1h" });
+    let body = |value: &str| {
+        format!(
+            "try {{ return await workflow({{ source: 'name', value: '{value}', timeout: '1h' }}) }}\n\
+             catch (failure) {{ return [failure.cause, failure.step] }}"
+        )
+    };
+    let timeout = Outcome::Failure(pass_failure(
+        Cause::Timeout,
+        "the workflow ran past its timeout".to_owned(),
+        None,
+    ));
+    let reader = reading(&[("slow", "slow.js", slow), ("quick", "quick.js", quick)]);
+    let timed = called(
+        &body("slow"),
+        vec![logged(
+            1,
+            BlockName::Workflow,
+            call("slow"),
+            timeout.clone(),
+        )],
+        Rc::clone(&reader),
+    );
+    assert_eq!(
+        (made(&timed).len(), timed.open, timed.end),
+        (2, vec![], returned(json!(["timeout", 1])))
+    );
+    let ended = called(
+        "const got = await workflow({ source: 'name', value: 'quick', timeout: '1h' })\n\
+         return [got, await shell({ command: 'y' })]",
+        vec![logged(1, BlockName::Workflow, call("quick"), timeout)],
+        Rc::clone(&reader),
+    );
+    let answered = called(
+        &body("slow"),
+        vec![logged(
+            1,
+            BlockName::Workflow,
+            call("slow"),
+            result(json!("late")),
+        )],
+        reader,
+    );
+    assert_eq!(
+        [ended.end, answered.end],
+        [
+            End::Failed(pass_failure(
+                Cause::Replay,
+                "the log answers call 1, a workflow whose body has ended".to_owned(),
+                Some(1),
+            )),
+            End::Failed(pass_failure(
+                Cause::Replay,
+                "the log answers call 1, a workflow, with a result: a workflow's body gives its result".to_owned(),
+                Some(1),
+            )),
+        ]
+    );
+}
+
+#[test]
+fn a_step_left_open_under_a_settled_workflow_call_is_never_settled() {
+    let replay = called(
+        "return await workflow({ source: 'script', value: \"shell({ command: 'left' })\\nreturn 'done'\" })",
+        Vec::new(),
+        reading(&[]),
+    );
+    assert_eq!(
+        (made(&replay).len(), replay.open, replay.end),
+        (2, vec![], returned(json!("done")))
+    );
+}
+
+#[test]
+fn a_body_makes_no_call_once_its_workflow_call_has_settled() {
+    let replay = called(
+        "await workflow({ source: 'script', value: \"(async () => { await null; await null; await null; shell({ command: 'late' }) })()\\nreturn 'done'\" })\nawait new Promise(() => {})",
+        Vec::new(),
+        reading(&[]),
+    );
+    assert_eq!(
+        (made(&replay).len(), replay.open, replay.end),
+        (
+            1,
+            vec![],
+            End::Failed(pass_failure(
+                Cause::Stuck,
+                "the script awaits something no call will settle".to_owned(),
+                None
+            ))
+        )
+    );
+}
+
+#[test]
+fn a_script_waiting_only_on_a_workflow_call_is_stuck() {
+    let replay = called(
+        "await workflow({ source: 'script', value: 'await new Promise(() => {})' })",
+        Vec::new(),
+        reading(&[]),
+    );
+    assert_eq!(
+        (replay.open, replay.end),
+        (
+            vec![1],
+            End::Failed(pass_failure(
+                Cause::Stuck,
+                "the script awaits something no call will settle".to_owned(),
+                None
+            ))
+        )
+    );
+}
+
+#[test]
+fn a_workflow_call_past_eight_deep_fails_at_its_number() {
+    let deep = "export const meta = { name: 'deep', description: 'Calls itself' }\n\
+                return await workflow({ source: 'name', value: 'deep' })";
+    let replay = called(
+        "return await workflow({ source: 'name', value: 'deep' })",
+        Vec::new(),
+        reading(&[("deep", "deep.js", deep)]),
+    );
+    assert_eq!(replay.calls.len(), 9);
+    assert_eq!(
+        replay.end,
+        End::Failed(Failure {
+            block: Some(BlockName::Workflow),
+            ..pass_failure(
+                Cause::Invalid,
+                "call 9 would run a workflow 9 calls deep, past the bound of 8".to_owned(),
+                Some(9),
+            )
+        })
+    );
+}
+
+#[test]
+fn the_call_past_the_step_cap_is_not_made_and_ends_the_pass() {
+    let text = script(
+        "try { for (let i = 0; i < 5; i++) await now() } catch { return 'caught' } finally { log('finally') }",
+    );
+    let log = Log::Answers(vec![result(json!(1)), result(json!(2)), result(json!(3))]);
+    let replay = replay(&Pass {
+        steps: Some(3),
+        ..pass(&text, &log)
+    })
+    .unwrap();
+    assert_eq!(
+        (replay.calls.len(), replay.marks.len(), replay.end),
+        (
+            3,
+            0,
+            End::Failed(pass_failure(
+                Cause::Steps,
+                "the script would make call 4, past the run's step cap of 3".to_owned(),
+                Some(4),
+            ))
+        )
+    );
+}
+
+#[test]
+fn the_first_call_to_run_is_never_an_open_workflow_call() {
+    let text =
+        script("await workflow({ source: 'script', value: \"await shell({ command: 'x' })\" })");
+    let log = Log::Recorded(Vec::new());
+    let first = |open_at_end: &[u64]| {
+        let replayed = replay(&Pass {
+            reader: Some(reading(&[])),
+            ..pass(&text, &log)
+        })
+        .unwrap();
+        first_to_run(&replayed, &log, open_at_end)
+    };
+    assert_eq!([first(&[]), first(&[1])], [Some(2), Some(2)]);
+}
+
+#[test]
+fn a_line_for_a_call_under_a_workflow_call_that_settled_earlier_in_the_pass_is_consumed() {
+    let body = "const got = await workflow({ source: 'script', value: 'const a = now()\\nconst b = now()\\nreturn await a' })\n\
+                return [got, await now()]";
+    let now = |number: u64, value: Value| logged(number, BlockName::Now, json!({}), result(value));
+    let consumed = called(
+        body,
+        vec![now(2, json!(1)), now(3, json!(2)), now(4, json!(3))],
+        reading(&[]),
+    );
+    assert_eq!(
+        (consumed.used, consumed.open, consumed.end),
+        (3, vec![], returned(json!([1, 3])))
+    );
+    let unmade = called(
+        body,
+        vec![now(2, json!(1)), now(3, json!(2)), now(5, json!(3))],
+        reading(&[]),
+    );
+    assert_eq!(
+        unmade.end,
+        End::Failed(pass_failure(
+            Cause::Replay,
+            "the log answers call 5, which the script has not made".to_owned(),
+            Some(5),
+        ))
+    );
+}
+
+#[test]
+fn an_error_whose_stack_getter_logs_is_described() {
+    assert_eq!(
+        ran("const error = new Error('boom')\n\
+             Object.defineProperty(error, 'stack', { get() { log('read'); return '' } })\n\
+             throw error"),
+        End::Threw("boom".to_owned())
+    );
+}
+
+#[test]
+fn a_called_script_whose_braces_do_not_balance_fails_at_its_number() {
+    let replay = called(
+        "const tried = []\n\
+         for (const value of ['object', 'number']) {\n\
+           try { await workflow({ source: 'name', value }) } catch (failure) { tried.push([failure.cause, failure.step, failure.reason]) }\n\
+         }\n\
+         return tried",
+        Vec::new(),
+        reading(&[
+            ("object", "object.js", &script("} }); ({ a: function () {")),
+            (
+                "number",
+                "number.js",
+                &script("} }); (function () { return 1 || function () {"),
+            ),
+        ]),
+    );
+    let unbalanced = "the body's braces do not balance: it closes the function it runs in";
+    assert_eq!(
+        replay.end,
+        returned(json!([
+            ["invalid", 1, format!("object.js: {unbalanced}")],
+            ["invalid", 2, format!("number.js: {unbalanced}")],
+        ]))
+    );
+}
+
+#[test]
+fn a_line_for_a_dropped_workflow_call_answers_it_only_with_a_failure() {
+    let body = "const got = await workflow({ source: 'script', value: \"const w = workflow({ source: 'script', value: 'return await now()' })\\nreturn 1\" })\n\
+                return [got, await now()]";
+    let inner = json!({ "source": "script", "value": "return await now()" });
+    let timeout = Outcome::Failure(pass_failure(
+        Cause::Timeout,
+        "the workflow ran past its timeout".to_owned(),
+        None,
+    ));
+    let line = |outcome: Outcome| logged(2, BlockName::Workflow, inner.clone(), outcome);
+    let now = logged(4, BlockName::Now, json!({}), result(json!(9)));
+    let consumed = called(body, vec![line(timeout), now.clone()], reading(&[]));
+    assert_eq!((consumed.used, consumed.end), (2, returned(json!([1, 9]))));
+    let answered = called(body, vec![line(result(json!(5))), now], reading(&[]));
+    assert_eq!(
+        answered.end,
+        End::Failed(pass_failure(
+            Cause::Replay,
+            "the log answers call 2, a workflow, with a result: a workflow's body gives its result"
+                .to_owned(),
+            Some(2),
+        ))
     );
 }

@@ -2786,6 +2786,9 @@ fn workflow_pass<'a>(text: &'a str, log: &'a workflow_script::Log) -> workflow_s
         log,
         caps: workflow_script::Caps::PASS,
         dir: None,
+        reader: None,
+        covered: None,
+        steps: None,
     }
 }
 
