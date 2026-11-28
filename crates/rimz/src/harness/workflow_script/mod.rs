@@ -10,6 +10,7 @@
 //! for display, and its `cases` calls only `watch` and `now`.
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -89,7 +90,7 @@ pub struct Call {
     pub digest: String,
     /// The title of the script's last `phase` when it made the call. The digest leaves it out,
     /// so a renamed phase keeps a log's answers.
-    pub phase: Option<String>,
+    pub phase: Option<Arc<str>>,
 }
 
 /// A `phase` or `log` the script made. Both are display alone: neither is a call, takes a
@@ -107,7 +108,7 @@ pub struct Mark {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Progress {
     /// The run's stage from here until the next `phase`, marked only when the title changes.
-    Phase(String),
+    Phase(Arc<str>),
     /// One narrator line.
     Log(String),
 }
