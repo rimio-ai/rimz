@@ -6612,7 +6612,8 @@ allowed-dependencies = [
 # find_hosted_program lets script checks resolve their program and name the PATH searched as hosted commands do (+1).
 # `CheckOutcome::stdout`, a hosted command's stdout kept apart from its stderr for a script run's
 # command step (+1).
-surface-budget = 20
+# `CheckOutcome::signal`, the signal that killed a hosted command, for a run's `exit` reason (+1).
+surface-budget = 21
 
 [[module]]
 path = "crates/rimz/src/harness/duration.rs"

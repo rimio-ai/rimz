@@ -73,7 +73,7 @@ Runtime shape and the single-binary rationale live in [ARCHITECTURE.md](./ARCHIT
 - `agents/`: the provider-neutral agent catalog, capability contracts, state rollup, handle minting, provider adapters, spend/pricing/account machinery, provider login resolution.
 - `room/`: managed-room context, birth/reset/teardown lifecycle, health gating.
 - `sandbox/`: Linux bubblewrap mount views, provider-home binds, per-agent temp units, skill views, capability preflight.
-- `harness/`: layout IR, runtime profile resolution, teams and board stage flips, launch plan and argv, supervised runs, workflows and the sandboxed replay of their scripts, the hook drainer, loop scheduling and signals, resume and rebirth recovery, hibernation, the note store.
+- `harness/`: layout IR, runtime profile resolution, teams and board stage flips, launch plan and argv, supervised runs, workflows, the sandboxed replay of their scripts and the runs that advance them, the hook drainer, loop scheduling and signals, resume and rebirth recovery, hibernation, the note store.
 - `message/`: delivery: park-vs-live dispatch, live-pane send, the shared turn reader, scheduled wakeups, synthetic card text.
 - `store/`: durable state engine: snapshot schema, framed event log, hook ingress and drain cursor, message queue, run, workflow, and workflow run records, GC.
 - `mux/`: Zellij/tmux seam: live-session snapshot, subprocess engine, reconcile planner, recovery, focus anchor, per-pane write lock.

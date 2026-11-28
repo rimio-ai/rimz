@@ -33,6 +33,8 @@ pub struct CheckOutcome {
     terminated: bool,
     output: String,
     code: Option<i32>,
+    /// The signal that killed the command, when one did.
+    signal: Option<i32>,
     stderr_line: String,
     #[cfg_attr(
         not(test),
@@ -66,6 +68,7 @@ impl CheckOutcome {
             terminated: false,
             output,
             code,
+            signal: None,
             stderr_line: String::new(),
             stdout: None,
         }
@@ -97,6 +100,10 @@ impl CheckOutcome {
 
     pub(crate) fn code(&self) -> Option<i32> {
         self.code
+    }
+
+    pub(in crate::harness) fn signal(&self) -> Option<i32> {
+        self.signal
     }
 
     pub(crate) fn interrupted(&self) -> bool {
@@ -582,6 +589,7 @@ pub(crate) fn run_command(
         terminated,
         output: captured_output()?,
         code: status.code(),
+        signal: std::os::unix::process::ExitStatusExt::signal(&status),
         stderr_line,
         stdout: match apart {
             Some(apart) => Some(
