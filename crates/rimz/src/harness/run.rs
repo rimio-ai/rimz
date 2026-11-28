@@ -59,21 +59,25 @@ pub enum ResponsePublishErr {
 }
 
 /// Host path of this run's current-turn response, in its reader's `out/`
-/// directory: the launcher's, or the run's own agent's when none launched it.
+/// directory: the launcher's, or the run's own agent's when none launched it. A peer or team
+/// run is named by its stored turn, or by its run id when written before turns were stored.
 pub fn response_path(paths: &StatePaths, record: &RunRecord) -> Option<PathBuf> {
     let name = record.agent_name.as_deref()?;
-    if record.peer.is_some() || record.team.is_some() {
+    if record.peer.is_none() && record.team.is_none() {
+        return earlier_response_path(paths, record, record.follow_ups + 1);
+    }
+    let Some(turn) = record.turn else {
         return Some(response_file(
             paths,
             record,
             name,
             &format!("{name}.{}", record.run_id),
         ));
-    }
-    earlier_response_path(paths, record, record.follow_ups + 1)
+    };
+    earlier_response_path(paths, record, turn)
 }
 
-/// Host path of this subagent run's response to turn `ordinal` (1 is the first).
+/// Host path of this run's response to turn `ordinal` (1 is the first).
 pub fn earlier_response_path(
     paths: &StatePaths,
     record: &RunRecord,
@@ -86,6 +90,28 @@ pub fn earlier_response_path(
         format!("{name}.{ordinal}")
     };
     Some(response_file(paths, record, name, &stem))
+}
+
+/// The turn a new peer or team record of `record`'s reader and agent name takes: one past the
+/// highest turn a retained record answering in the same file series holds, else 1. A record with
+/// no stored turn holds its own answers from `<name>.output` up (a subagent, or an agent's own
+/// `-p` run), unless it is a peer or team record from before turns were stored, whose file is
+/// named by its run id. The caller holds the workspace lock, so two creators never take one turn.
+fn next_turn(paths: &StatePaths, record: &RunRecord) -> Result<u32> {
+    fn reader(run: &RunRecord) -> Option<&str> {
+        run.reader.as_deref().or(run.agent_name.as_deref())
+    }
+    let highest = listing(paths)?
+        .iter()
+        .filter(|run| run.agent_name == record.agent_name && reader(run) == reader(record))
+        .map(|run| match run.turn {
+            Some(turn) => turn,
+            None if run.peer.is_some() || run.team.is_some() => 0,
+            None => run.follow_ups + 1,
+        })
+        .max()
+        .unwrap_or(0);
+    Ok(highest + 1)
 }
 
 fn response_file(paths: &StatePaths, record: &RunRecord, name: &str, stem: &str) -> PathBuf {

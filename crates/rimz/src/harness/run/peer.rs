@@ -42,7 +42,7 @@ pub fn create_peer_prompt(
     if let Some(record) = open_peer_run(paths, peer)? {
         return Ok(Some(record));
     }
-    let mut record = new_peer_record(paths, peer, reader, launch_id, prompt.to_owned(), cwd);
+    let mut record = new_peer_record(paths, peer, reader, launch_id, prompt.to_owned(), cwd)?;
     record.report_to = report_to;
     crate::store::run::write(&paths.runs_dir, &record)?;
     Ok(Some(record))
@@ -115,7 +115,7 @@ pub fn record_run_delivery(
                 MessageSender::Agent { name, .. } => name.as_deref(),
                 _ => None,
             });
-            let mut record = new_peer_record(paths, peer, reader, launch_id, prompt, cwd);
+            let mut record = new_peer_record(paths, peer, reader, launch_id, prompt, cwd)?;
             record.agent_id = Some(peer.agent_id.clone());
             record.status = RunStatus::Running;
             record
@@ -245,7 +245,7 @@ pub fn time_out_idle_peer(
         launch_id,
         String::new(),
         Path::new("."),
-    );
+    )?;
     record.agent_id = Some(peer.agent_id.clone());
     record.report_to = ReportTo::Launcher;
     let now = jiff::Timestamp::now();
@@ -290,7 +290,7 @@ fn new_peer_record(
     launch_id: &AgentSessionId,
     prompt: String,
     cwd: &Path,
-) -> RunRecord {
+) -> Result<RunRecord> {
     let mut record = RunRecord::new(
         paths.workspace_id.clone(),
         peer.kind.clone(),
@@ -306,7 +306,8 @@ fn new_peer_record(
         launch_id: launch_id.clone(),
         opened_by: Vec::new(),
     });
-    record
+    record.turn = Some(super::next_turn(paths, &record)?);
+    Ok(record)
 }
 
 #[cfg(test)]

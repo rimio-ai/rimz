@@ -461,6 +461,27 @@ fn self_cleanup_round_trips_and_defaults_when_absent() {
 }
 
 #[test]
+fn turn_round_trips_and_defaults_when_absent() {
+    let mut record = listing_record();
+    record.turn = Some(2);
+
+    let mut value = serde_json::to_value(&record).unwrap();
+    assert_eq!(value["turn"], 2);
+    let decoded: RunRecord = serde_json::from_value(value.clone()).unwrap();
+    assert_eq!(decoded.turn, Some(2));
+
+    value.as_object_mut().unwrap().remove("turn");
+    let decoded: RunRecord = serde_json::from_value(value).unwrap();
+    assert_eq!(decoded.turn, None);
+    assert!(
+        serde_json::to_value(&decoded)
+            .unwrap()
+            .get("turn")
+            .is_none()
+    );
+}
+
+#[test]
 fn retry_link_round_trips_and_defaults_when_absent() {
     let mut record = RunRecord::new(
         WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
