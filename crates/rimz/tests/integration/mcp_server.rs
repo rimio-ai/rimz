@@ -931,6 +931,42 @@ fn a_cli_launch_with_a_timeout_records_its_deadline_from_the_launch() {
     assert_eq!(room.agents().len(), rows, "a refused launch opens nothing");
 }
 
+/// `rimz teams <team> --timeout` records the team launch's deadline on its call record, counted
+/// from the launch, as the `team` tool's `timeout` does.
+#[cfg(unix)]
+#[test]
+fn a_cli_team_launch_with_a_timeout_records_its_deadline_from_the_launch() {
+    let room = LayoutRoom::new();
+    let before = jiff::Timestamp::now();
+    let out = room.cli(&[
+        "teams",
+        "solo",
+        "build it",
+        "-w",
+        "demo",
+        "--bg",
+        "--new-tab",
+        "--timeout",
+        "8h",
+    ]);
+    assert!(out.status.success(), "{out:?}");
+    let agents = room.agents();
+    let seat = agents
+        .iter()
+        .find(|agent| agent.team.as_deref() == Some("solo"))
+        .expect("the seat's launch row");
+    let launch_id = seat.launch_id.clone().expect("a launch id");
+    let record = rimz::store::call::load(room.store.paths(), &launch_id)
+        .unwrap()
+        .expect("the call record");
+    assert!(record.created_at >= before, "{record:?}");
+    assert_eq!(
+        record.deadline,
+        Some(record.created_at + std::time::Duration::from_secs(8 * 3600)),
+        "{record:?}"
+    );
+}
+
 /// An `agent` call opens a persistent peer started by the caller in a new tab, from a server
 /// whose process directory is outside the room, and the answered id works in `tasks`, `join`,
 /// and `stop`. Every refusal answers before anything launches.
@@ -4300,6 +4336,128 @@ fn a_watch_past_its_timeout_wakes_once_naming_it() {
     assert_eq!(lines[0], "waited on window.5h.left>=40", "{}", wake.text);
     assert!(
         lines[1].starts_with("timed out after ") && lines[1].ends_with(&format!(" [{name}]")),
+        "{}",
+        wake.text
+    );
+}
+
+/// `rimz shell --input --timeout` arms the shell the tool's `input` and `timeout` arm: its
+/// command reads the input from `$RIMZ_WORKFLOW_DIR/context.json`, and the timeout kills it whole
+/// and wakes the agent once. A value that is no JSON object, or a file that cannot be read, is
+/// refused before anything arms.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_cli_shell_takes_input_and_a_timeout() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    let listed = env.home_root.join("input-list.json");
+    std::fs::write(&listed, "[1]").unwrap();
+    let listed_refusal = format!(
+        "--input `{}` is not a JSON object: invalid type: sequence, expected a map",
+        listed.display()
+    );
+    for (input, error) in [
+        (
+            r#"{"pr": "#,
+            "--input is not a JSON object: EOF while parsing",
+        ),
+        (listed.to_str().unwrap(), listed_refusal.as_str()),
+        (
+            "/nonexistent/input.json",
+            "--input `/nonexistent/input.json` cannot be read: No such file or directory (os error 2)",
+        ),
+    ] {
+        let refused = crate::common::wait::agent_wait(&env)
+            .args(["shell", "--input", input, "--", "true"])
+            .output()
+            .unwrap();
+        assert!(!refused.status.success(), "{refused:?}");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(stderr.contains(error), "{stderr}");
+    }
+    let pids = env.home_root.join("cli-timed-out.pids");
+    let seen = env.home_root.join("cli-context.json");
+    let command = format!(
+        "cat \"$RIMZ_WORKFLOW_DIR/context.json\" > {}; sleep 300 & printf '%s %s' $$ $! > {}; wait",
+        seen.display(),
+        pids.display()
+    );
+    let armed = crate::common::wait::agent_wait(&env)
+        .args([
+            "shell",
+            "--input",
+            r#"{"pr": 1}"#,
+            "--timeout",
+            "1s",
+            "--json",
+            "--",
+        ])
+        .arg(&command)
+        .output()
+        .unwrap();
+    assert!(armed.status.success(), "{armed:?}");
+    let receipt: Value = serde_json::from_slice(&armed.stdout).expect("the receipt");
+    let name = receipt["name"]
+        .as_str()
+        .expect("the shell's name")
+        .to_owned();
+    wait_for_row_gone(&env, &name);
+    assert_processes_gone(&pids);
+    let context: Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).expect("context.json");
+    assert_eq!(context, json!({"input": {"pr": 1}}));
+    let messages = all_messages(&env);
+    let [wake] = messages.as_slice() else {
+        panic!("one wake: {messages:?}");
+    };
+    let verdict = wake.text.lines().nth(1).unwrap_or_default();
+    assert!(verdict.starts_with("timed out after "), "{}", wake.text);
+}
+
+/// `rimz watch --timeout` arms the watch the tool's `timeout` arms: still unmet when it passes,
+/// it wakes its agent once, naming the timeout.
+#[test]
+fn a_cli_watch_past_its_timeout_wakes_once_naming_it() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    crate::common::wait::register_calling_agent(&env);
+    crate::common::wait::publish_claude_5h(&env, 90);
+    let armed = crate::common::wait::agent_wait(&env)
+        .args(["watch", "--timeout", "1s", "--json", "window.5h.left >= 40"])
+        .output()
+        .unwrap();
+    assert!(armed.status.success(), "{armed:?}");
+    let receipt: Value = serde_json::from_slice(&armed.stdout).expect("the receipt");
+    let name = receipt["name"]
+        .as_str()
+        .expect("the watch's name")
+        .to_owned();
+    let tick = || {
+        let output = crate::common::wait::agent_wait(&env)
+            .args(["loop", "tick"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+    tick();
+    std::thread::sleep(Duration::from_millis(1100));
+    tick();
+    wait_for_row_gone(&env, &name);
+    tick();
+    let messages = all_messages(&env);
+    let [wake] = messages.as_slice() else {
+        panic!("one wake: {messages:?}");
+    };
+    let timed_out = wake.text.lines().nth(1).unwrap_or_default();
+    assert!(
+        timed_out.starts_with("timed out after ") && timed_out.ends_with(&format!(" [{name}]")),
         "{}",
         wake.text
     );

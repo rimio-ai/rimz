@@ -911,6 +911,24 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
     value.parse::<MuxName>().map_err(|err| err.to_string())
 }
 
+/// The JSON object a `flag` names: inline when the value starts with `{`, else read from the file
+/// the value names. A value it cannot read is a usage error.
+pub(super) fn json_object_arg(
+    flag: &str,
+    raw: &str,
+) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let (text, source) = if raw.trim_start().starts_with('{') {
+        (raw.to_owned(), String::new())
+    } else {
+        let text = std::fs::read_to_string(raw)
+            .map_err(|error| UsageError::new(format!("{flag} `{raw}` cannot be read: {error}")))?;
+        (text, format!(" `{raw}`"))
+    };
+    Ok(serde_json::from_str(&text).map_err(|error| {
+        UsageError::new(format!("{flag}{source} is not a JSON object: {error}"))
+    })?)
+}
+
 fn parse_task_label(value: &str) -> std::result::Result<String, &'static str> {
     rimz::harness::schedule::arm::task_label(value)
 }

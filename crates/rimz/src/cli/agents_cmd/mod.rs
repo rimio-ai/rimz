@@ -1481,17 +1481,9 @@ fn call_options(launch: &AgentLaunchArgs) -> Result<Option<rimz::harness::call::
     }))
 }
 
-/// The `--schema` value: inline JSON when it starts with `{`, else the path of a JSON file.
+/// The `--schema` value, which the block's schema validator checks.
 fn answer_schema(raw: &str) -> Result<serde_json::Map<String, serde_json::Value>> {
-    let (text, source) = if raw.trim_start().starts_with('{') {
-        (raw.to_owned(), String::new())
-    } else {
-        let text = std::fs::read_to_string(raw)
-            .map_err(|error| anyhow::anyhow!("--schema `{raw}` cannot be read: {error}"))?;
-        (text, format!(" `{raw}`"))
-    };
-    let schema: serde_json::Map<String, serde_json::Value> = serde_json::from_str(&text)
-        .map_err(|error| anyhow::anyhow!("--schema{source} is not a JSON object: {error}"))?;
+    let schema = crate::cli::json_object_arg("--schema", raw)?;
     if let Some(refusal) = rimz::harness::block::schema_refusal("--schema", &schema) {
         bail!(refusal);
     }

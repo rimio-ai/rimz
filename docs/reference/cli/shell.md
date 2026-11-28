@@ -8,6 +8,7 @@ Three other commands sit near this one. [`rimz agents wait`](./agents.md#list-an
 rimz shell -- cargo test                         # run a command, wake on its exit
 rimz shell --on fail -- cargo test               # deliver only if the command fails
 rimz shell --check-in 1h -- cargo build          # one check-in after 1h
+rimz shell --timeout 2h -- cargo test            # kill it once 2h have passed
 rimz shell --label soak -- sleep 600             # a label in lists and the message
 rimz shell list                                  # your shells, or the whole room's from a user shell
 rimz shell cancel shell-chief-mesa
@@ -25,6 +26,8 @@ Everything after `--` is the command. With no command and no option but `--json`
 | `--on fail\|success\|any` | Which outcome delivers a message. Default `any` ([which outcome delivers](#which-outcome-delivers---on)). |
 | `--label <TEXT>` | Short description: one line, 1 to 60 characters after trimming. In lists it replaces the command, and the message adds it after the command as ` · <label>`. |
 | `--check-in <DURATION>` | When to send one check-in. Greater than zero and less than `24h`. The default is in [check-ins](#check-ins---check-in). |
+| `--timeout <DURATION>` | Kill the command, every process of it, once this long has passed since the start, at most `365d`. Its outcome reads `timed out after <ELAPSED>`. |
+| `--input <JSON\|PATH>` | A JSON object the command reads as `input` from the `context.json` in `$RIMZ_WORKFLOW_DIR`: inline when the value starts with `{`, otherwise the path of a file that holds it. A value that is not a JSON object, or a file that cannot be read, is refused. |
 | `--json` | Print the receipt as JSON. |
 
 A duration is one whole number and one unit, `s`, `m`, `h`, or `d` ([durations](../cli.md#durations)). A compound value such as `1h30m` is an argument error.
@@ -209,6 +212,7 @@ Stop it: rimz shell cancel shell-stout-hinge
 | `exit <CODE> after <ELAPSED>` | The command exited. |
 | `killed by signal after <ELAPSED>` | The command died from a signal. |
 | `still running after <ELAPSED>` | A check-in. |
+| `timed out after <ELAPSED>` | The command passed its `--timeout` and was killed. |
 | `watcher died after <ELAPSED>; the command may still be running or may have died with it` | The watcher vanished without reporting. |
 
 A shell with an empty output file reads `· no output` after its verdict and names no file.

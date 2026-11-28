@@ -24,6 +24,7 @@ The expression is one positional argument: quote it when it holds a shell charac
 | --- | --- |
 | `--label <TEXT>` | Short description: one line, 1 to 60 characters after trimming. It follows the expression as ` · <label>` in lists and the message. |
 | `--check-in <DURATION>` | When to send one check-in. Greater than zero and less than `24h`. The default is in [check-ins](#check-ins---check-in). |
+| `--timeout <DURATION>` | Stop watching once this long has passed with the expression false, at most `365d`. One message names the timeout: `timed out after <ELAPSED>`. |
 | `--json` | Print the receipt as JSON. |
 
 A duration is one whole number and one unit, `s`, `m`, `h`, or `d` ([durations](../cli.md#durations)). A compound value such as `1h30m` is an argument error.
