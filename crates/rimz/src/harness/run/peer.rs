@@ -224,14 +224,15 @@ fn fail_open_run(
 }
 
 /// Record a timed-out turn for `peer`, a launcher's peer at rest when its call's deadline stopped
-/// it, so its launcher's digest reports the stop: a terminal record of the call's launch, carrying
-/// `failure`, whose response goes to `reader`'s `out/` directory. It starts and ends at the stop,
-/// so it sorts after every turn the peer completed and is the run a `join` or a wait reads. None
-/// for a row that is no launcher's peer.
+/// it, so its launcher's digest reports the stop when `report_to` asks: a terminal record of the
+/// call's launch, carrying `failure`, whose response goes to `reader`'s `out/` directory. It
+/// starts and ends at the stop, so it sorts after every turn the peer completed and is the run a
+/// `join` or a wait reads. None for a row that is no launcher's peer.
 pub fn time_out_idle_peer(
     paths: &StatePaths,
     peer: &AgentState,
     reader: Option<&str>,
+    report_to: ReportTo,
     failure: &str,
 ) -> Result<Option<RunRecord>> {
     let Some(launch_id) = peer_launch_id(peer) else {
@@ -247,7 +248,7 @@ pub fn time_out_idle_peer(
         Path::new("."),
     );
     record.agent_id = Some(peer.agent_id.clone());
-    record.report_to = ReportTo::Launcher;
+    record.report_to = report_to;
     let now = jiff::Timestamp::now();
     record.started_at = now;
     record.mark_terminal(RunStatus::TimedOut, now);

@@ -285,13 +285,15 @@ fn launch(worktree: Option<&str>, prompt: bool, print: Option<Option<u64>>) -> L
     LoopLaunch {
         worktree: worktree.map(str::to_owned),
         prompt,
-        print: print.map(|limit| limit.map(std::time::Duration::from_secs)),
+        print: print.is_some(),
+        timeout: print.flatten().map(std::time::Duration::from_secs),
         ..LoopLaunch::default()
     }
 }
 
 /// The receipt reads the launch back: the worktree its arguments name, whether a prompt was
-/// found, and a `-p` run's time limit; a workflow names only its worktree, a shell nothing.
+/// found, and a time limit where the tail gives `--timeout` (`none` for a `-p` run without
+/// one); a workflow names only its worktree, a shell nothing.
 #[test]
 fn the_launch_line_reads_the_parsed_launch_back() {
     use rimz::config::LaunchKind::{Agent, Shell, Team, Workflow};
@@ -312,9 +314,25 @@ fn the_launch_line_reads_the_parsed_launch_back() {
             Some("launch: a new worktree each fire · prompt found · time limit none"),
         ),
         (
+            Agent,
+            LoopLaunch {
+                timeout: Some(std::time::Duration::from_secs(3_600)),
+                ..launch(None, true, None)
+            },
+            Some("launch: prompt found · time limit 1h"),
+        ),
+        (
             Team,
             launch(Some("deps"), true, None),
             Some("launch: worktree `deps` · prompt found"),
+        ),
+        (
+            Team,
+            LoopLaunch {
+                timeout: Some(std::time::Duration::from_secs(7_200)),
+                ..launch(Some("deps"), true, None)
+            },
+            Some("launch: worktree `deps` · prompt found · time limit 2h"),
         ),
         (
             Workflow,
@@ -332,8 +350,8 @@ fn the_launch_line_reads_the_parsed_launch_back() {
     }
 }
 
-/// The idle note is owed by a repeating agent or team task that is not a `-p` run and chose
-/// no overlap policy; only an agent task's names `--overlap allow`, which a team task refuses.
+/// The idle note is owed by a repeating agent or team task that is not a `-p` or `--stay false`
+/// run and chose no overlap policy; only an agent task's names `--overlap allow`, which a team task refuses.
 #[test]
 fn the_idle_note_is_owed_only_where_an_idle_agent_holds_later_fires() {
     for (argv, parsed, owed) in [
@@ -355,6 +373,14 @@ fn the_idle_note_is_owed_only_where_an_idle_agent_holds_later_fires() {
         (
             &["--agent", "w", "--every", "1h"],
             launch(None, true, Some(None)),
+            None,
+        ),
+        (
+            &["--agent", "w", "--every", "1h"],
+            LoopLaunch {
+                stay: rimz::harness::block::Stay::TurnEnd,
+                ..launch(None, true, None)
+            },
             None,
         ),
         (
@@ -397,14 +423,14 @@ fn the_idle_note_is_owed_only_where_an_idle_agent_holds_later_fires() {
     }
     assert_eq!(
         AGENT_IDLE_NOTE,
-        "note: an agent left idle holds later fires; add `-p` for a run that ends itself, \
-         `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to launch \
-         beside it"
+        "note: an agent left idle holds later fires; add `-p` or `--stay false` for a run that ends \
+         itself, `--overlap replace` to stop the old agent at each fire, or `--overlap allow` to \
+         launch beside it"
     );
     assert_eq!(
         TEAM_IDLE_NOTE,
-        "note: an agent left idle holds later fires; add `-p` for a run that ends itself, or \
-         `--overlap replace` to stop the old agent at each fire"
+        "note: an agent left idle holds later fires; add `-p` or `--stay false` for a run that ends \
+         itself, or `--overlap replace` to stop the old agent at each fire"
     );
 }
 

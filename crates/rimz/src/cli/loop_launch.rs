@@ -31,8 +31,12 @@ pub(super) struct LoopLaunch {
     /// The tail's own `-w` names the loop's, so the row stores none and the fire passes one.
     pub(super) tail_names_worktree: bool,
     pub(super) prompt: bool,
-    /// A `-p` run, with its `--timeout` when the tail gives one.
-    pub(super) print: Option<Option<std::time::Duration>>,
+    /// A `-p` run.
+    pub(super) print: bool,
+    /// The tail's `--stay`; `false` is a run that ends itself, as `-p` is.
+    pub(super) stay: rimz::harness::block::Stay,
+    /// The tail's `--timeout`, for an agent or a team.
+    pub(super) timeout: Option<std::time::Duration>,
     /// The tail's `--account`.
     pub(super) account: Option<rimz::ids::LoginName>,
     /// The agent kinds the target resolves to as the launch resolves it, each once, in layout

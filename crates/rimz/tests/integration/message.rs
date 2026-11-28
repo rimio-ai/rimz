@@ -4590,6 +4590,63 @@ fn a_rest_stay_books_its_close_at_its_first_turn_end_until_a_typed_prompt_withdr
     }
 }
 
+/// An explicit `rimz agents stop --when-idle` made during a rest stay's first turn is the close
+/// the user asked for: that turn's end keeps it and books no rest over it.
+#[test]
+fn an_explicit_idle_stop_made_in_a_rest_stays_first_turn_outlives_that_turn_end() {
+    use rimz::store::idle_stop;
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    let hook = |payload: serde_json::Value| {
+        run_hook(&env, payload, &[("ZELLIJ_PANE_ID", "3")]);
+    };
+    hook(
+        json!({"hook_event_name": "SessionStart", "session_id": "provider-session", "source": "startup"}),
+    );
+    let store = env.store();
+    rimz::store::call::create(
+        store.paths(),
+        &rimz::store::call::CallRecord {
+            launch_id: "provider-session".into(),
+            seats: Vec::new(),
+            stay: true,
+            rest_secs: Some(600),
+            rest_booked_at: None,
+            schema: None,
+            created_at: jiff::Timestamp::now(),
+            deadline: None,
+            answer: None,
+            asked: None,
+            timed_out_at: None,
+        },
+    )
+    .unwrap();
+    hook(
+        json!({"hook_event_name": "UserPromptSubmit", "session_id": "provider-session", "prompt": "the brief"}),
+    );
+    let explicit = rimz::agents::IdleStop {
+        after_secs: 60,
+        requested_at: jiff::Timestamp::now(),
+        requested_by: None,
+    };
+    idle_stop::arm(
+        store.paths(),
+        idle_stop::IdleStopRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: "provider-session".into(),
+            stop: explicit.clone(),
+        },
+    )
+    .unwrap();
+    hook(json!({"hook_event_name": "Stop", "session_id": "provider-session"}));
+    let booked = idle_stop::read(store.paths());
+    let [booking] = booked.as_slice() else {
+        panic!("one close: {booked:?}");
+    };
+    assert_eq!(booking.stop, explicit, "the explicit close stands");
+}
+
 #[test]
 fn idle_stop_holds_while_a_message_is_owed_then_stops_without_canceling_the_run() {
     use rimz::harness::idle_stop::IdleStopHelperRequest;

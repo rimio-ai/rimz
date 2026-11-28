@@ -239,10 +239,11 @@ pub struct Agent {
     pub from_pr: Option<String>,
     /// Existing directory to work in.
     pub cwd: Option<PathBuf>,
-    /// `true` (the default): the agent stays in the room after its first turn until it is
-    /// closed. `false`: one task, and it closes once its turn ends and its report is out. A
-    /// duration (`"10m"`, at most `365d`): it stays, and once its first turn has ended it
-    /// closes after resting that long, unless a prompt the user types withdraws the close.
+    /// `true` or `"true"` (the default): the agent stays in the room after its first turn until
+    /// it is closed. `false` or `"false"`: one task, and it closes once its turn ends and its
+    /// report is out. A duration (`"10m"`, at most `365d`): it stays, and once its first turn
+    /// has ended it closes after resting that long, unless a prompt the user types withdraws the
+    /// close.
     #[serde(default)]
     pub stay: Stay,
     /// JSON Schema the agent's answer must fit, over `type`, `required`, `properties`,
@@ -893,39 +894,36 @@ impl Booked for Agent {
 
     fn booking_refusal(&self, _repeats: bool) -> Option<String> {
         let profile = self.profile.trim();
-        uncarried_refusal(&[
-            ("stay", self.stay != Stay::UntilStopped),
-            ("schema", self.schema.is_some()),
-            ("timeout", self.timeout.is_some()),
-        ])
-        .or_else(|| nul_refusal("arguments.profile", Some(&self.profile)))
-        .or_else(|| flag_refusal("arguments.profile", profile))
-        .or_else(|| {
-            profile
-                .starts_with(['@', '#'])
-                .then(|| "`arguments.profile` is a profile, not an address or scope".to_owned())
-        })
-        .or_else(|| {
-            // `launch` is the verb a launch spec may follow, so a spec named that is a verb too.
-            let launches = profile != "launch"
-                && crate::pane::command_is_launch_chrome(&format!("rimz agents {profile} prompt"));
-            (!launches).then(|| {
-                format!(
-                    "`arguments.profile` `{profile}` is a `rimz agents` verb, which a fire's \
-                     launch reads in place of a profile"
-                )
+        nul_refusal("arguments.profile", Some(&self.profile))
+            .or_else(|| flag_refusal("arguments.profile", profile))
+            .or_else(|| {
+                profile
+                    .starts_with(['@', '#'])
+                    .then(|| "`arguments.profile` is a profile, not an address or scope".to_owned())
             })
-        })
-        .or_else(|| text_flag_refusal("arguments.prompt", &self.prompt))
-        .or_else(|| nul_refusal("arguments.prompt", Some(&self.prompt)))
-        .or_else(|| nul_refusal("arguments.description", self.description.as_deref()))
-        .or_else(|| nul_refusal("arguments.name", self.name.as_deref()))
-        .or_else(|| nul_refusal("arguments.agent", self.agent.as_deref()))
-        .or_else(|| nul_refusal("arguments.from_pr", self.from_pr.as_deref()))
-        .or_else(|| {
-            let cwd = self.cwd.as_deref().map(|path| path.to_string_lossy());
-            nul_refusal("arguments.cwd", cwd.as_deref())
-        })
+            .or_else(|| {
+                // `launch` is the verb a launch spec may follow, so a spec named that is a verb too.
+                let launches = profile != "launch"
+                    && crate::pane::command_is_launch_chrome(&format!(
+                        "rimz agents {profile} prompt"
+                    ));
+                (!launches).then(|| {
+                    format!(
+                        "`arguments.profile` `{profile}` is a `rimz agents` verb, which a fire's \
+                     launch reads in place of a profile"
+                    )
+                })
+            })
+            .or_else(|| text_flag_refusal("arguments.prompt", &self.prompt))
+            .or_else(|| nul_refusal("arguments.prompt", Some(&self.prompt)))
+            .or_else(|| nul_refusal("arguments.description", self.description.as_deref()))
+            .or_else(|| nul_refusal("arguments.name", self.name.as_deref()))
+            .or_else(|| nul_refusal("arguments.agent", self.agent.as_deref()))
+            .or_else(|| nul_refusal("arguments.from_pr", self.from_pr.as_deref()))
+            .or_else(|| {
+                let cwd = self.cwd.as_deref().map(|path| path.to_string_lossy());
+                nul_refusal("arguments.cwd", cwd.as_deref())
+            })
     }
 }
 
@@ -936,8 +934,7 @@ impl Booked for Team {
 
     fn booking_refusal(&self, repeats: bool) -> Option<String> {
         let team = self.team.trim();
-        uncarried_refusal(&[("timeout", self.timeout.is_some())])
-            .or_else(|| nul_refusal("arguments.team", Some(&self.team)))
+        nul_refusal("arguments.team", Some(&self.team))
             .or_else(|| flag_refusal("arguments.team", team))
             .or_else(|| {
                 team.contains('#').then(|| {
@@ -981,15 +978,6 @@ fn carried_reason(mut reason: String) -> String {
     } else {
         format!("`arguments`: {reason}")
     }
-}
-
-/// A booked field a fire's `rimz agents` or `rimz teams` launch cannot carry, which a fire would
-/// otherwise drop.
-fn uncarried_refusal(given: &[(&str, bool)]) -> Option<String> {
-    let (field, _) = given.iter().find(|(_, given)| *given)?;
-    Some(format!(
-        "`arguments.{field}`: a fire's launch cannot carry it, so a booking does not take it"
-    ))
 }
 
 fn blank_field(fields: &[(&str, &String)]) -> Option<String> {

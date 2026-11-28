@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/harness/block/tests.rs
-assertion_line: 737
 expression: typescript()
 ---
 // The globals of a RimZ workflow script, printed by `rimz workflow types`.
@@ -118,10 +117,11 @@ interface Agent {
    */
   schema?: Record<string, unknown>;
   /**
-   * `true` (the default): the agent stays in the room after its first turn until it is
-   * closed. `false`: one task, and it closes once its turn ends and its report is out. A
-   * duration (`"10m"`, at most `365d`): it stays, and once its first turn has ended it
-   * closes after resting that long, unless a prompt the user types withdraws the close.
+   * `true` or `"true"` (the default): the agent stays in the room after its first turn until
+   * it is closed. `false` or `"false"`: one task, and it closes once its turn ends and its
+   * report is out. A duration (`"10m"`, at most `365d`): it stays, and once its first turn
+   * has ended it closes after resting that long, unless a prompt the user types withdraws the
+   * close.
    */
   stay?: boolean | string;
   /**

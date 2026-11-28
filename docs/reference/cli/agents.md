@@ -468,7 +468,7 @@ An exact id already recorded in this room keeps its handle and history, with the
 
 Otherwise Claude and Codex look only in the room account's provider home, including old and archived Codex sessions. A found session opens in its recorded working directory with a new RimZ handle, the room's login, and the selected solo profile. No session files are copied or linked between accounts. Both recorded and adopted sessions print `resumed <kind>:<handle> (<id>)`.
 
-Recorded and adopted exact ids accept the [single-session overrides](#resume-one-closed-session), with the same save, omission, refusal, and isolation-warning rules. Bare `--resume` takes these as ordinary launch flags. This flag still conflicts with the positional prompt, `--account`, `--continue`, `--stay`, `--schema`, `--timeout`, `--keep`, `--channel`, `--from-pr`, `--description`, `--budget`, `-w`, `--fresh`, `--detach`, `--cwd`, `-n`, `-p`, system-prompt files, and `--` passthrough. `--bg`, `--new-tab`, and `--new-pane` remain available. Send an instruction afterwards with `rimz message`.
+Recorded and adopted exact ids accept the [single-session overrides](#resume-one-closed-session), with the same save, omission, refusal, and isolation-warning rules. Bare `--resume` takes these as ordinary launch flags. This flag still conflicts with the positional prompt, `--account`, `--continue`, `--stay`, `--schema`, `--timeout`, `--keep`, `--stdin`, `--input-format`, `--max-turns`, `--channel`, `--from-pr`, `--description`, `--budget`, `-w`, `--fresh`, `--detach`, `--cwd`, `-n`, `-p`, system-prompt files, and `--` passthrough. `--bg`, `--new-tab`, and `--new-pane` remain available. Send an instruction afterwards with `rimz message`.
 
 | Refusal | Next step |
 | --- | --- |

@@ -79,6 +79,8 @@ pub enum SeatRefusal {
     Layout { spec: String },
     #[error("`{spec}` runs no agent; `agent` launches one")]
     NoAgent { spec: String },
+    #[error("`{spec}` is a team; launch it with `team`")]
+    Team { spec: String },
     #[error(
         "`{spec}` is not an agent profile; `rimz agents profiles` lists the launchable profiles"
     )]
@@ -100,9 +102,10 @@ pub enum BookRestErr {
 
 /// Book the close of `agent`'s rest stay at the end of its turn at `turn_ended_at`: the first
 /// turn end claims the rest once on the launch's call record, then books the stop `rimz agents
-/// stop --when-idle` books, requested at that turn end. Returns the rest it booked, in seconds;
-/// none for a launch with no rest, or whose rest an earlier turn end booked, so a close a typed
-/// prompt withdrew is never booked again.
+/// stop --when-idle` books, requested at that turn end, unless a close the user or the agent
+/// booked during that turn stands. Returns the rest it booked, in seconds; none for a launch with
+/// no rest, whose rest an earlier turn end claimed, so a close a typed prompt withdrew is never
+/// booked again, or whose own booked close stands.
 pub fn book_rest(
     paths: &StatePaths,
     agent: &crate::agents::AgentState,
@@ -125,7 +128,7 @@ pub fn book_rest(
     let Some((_, after_secs)) = claimed else {
         return Ok(None);
     };
-    crate::store::idle_stop::arm(
+    let armed = crate::store::idle_stop::arm_unless_pending(
         paths,
         crate::store::idle_stop::IdleStopRequest {
             kind: agent.kind.clone(),
@@ -137,7 +140,7 @@ pub fn book_rest(
             },
         },
     )?;
-    Ok(Some(after_secs))
+    Ok(armed.then_some(after_secs))
 }
 
 #[derive(Debug, thiserror::Error)]

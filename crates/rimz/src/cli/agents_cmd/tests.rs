@@ -1413,10 +1413,6 @@ mod parse {
                 MissingRequiredArgument,
             ),
             (
-                &["rimz", "claude", "hi", "--max-turns", "3"],
-                MissingRequiredArgument,
-            ),
-            (
                 &["rimz", "claude", "hi", "--retries", "1"],
                 MissingRequiredArgument,
             ),
@@ -1610,6 +1606,11 @@ mod parse {
             let args = parse_agents(argv);
             let err = call_options(&args.launch).expect_err("refuse the call");
             assert_eq!(err.to_string(), error, "{argv:?}");
+            assert!(
+                err.downcast_ref::<crate::cli::usage::UsageError>()
+                    .is_some(),
+                "{argv:?}: a usage error exits 2"
+            );
         }
         let args = parse_agents(&["rimz", "claude", "hi", "--schema", schema_path]);
         let call = call_options(&args.launch).unwrap().expect("a call");
@@ -1665,6 +1666,116 @@ mod parse {
                 Some(serde_json::json!({"type": "object"})),
                 Some(Duration::from_secs(3600))
             )
+        );
+    }
+
+    /// `--stay false` starts the run `-p --bg` started, so it takes the flags that run took; each
+    /// refusal on the new spellings names the spelling given, and a value it cannot read is a usage
+    /// error.
+    #[test]
+    fn stay_false_takes_a_one_task_runs_flags_and_refuses_in_its_own_terms() {
+        use clap::error::ErrorKind::ArgumentConflict;
+
+        for argv in [
+            &["rimz", "claude", "hi", "--stay", "false", "--stdin"][..],
+            &[
+                "rimz",
+                "claude",
+                "--stay",
+                "false",
+                "--input-format",
+                "stream-json",
+            ],
+            &[
+                "rimz",
+                "claude",
+                "-p",
+                "--input-format",
+                "stream-json",
+                "--schema",
+                r#"{"type": "object"}"#,
+            ],
+        ] {
+            call_options(&parse_agents(argv).launch)
+                .unwrap_or_else(|error| panic!("{argv:?}: {error}"));
+        }
+        let args = parse_agents(&[
+            "rimz",
+            "claude",
+            "hi",
+            "--stay",
+            "false",
+            "--max-turns",
+            "3",
+        ]);
+        let (request, _) = into_supervised_request(args).expect("build the run");
+        assert_eq!(request.max_turns, Some(3));
+
+        for argv in [
+            &["rimz", "claude", "--resume", "sess", "--keep"][..],
+            &["rimz", "claude", "--continue", "--keep"],
+            &["rimz", "claude", "--resume=sess", "--stdin"],
+            &["rimz", "claude", "--continue", "--stdin"],
+            &[
+                "rimz",
+                "claude",
+                "--resume=sess",
+                "--input-format",
+                "stream-json",
+            ],
+            &[
+                "rimz",
+                "claude",
+                "--continue",
+                "--input-format",
+                "stream-json",
+            ],
+            &["rimz", "claude", "--resume=sess", "--max-turns", "3"],
+            &["rimz", "claude", "--continue", "--max-turns", "3"],
+        ] {
+            assert_clap_error(argv, ArgumentConflict);
+        }
+
+        for (argv, error) in [
+            (
+                &["rimz", "claude", "hi", "--stdin"][..],
+                "--stdin reads the prompt of a run that closes at its turn end; add `-p` or \
+                 `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "hi", "--stay", "10m", "--max-turns", "3"],
+                "--max-turns caps a run that closes at its turn end; add `-p` or `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "--input-format", "stream-json"],
+                "--input-format reads the prompt of a run that closes at its turn end; add `-p` or \
+                 `--stay false`",
+            ),
+            (
+                &["rimz", "claude", "--stay", "false"],
+                "--stay false needs a prompt: the run it starts closes at the end of the turn the \
+                 prompt opens",
+            ),
+        ] {
+            let refused = call_options(&parse_agents(argv).launch).expect_err("refuse the call");
+            assert_eq!(refused.to_string(), error, "{argv:?}");
+            assert!(
+                refused
+                    .downcast_ref::<crate::cli::usage::UsageError>()
+                    .is_some(),
+                "{argv:?}: a usage error exits 2"
+            );
+        }
+
+        let mut args = parse_agents(&["rimz", "claude", "hi", "--stay", "false"]);
+        args.json = true;
+        let Err(error) = into_supervised_request(args) else {
+            panic!("--json is for list");
+        };
+        assert_eq!(
+            error.to_string(),
+            "--json is only supported with `rimz agents list`; a `--stay false` run prints its \
+             agent's name on stdout"
         );
     }
 

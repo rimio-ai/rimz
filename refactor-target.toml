@@ -2755,7 +2755,9 @@ path = "crates/rimz/src/harness"
 # `block::schema_refusal`, the schema check `--schema` shares with the `agent` block (+3).
 # `block::timeout`, the one launch `timeout` grammar, which each CLI `--timeout` of a launch
 # option parses with (+1).
-surface-budget = 1498
+# `plan::names_team`, the one reading of whether a launch spec names its team, which the
+# launcher's one-seat check refuses with as the plan does (+1).
+surface-budget = 1499
 
 [[verdict]]
 kind = "item"
@@ -5003,7 +5005,9 @@ path = "crates/rimz/src/store"
 # A workflow run's record owns its wire types (`store::workflow_run`): the record, its open
 # steps, their work, stops, endings, answer lines, journal entries, and sealed copies, with the
 # load, create, commit, and seal operations the run engine calls (+32).
-surface-budget = 754
+# `idle_stop::arm_unless_pending`, the locked book that keeps a close booked during a rest
+# stay's first turn (+1).
+surface-budget = 755
 
 [[verdict]]
 kind = "item"
