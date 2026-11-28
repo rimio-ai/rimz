@@ -549,7 +549,9 @@ upward-dependencies = [
 # ProjectTier::{user_first, user_only} carry the kind's precedence and the user-only refusal (+4).
 # The native-tool contest (`native_tool`, `native_claim`, `contest` and their two enums) is
 # shared by definition lowering, definition warnings and launch compilation (+5).
-surface-budget = 1430
+# UnappliedMark::{capability, user_server, server_mode} replace its public entry, since a staged
+# seat's up-front board load has none, and let explain place each beside the load it sets (+3).
+surface-budget = 1433
 
 [[module]]
 path = "crates/rimz/src/agents/pane_title.rs"
