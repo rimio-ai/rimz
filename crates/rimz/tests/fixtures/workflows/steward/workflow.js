@@ -45,7 +45,7 @@ export const meta = {
 }
 
 const steward = async (entry, input, timeout = '10m') => JSON.parse(
-  (await shell({ command: 'uv run --script checks/steward.py ' + entry, input, timeout })).stdout)
+  (await shell({ command: 'uv run --script "$RIMZ_WORKFLOW_FILES"/checks/steward.py ' + entry, input, timeout })).stdout)
 
 // A brief: a prompt file, and as JSON under it the run's arguments and the values it needs.
 const brief = (path, data) =>

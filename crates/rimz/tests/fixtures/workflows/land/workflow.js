@@ -26,7 +26,7 @@ export const meta = {
 
 // Every script under checks/ prints one JSON answer, and a nonzero exit throws.
 const check = async (script, timeout, input) => JSON.parse(
-  (await shell({ command: 'uv run --script checks/' + script, timeout, input })).stdout)
+  (await shell({ command: 'uv run --script "$RIMZ_WORKFLOW_FILES"/checks/' + script, timeout, input })).stdout)
 // The same, where the run goes on however the script ended.
 const attempt = (script, timeout, input) => check(script, timeout, input).catch(failure => failure)
 
