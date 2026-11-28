@@ -181,7 +181,7 @@ pub(in crate::harness) fn first_to_run(
 
 /// The answers of a hand-written answers file: JSON Lines, line n answering call n, blank lines
 /// skipped. A failure may leave out `reason`, and the engine fills its `block` and `step`; its
-/// cause is one a call can carry, not `replay` or `stuck`.
+/// cause is one a call can carry, not `replay`, `stuck`, `launches`, or `steps`.
 pub fn answers(text: &str) -> Result<Vec<Outcome>, String> {
     text.lines()
         .enumerate()
@@ -198,7 +198,10 @@ pub fn answers(text: &str) -> Result<Vec<Outcome>, String> {
             }
             let outcome = serde_json::from_value(value).map_err(at)?;
             if let Outcome::Failure(failure) = &outcome
-                && matches!(failure.cause, Cause::Replay | Cause::Stuck)
+                && matches!(
+                    failure.cause,
+                    Cause::Replay | Cause::Stuck | Cause::Launches | Cause::Steps
+                )
             {
                 return Err(format!(
                     "line {}: a call cannot fail with `{}`: a call fails with `exit`, `died`, `timeout`, `capacity`, or `invalid`",

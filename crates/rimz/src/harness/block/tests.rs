@@ -491,6 +491,11 @@ fn the_tool_refusals_hold_for_both_callers() {
             "`value` is blank",
         ),
         (
+            BlockName::Workflow,
+            json!({ "source": "name", "value": "land", "give_up": "soon" }),
+            "`give_up`",
+        ),
+        (
             BlockName::Schedule,
             booking(json!({ "match": { "k": "v" } })),
             "`match` takes a `signal` trigger",

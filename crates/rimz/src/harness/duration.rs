@@ -27,7 +27,7 @@ pub(in crate::harness) fn duration(
 }
 
 /// A workflow time, checked without a clock: what `[workflow].deadline`, `workflow run
-/// --deadline` and `--give-up`, and `extend --deadline` take.
+/// --deadline` and `--give-up`, `extend --deadline`, and a `workflow` block's `give_up` take.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct When(Form);
 
