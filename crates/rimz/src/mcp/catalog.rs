@@ -116,6 +116,8 @@ impl Capability {
         }
     }
 
+    /// The group of [`Self::ALL`] named `name`, `rimz-blackboard` included, which no profile
+    /// list may name.
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL
             .into_iter()
