@@ -240,9 +240,11 @@ fn join(env: &Env, id: &str) -> serde_json::Value {
     joined
 }
 
+/// Whether a row named `name` is live in a fresh projection: the cached `latest.json` keeps an
+/// owner that died after its last publish until the next append, and a stop need not append.
 fn live(env: &Env, name: &str) -> bool {
     env.store()
-        .snapshot_cached()
+        .snapshot()
         .unwrap()
         .agents
         .iter()
