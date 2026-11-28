@@ -1165,6 +1165,112 @@ fn from_pr_closed_cohort_prints_commands_without_moving_tip() {
     assert_from_pr_launch(Some(LifecycleSignal::Ended), true, false);
 }
 
+/// A launch at a PR head on no branch of `origin` stops before anything exists and names the
+/// checkout to run first; the relaunch it names reuses that tree, unattended, without meeting the
+/// worktree entry check.
+#[test]
+fn from_pr_launch_at_an_external_head_stops_and_its_advice_relaunches() {
+    use crate::common::git::{git_stdout, publish_pr_ref_without_branch};
+
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    crate::common::trust_claude_project(&env, &env.project_root);
+    let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    env.record(&env.project_root);
+    std::fs::write(
+        env.rimz_home().join("config.toml"),
+        "[agents]\nisolation = 'host'\n",
+    )
+    .unwrap();
+    crate::common::wait::register_calling_agent_with_launch(&env, LaunchParams::default());
+    let shim = write_env_dump_shim(&env, "claude");
+    let workspace = env.resolve_workspace(&env.project_root);
+    let log = env.home_root.join("mux.log");
+    let launch = || {
+        env.rimz()
+            .args([
+                "--mux",
+                "zellij",
+                "agents",
+                "claude",
+                "--from-pr",
+                "1",
+                "-w",
+                "review/x",
+            ])
+            .env("ZELLIJ_PANE_ID", "1")
+            .env("PATH", path_with_front(&shim))
+            .env("RIMZ_AGENT_KIND", "claude")
+            .env("RIMZ_AGENT_ID", "launch-session")
+            .env("RIMZ_TEST_AGENT_ENV_DUMP", env.home_root.join("agent-env"))
+            .env("RIMZ_TEST_ZELLIJ_VERSION", "0.45.1")
+            .env(
+                "RIMZ_ZELLIJ_BIN",
+                crate::common::cargo_bin("zellij-trace", env!("CARGO_BIN_EXE_zellij-trace")),
+            )
+            .env("RIMZ_TEST_ZELLIJ_LOG", &log)
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_CLIENTS",
+                "CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n1 terminal_3 claude\n",
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_PANES",
+                r#"[{"id":1,"is_plugin":false,"tab_id":1,"title":"sh"}]"#,
+            )
+            .env(
+                "RIMZ_TEST_ZELLIJ_LIST_SESSIONS",
+                format!("{} [Created 1s ago]\n", workspace.session_name),
+            )
+            .bounded_output()
+            .unwrap()
+    };
+    let path = env.home_root.join("project-worktrees/review-x");
+
+    let refused = launch();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert_eq!(refused.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "PR #1 is external: its head {} is on no branch of origin, so its code is not \
+             verified; check it out with `rimz worktree new review/x --from-pr 1 \
+             --allow-external`, then launch again with `--from-pr 1 -w review/x`",
+            &pr_head[..7]
+        )),
+        "{stderr}"
+    );
+    assert!(!path.exists(), "the refusal leaves no tree");
+    assert!(
+        !std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .contains("new-tab")
+    );
+
+    env.rimz()
+        .args([
+            "worktree",
+            "new",
+            "review/x",
+            "--from-pr",
+            "1",
+            "--allow-external",
+        ])
+        .assert()
+        .success();
+    let relaunched = launch();
+    let stderr = String::from_utf8_lossy(&relaunched.stderr);
+    assert_eq!(relaunched.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("reusing worktree `review-x`"), "{stderr}");
+    assert!(!stderr.contains("work in progress"), "{stderr}");
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    let trace = std::fs::read_to_string(&log).unwrap();
+    assert!(
+        trace
+            .lines()
+            .any(|line| line.split('\t').any(|arg| arg == "new-tab")),
+        "{trace}"
+    );
+}
+
 /// `symlinked_dir` routes `agents.worktree.dir` through a symlink, so the
 /// marker's lexical holder path and Git's realpath'd listing differ.
 fn assert_from_pr_launch(cohort: Option<LifecycleSignal>, behind: bool, symlinked_dir: bool) {

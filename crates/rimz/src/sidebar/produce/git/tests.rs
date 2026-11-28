@@ -107,6 +107,7 @@ fn project_group_roots_publishes_exact_marker_names() {
     ));
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "feature".to_owned(),
         branch: "feature".to_owned(),

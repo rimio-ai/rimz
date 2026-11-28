@@ -5484,12 +5484,28 @@ path = "crates/rimz/src/worktree"
 # own_lane moves here from harness::lanes as the one checkout classifier, so the sidebar producer can fill its own-lane table (+1).
 # stamp_loop_fire stamps the fire on the marker of a tree a fire's launch created (+1).
 # common_git_dir resolves a checkout's canonical common Git directory for Antigravity's sandbox read rule (+1).
-surface-budget = 93
+# ExternalPrHead, ExternalCheckout and ConfirmedBy carry an external PR's warning and its recorded confirmation to the CLI (+3).
+surface-budget = 96
 
 [[verdict]]
 kind = "item"
 key = "worktree::CheckoutKind"
 reason = "The CLI distinguishes a room's project and linked checkouts without owning Git metadata parsing."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ExternalPrHead"
+reason = "The CLI prints an external PR's warning from the head facts the domain refusal carries."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ExternalCheckout"
+reason = "The CLI passes the confirmation it took into the marker, and list and --json read it back."
+
+[[verdict]]
+kind = "item"
+key = "worktree::ConfirmedBy"
+reason = "The CLI names whether the prompt or --allow-external confirmed an external PR checkout."
 
 [[verdict]]
 kind = "item"

@@ -344,6 +344,7 @@ mod tests {
         std::fs::create_dir_all(&git_dir).unwrap();
         let marker = crate::worktree::WorktreeMarker {
             loop_fire: None,
+            external: None,
             version: 1,
             name: "lane".to_owned(),
             branch: "lane".to_owned(),

@@ -14,7 +14,7 @@ use crate::cli::render;
 use rimz::config::{WorktreeBase, WorktreeConfig};
 use rimz::forge::PrTarget;
 use rimz::workspace::{ResolvedWorkspace, RootClass, WorkspaceResolver};
-use rimz::worktree::{Holders, InspectedWorktree, KeepReason};
+use rimz::worktree::{ConfirmedBy, ExternalCheckout, Holders, InspectedWorktree, KeepReason};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
 
@@ -29,6 +29,7 @@ struct WorktreeListJson<'a> {
     landed: Option<bool>,
     reasons: Vec<KeepReason>,
     holders: &'a Holders,
+    external: Option<&'a ExternalCheckout>,
 }
 
 #[derive(Debug, Args)]
@@ -53,6 +54,9 @@ enum WorktreeSubcmd {
         /// Branch to create instead of `<name>`.
         #[arg(long)]
         branch: Option<String>,
+        /// Check out the pull request without asking when its head is on no branch of `origin`.
+        #[arg(long, requires = "from_pr")]
+        allow_external: bool,
         /// Print the name, path, branch, base provenance, and reuse status as JSON.
         #[arg(long)]
         json: bool,
@@ -151,8 +155,18 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             base,
             from_pr,
             branch,
+            allow_external,
             json,
-        } => new_worktree(&workspace, &config, name, base, from_pr, branch, json),
+        } => new_worktree(
+            &workspace,
+            &config,
+            name,
+            base,
+            from_pr,
+            branch,
+            allow_external,
+            json,
+        ),
         WorktreeSubcmd::List { json } => list_worktrees(&workspace, &config, globals, json),
         WorktreeSubcmd::Sweep { dry_run, json } => {
             sweep_worktrees(&workspace, &config, globals, dry_run, json)
@@ -177,6 +191,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn new_worktree(
     workspace: &ResolvedWorkspace,
     config: &WorktreeConfig,
@@ -184,6 +199,7 @@ fn new_worktree(
     base: Option<WorktreeBase>,
     from_pr: Option<PrTarget>,
     branch: Option<String>,
+    allow_external: bool,
     json: bool,
 ) -> Result<()> {
     let store = require_existing_store(workspace)?;
@@ -207,7 +223,7 @@ fn new_worktree(
         }
     }
     let created = if let Some(pr) = from_pr.as_ref() {
-        let create = |choice| {
+        let create = |choice, external| {
             rimz::worktree::create_from_pr(
                 &workspace.project_root,
                 config,
@@ -216,16 +232,35 @@ fn new_worktree(
                 branch.as_deref(),
                 false,
                 choice,
+                external,
             )
         };
-        match create(None) {
+        match create(None, None) {
             Ok(created) => created,
             Err(err @ rimz::worktree::WorktreeErr::PrBranchDiverged { .. }) => {
                 let Some(choice) = super::resolve_pr_branch_choice(&err)? else {
                     writeln!(render::err(), "nothing changed.")?;
                     return Ok(());
                 };
-                create(Some(choice))?
+                create(Some(choice), None)?
+            }
+            Err(rimz::worktree::WorktreeErr::PrExternal { head, .. }) => {
+                let agent = rimz::launcher::context::resolve_caller(&store)?.map(|caller| {
+                    caller
+                        .name
+                        .unwrap_or_else(|| caller.kind.as_str().to_owned())
+                });
+                let Some(confirmed_by) = confirm_external_pr(&head, allow_external)? else {
+                    writeln!(render::err(), "nothing changed.")?;
+                    return Ok(());
+                };
+                create(
+                    None,
+                    Some(ExternalCheckout {
+                        confirmed_by,
+                        agent,
+                    }),
+                )?
             }
             Err(err) => return Err(err.into()),
         }
@@ -268,6 +303,7 @@ fn new_worktree(
             base_branch: Option<&'a str>,
             base_ref: &'a str,
             reused: bool,
+            external: Option<&'a ExternalCheckout>,
         }
         render::json(&CreatedJson {
             name: &marker.name,
@@ -276,11 +312,52 @@ fn new_worktree(
             base_branch: marker.base_branch.as_deref(),
             base_ref: &marker.base_ref,
             reused: created.reused,
+            external: marker.external.as_ref(),
         })?;
     } else {
         report_created(&created, config.hooks.created.is_some())?;
     }
     Ok(())
+}
+
+/// Warn that `head` is external, then take the confirmation to check it out: `--allow-external`,
+/// else a yes at the terminal. `None` is a no at the prompt; without a terminal or the flag the
+/// checkout refuses and names the flag.
+fn confirm_external_pr(
+    head: &rimz::worktree::ExternalPrHead,
+    allow_external: bool,
+) -> Result<Option<ConfirmedBy>> {
+    confirm_external_pr_with(
+        head,
+        allow_external,
+        std::io::stdin().is_terminal(),
+        super::confirm,
+        |line| writeln!(render::err(), "{line}"),
+    )
+}
+
+fn confirm_external_pr_with(
+    head: &rimz::worktree::ExternalPrHead,
+    allow_external: bool,
+    is_terminal: bool,
+    confirm: impl FnOnce(&str) -> Result<bool>,
+    mut write_stderr: impl FnMut(&str) -> std::io::Result<()>,
+) -> Result<Option<ConfirmedBy>> {
+    write_stderr(&format!(
+        "rimz: {} {head}",
+        render::paint(render::palette::warn().bold(), "warning:")
+    ))?;
+    if allow_external {
+        write_stderr("  checking it out on --allow-external")?;
+        return Ok(Some(ConfirmedBy::Flag));
+    }
+    if !is_terminal {
+        bail!(
+            "PR #{} was not checked out; pass --allow-external to check it out anyway",
+            head.number
+        );
+    }
+    Ok(confirm(&format!("Check out PR #{} anyway?", head.number))?.then_some(ConfirmedBy::Prompt))
 }
 
 fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: bool) -> Result<()> {
@@ -329,6 +406,18 @@ fn report_created(created: &rimz::worktree::CreatedWorktree, created_hook_ran: b
             out,
             "  review : review-only checkout ({reason}); pushes are not configured — install gh/tea for a pushable checkout"
         )?;
+    }
+    if let Some(external) = marker.external.as_ref() {
+        let how = match external.confirmed_by {
+            ConfirmedBy::Prompt => "confirmed at the prompt",
+            ConfirmedBy::Flag => "allowed by --allow-external",
+        };
+        let agent = external
+            .agent
+            .as_deref()
+            .map(|agent| format!(" from @{agent}"))
+            .unwrap_or_default();
+        writeln!(out, "  source : external, {how}{agent}")?;
     }
     if created.included > 0 {
         writeln!(
@@ -392,6 +481,7 @@ fn worktree_json_row(entry: &InspectedWorktree) -> WorktreeListJson<'_> {
         },
         reasons: entry.state.keep_reasons(),
         holders: &entry.state.holders,
+        external: entry.managed.marker.external.as_ref(),
     }
 }
 
@@ -445,6 +535,9 @@ fn append_worktree_row(table: &mut render::Table, entry: &InspectedWorktree) {
     let mut state = render::cell(state).fg(render::status::worktree(entry.state.status.landed));
     if entry.state.status.dirty() {
         state = state.suffix("· dirty", render::palette::warn());
+    }
+    if entry.managed.marker.external.is_some() {
+        state = state.suffix("· external", render::palette::warn());
     }
     table.row([
         render::cell(&entry.managed.marker.name).fg(render::palette::accent()),
@@ -1278,9 +1371,20 @@ mod tests {
                         "agents": [], "panes": 0, "loop_tasks": [],
                         "teams": [], "workflow_runs": []
                     },
+                    "external": null,
                 })
             );
         }
+        let mut entry = inspected_worktree(rimz::worktree::LandedVerdict::Unlanded);
+        entry.managed.marker.external = Some(ExternalCheckout {
+            confirmed_by: ConfirmedBy::Prompt,
+            agent: None,
+        });
+        let value = serde_json::to_value(worktree_json_row(&entry)).expect("serialize row");
+        assert_eq!(
+            value["external"],
+            serde_json::json!({"confirmed_by": "prompt", "agent": null})
+        );
     }
 
     #[test]
@@ -1306,6 +1410,74 @@ mod tests {
         assert_eq!(fallback.project_root, repo_root);
     }
 
+    /// Every path warns first; the flag confirms without a prompt, a terminal asks, and anything
+    /// else refuses naming the flag.
+    #[test]
+    fn external_pr_warns_then_takes_the_flag_or_the_prompt() {
+        let head = rimz::worktree::ExternalPrHead {
+            number: 7,
+            commit: "1234567890abcdef".to_owned(),
+            repository: Some("alice/fork".to_owned()),
+            branches_unread: None,
+        };
+        let warning = "rimz: warning: PR #7 is external: its head 1234567 from alice/fork is on no \
+                       branch of origin, so its code is not verified";
+        let run = |allow_external, is_terminal, answer: Option<bool>| {
+            let mut lines = Vec::new();
+            let mut asked = None;
+            let result = confirm_external_pr_with(
+                &head,
+                allow_external,
+                is_terminal,
+                |prompt| {
+                    asked = Some(prompt.to_owned());
+                    Ok(answer.expect("no prompt on this path"))
+                },
+                |line| {
+                    lines.push(anstream::adapter::strip_str(line).to_string());
+                    Ok(())
+                },
+            )
+            .map_err(|err| err.to_string());
+            (result, asked, lines)
+        };
+
+        let flagged = vec![
+            warning.to_owned(),
+            "  checking it out on --allow-external".to_owned(),
+        ];
+        assert_eq!(
+            [run(true, false, None), run(true, true, None)],
+            [
+                (Ok(Some(ConfirmedBy::Flag)), None, flagged.clone()),
+                (Ok(Some(ConfirmedBy::Flag)), None, flagged),
+            ]
+        );
+        let asked = Some("Check out PR #7 anyway?".to_owned());
+        assert_eq!(
+            [run(false, true, Some(true)), run(false, true, Some(false))],
+            [
+                (
+                    Ok(Some(ConfirmedBy::Prompt)),
+                    asked.clone(),
+                    vec![warning.to_owned()]
+                ),
+                (Ok(None), asked, vec![warning.to_owned()]),
+            ]
+        );
+        assert_eq!(
+            run(false, false, None),
+            (
+                Err(
+                    "PR #7 was not checked out; pass --allow-external to check it out anyway"
+                        .to_owned()
+                ),
+                None,
+                vec![warning.to_owned()]
+            )
+        );
+    }
+
     fn inspected_worktree(landed: rimz::worktree::LandedVerdict) -> InspectedWorktree {
         let path = PathBuf::from("/repo-worktrees/demo");
         InspectedWorktree {
@@ -1328,6 +1500,7 @@ mod tests {
     fn worktree_marker() -> rimz::worktree::WorktreeMarker {
         rimz::worktree::WorktreeMarker {
             loop_fire: None,
+            external: None,
             version: 4,
             name: "demo".to_owned(),
             branch: "recorded/demo".to_owned(),

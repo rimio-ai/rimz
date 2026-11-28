@@ -101,6 +101,7 @@ fn registration_archives_a_linked_checkout_and_reuses_only_open_runs() {
     );
     let marker = crate::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 4,
         name: "checkout".into(),
         branch: "feature".into(),

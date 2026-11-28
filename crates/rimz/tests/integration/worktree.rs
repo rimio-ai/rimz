@@ -355,6 +355,7 @@ fn worktree_new_list_and_remove_round_trip() {
                 "agents": [], "panes": 0, "loop_tasks": [],
                 "teams": [], "workflow_runs": []
             },
+            "external": null,
         })
     );
 
@@ -1776,6 +1777,7 @@ fn worktree_new_reports_short_provenance_next_step_and_curated_json() {
         serde_json::json!({
             "name": "feat-json", "path": env.home_root.join("project-worktrees/feat-json"),
             "branch": "feat/json", "base_branch": "main", "base_ref": base, "reused": false,
+            "external": null,
         })
     );
     git(&env.project_root, &["checkout", "--detach"]);
@@ -2655,7 +2657,14 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
     env.record(&env.project_root);
     publish_pr_ref_without_branch(&env, "refs/pull/1/head");
     env.rimz()
-        .args(["worktree", "new", "review", "--from-pr", "1"])
+        .args([
+            "worktree",
+            "new",
+            "review",
+            "--from-pr",
+            "1",
+            "--allow-external",
+        ])
         .assert()
         .success();
 
@@ -2667,6 +2676,7 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
         Some("review"),
         None,
         true,
+        None,
         None,
     )
     .expect_err("different PR must not reuse worktree");
@@ -2682,6 +2692,7 @@ fn from_pr_reuse_requires_matching_pr_provenance() {
         Some("review"),
         None,
         true,
+        None,
         None,
     )
     .expect_err("reused worktree must still validate URL identity");
@@ -3099,7 +3110,7 @@ fn worktree_new_from_pr_without_forge_cli_is_review_only() {
     let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
 
     env.rimz()
-        .args(["worktree", "new", "--from-pr", "1"])
+        .args(["worktree", "new", "--from-pr", "1", "--allow-external"])
         .assert()
         .success()
         .stdout(contains("branch : pr-1"))
@@ -3121,6 +3132,7 @@ fn worktree_new_from_pr_without_forge_cli_is_review_only() {
             "1",
             "--branch",
             "review-1",
+            "--allow-external",
         ])
         .assert()
         .success()
@@ -3130,6 +3142,84 @@ fn worktree_new_from_pr_without_forge_cli_is_review_only() {
     assert!(
         !git_succeeds(&path, &["rev-parse", "--abbrev-ref", "@{upstream}"]),
         "explicit review branch has no upstream"
+    );
+}
+
+/// An outside head stops an unattended checkout with the warning and the flag, before any tree
+/// exists; the flag checks it out, and the record names the flag and the calling agent.
+#[test]
+fn worktree_new_from_outside_pr_needs_allow_external_and_records_it() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    env.record(&env.project_root);
+    let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    let path = env.home_root.join("project-worktrees/pr-1");
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "rimz: warning: PR #1 is external: its head {} is on no branch of origin, so its \
+             code is not verified",
+            &pr_head[..7]
+        )))
+        .stderr(contains(
+            "PR #1 was not checked out; pass --allow-external to check it out anyway",
+        ))
+        .stderr(contains("then launch again").not());
+    assert!(!path.exists());
+    assert!(!git_succeeds(
+        &env.project_root,
+        &["rev-parse", "--verify", "refs/heads/pr-1"]
+    ));
+    assert_eq!(
+        git_stdout(&env.project_root, &["for-each-ref", "refs/rimz/"]),
+        ""
+    );
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1", "--allow-external"])
+        .env("RIMZ_AGENT_KIND", "claude")
+        .env("RIMZ_AGENT_ID", "launch-young-cable")
+        .env("RIMZ_AGENT_NAME", "young-cable")
+        .assert()
+        .success()
+        .stderr(contains("  checking it out on --allow-external"))
+        .stdout(contains("created pr-1"))
+        .stdout(contains(
+            "  source : external, allowed by --allow-external from @young-cable",
+        ));
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    let record = rimz::worktree::ExternalCheckout {
+        confirmed_by: rimz::worktree::ConfirmedBy::Flag,
+        agent: Some("young-cable".to_owned()),
+    };
+    assert_eq!(
+        rimz::worktree::read_marker_for_worktree(&path)
+            .expect("read marker")
+            .expect("marker")
+            .external,
+        Some(record)
+    );
+
+    env.rimz()
+        .args(["worktree", "list"])
+        .assert()
+        .success()
+        .stdout(contains("unlanded · external"));
+    let output = env
+        .rimz()
+        .args(["worktree", "list", "--json"])
+        .output()
+        .expect("list json");
+    let rows: serde_json::Value = serde_json::from_slice(&output.stdout).expect("list json");
+    assert_eq!(
+        rows[0]["external"],
+        serde_json::json!({"confirmed_by": "flag", "agent": "young-cable"}),
+        "{rows}"
     );
 }
 
@@ -3236,13 +3326,27 @@ fn worktree_new_from_fork_pr_prefixes_local_branch_collision() {
     }
     let env = Env::new();
     env.record(&env.project_root);
-    publish_pr_ref_without_branch(&env, "refs/pull/1/head");
+    let (pr_head, _) = publish_pr_ref_without_branch(&env, "refs/pull/1/head");
     configure_github_origin_rewrite(&env);
     git(&env.project_root, &["branch", "feature", "main"]);
     let shim_dir = write_gh_pr_head_shim(&env, gh_fork_head());
 
     env.rimz()
         .args(["worktree", "new", "--from-pr", "1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .assert()
+        .failure()
+        .stderr(contains(format!(
+            "rimz: warning: PR #1 is external: its head {} from alice/fork is on no branch of \
+             origin, so its code is not verified",
+            &pr_head[..7]
+        )))
+        .stderr(contains(
+            "PR #1 was not checked out; pass --allow-external to check it out anyway",
+        ));
+    assert!(!env.home_root.join("project-worktrees/pr-1").exists());
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1", "--allow-external"])
         .env("PATH", path_with_front(&shim_dir))
         .assert()
         .success()

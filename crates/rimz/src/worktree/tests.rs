@@ -58,6 +58,7 @@ fn mark_lane(path: &Path, created_at: Timestamp) {
     std::fs::create_dir_all(&git_dir).expect("create git metadata");
     let marker = WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "lane".to_owned(),
         branch: "feature".to_owned(),
@@ -1421,6 +1422,7 @@ fn sweep_entry(
         ManagedWorktree {
             marker: WorktreeMarker {
                 loop_fire: None,
+                external: None,
                 version: 4,
                 name: name.to_owned(),
                 branch: name.to_owned(),
@@ -1986,6 +1988,7 @@ fn marker_v3_json_parses_without_pr_provenance() {
 
     assert_eq!(marker.version, 3);
     assert_eq!(marker.from_pr, None);
+    assert_eq!(marker.external, None);
 }
 
 /// A per-fire tree's marker, written before loop tasks stopped cutting a tree each fire, carries
@@ -2024,6 +2027,7 @@ fn checkout_metadata_marker_reader_follows_relative_gitdir_file() {
     std::fs::write(worktree.join(".git"), "gitdir: ../admin/wt\n").unwrap();
     let marker = WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "feature".to_owned(),
         branch: "feature".to_owned(),
@@ -2065,6 +2069,7 @@ fn checkout_metadata_marker_memo_revalidates_files_and_preserves_errors() {
     let marker_file = admin.join(MARKER_FILE);
     let mut marker = WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 1,
         name: "feature".to_owned(),
         branch: "feature".to_owned(),
@@ -2171,6 +2176,7 @@ fn checkout_metadata_marker_memo_evicts_the_oldest_parse_at_its_limit() {
             std::fs::create_dir_all(checkout.join(".git")).unwrap();
             let marker = WorktreeMarker {
                 loop_fire: None,
+                external: None,
                 version: 1,
                 name: format!("lane-{index}"),
                 branch: format!("lane-{index}"),

@@ -11,9 +11,9 @@ use crate::config::{WorktreeConfig, WorktreeHooks};
 use crate::forge;
 
 use super::{
-    Checkout, CreatedWorktree, FreshWorktree, MarkerProvenance, PushDestination, Result,
-    WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output, git_run,
-    git_stdout, is_ancestor, list_worktrees, merge_tree, read_marker_for_worktree,
+    Checkout, CreatedWorktree, ExternalCheckout, FreshWorktree, MarkerProvenance, PushDestination,
+    Result, WorktreeCreateTarget, WorktreeErr, add_worktree, ensure_repo, git_network_output,
+    git_run, git_stdout, is_ancestor, list_worktrees, merge_tree, read_marker_for_worktree,
     resolve_base_commit, resolve_branch, resolve_fresh_worktree, trunk_ref, write_marker,
 };
 
@@ -113,6 +113,45 @@ impl std::fmt::Display for PrBranchDivergence {
     }
 }
 
+/// A pull request head that is on no branch of `origin`: code that is not the user's own, so a
+/// checkout holds it only on the caller's confirmation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExternalPrHead {
+    pub number: u64,
+    /// The fetched head commit.
+    pub commit: String,
+    /// The repository the forge names as the head's home, when RimZ asked the forge.
+    pub repository: Option<String>,
+    /// Why the branches of `origin` could not be read, when they could not: the head then counts
+    /// as external unchecked.
+    pub branches_unread: Option<String>,
+}
+
+impl std::fmt::Display for ExternalPrHead {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let commit = self.commit.get(..7).unwrap_or(&self.commit);
+        let from = self
+            .repository
+            .as_ref()
+            .map(|repository| format!(" from {repository}"))
+            .unwrap_or_default();
+        match &self.branches_unread {
+            None => write!(
+                f,
+                "PR #{} is external: its head {commit}{from} is on no branch of origin, so its code \
+                 is not verified",
+                self.number
+            ),
+            Some(reason) => write!(
+                f,
+                "PR #{} is external: origin's branches could not be read ({reason}), so its head \
+                 {commit}{from} was not checked and its code is not verified",
+                self.number
+            ),
+        }
+    }
+}
+
 pub(super) fn alignment_commands(branch: &str, holder: Option<&Path>) -> String {
     let quote = |value: &str| {
         shlex::Quoter::new()
@@ -148,6 +187,10 @@ struct PrContext<'a> {
     refspec: String,
 }
 
+/// Check `pr` out into a tree, or reuse the tree that holds it. A head on no branch of `origin`
+/// refuses with [`WorktreeErr::PrExternal`] unless `external` carries the caller's confirmation,
+/// which the tree's marker then records.
+#[allow(clippy::too_many_arguments)]
 pub fn create_from_pr(
     repo_root: &Path,
     config: &WorktreeConfig,
@@ -156,6 +199,7 @@ pub fn create_from_pr(
     branch: Option<&str>,
     reuse_existing: bool,
     choice: Option<PrBranchChoice>,
+    external: Option<ExternalCheckout>,
 ) -> Result<CreatedWorktree> {
     config.hooks.validate()?;
     ensure_repo(repo_root)?;
@@ -205,7 +249,7 @@ pub fn create_from_pr(
     if let Some(branch) = review_branch {
         let fresh = require_fresh(target)?;
         let branch = resolve_branch(Some(branch), None, &fresh.name)?;
-        return review_only_checkout(repo_root, fresh, &context, branch, None);
+        return review_only_checkout(repo_root, fresh, &context, branch, None, external);
     }
 
     let Some((remote_repo, cli)) = context
@@ -221,6 +265,7 @@ pub fn create_from_pr(
             &context,
             branch,
             Some("origin has no supported forge CLI".to_owned()),
+            external,
         );
     };
     let program = cli.program();
@@ -233,6 +278,7 @@ pub fn create_from_pr(
             &context,
             branch,
             Some(format!("`{program}` is not installed")),
+            external,
         );
     }
     let head = resolve_pr_head_with_cli(repo_root, context.number, cli, remote_repo)?;
@@ -259,7 +305,7 @@ pub fn create_from_pr(
             choice,
         )
     } else {
-        fork_checkout(repo_root, require_fresh(target)?, &context, head)
+        fork_checkout(repo_root, require_fresh(target)?, &context, head, external)
     }
 }
 
@@ -306,15 +352,24 @@ fn review_only_checkout(
     context: &PrContext<'_>,
     branch: String,
     review_only_reason: Option<String>,
+    external: Option<ExternalCheckout>,
 ) -> Result<CreatedWorktree> {
     let pr_head = fetch_pr_head(repo_root, context.number, &context.remote, &context.refspec)?;
+    let external = external_record(
+        context.number,
+        fresh.branch.as_deref().unwrap_or(&fresh.name),
+        &pr_head.oid,
+        None,
+        origin_branch_tips(repo_root),
+        external,
+    )?;
     let mut created = add_pr_worktree(
         repo_root,
         fresh,
         branch,
-        pr_head.oid.clone(),
         pr_head.oid.as_str(),
         context.number,
+        external,
         context.hooks,
     )?;
     created.review_only_reason = review_only_reason;
@@ -433,6 +488,7 @@ fn fork_checkout(
     fresh: FreshWorktree,
     context: &PrContext<'_>,
     head: forge::PrHead,
+    external: Option<ExternalCheckout>,
 ) -> Result<CreatedWorktree> {
     validate_pr_branch(repo_root, context.number, &head.branch)?;
     let owner = head
@@ -471,13 +527,21 @@ fn fork_checkout(
         }
         prefixed
     };
+    let external = external_record(
+        context.number,
+        &fresh.name,
+        &pr_head.oid,
+        Some(&repo_full_name),
+        origin_branch_tips(repo_root),
+        external,
+    )?;
     let mut created = add_pr_worktree(
         repo_root,
         fresh,
         branch.clone(),
-        pr_head.oid.clone(),
         pr_head.oid.as_str(),
         context.number,
+        external,
         context.hooks,
     )?;
     let remote_key = format!("branch.{branch}.remote");
@@ -551,13 +615,62 @@ fn fetch_pr_head<'a>(
     Ok(head)
 }
 
+/// The `git ls-remote --heads` listing of `origin`, or why it could not be read. Callers read it
+/// after the PR fetch, so a branch that moved in between reads as external, the side that asks.
+fn origin_branch_tips(repo_root: &Path) -> std::result::Result<String, String> {
+    match git_network_output(
+        repo_root,
+        ["ls-remote", "--heads", "origin"],
+        PR_FETCH_TIMEOUT,
+    ) {
+        Ok(output) => Ok(String::from_utf8_lossy(&output.stdout).into_owned()),
+        Err(WorktreeErr::Git { stderr, .. }) => Err(stderr),
+        Err(err) => Err(err.to_string()),
+    }
+}
+
+/// The record a tree holding `commit` carries: none when `commit` is the tip of a branch in
+/// `branch_tips`, which makes it the user's own code, else the caller's confirmation, or the
+/// refusal that asks for one. Tips that could not be read count as external, the side that asks.
+fn external_record(
+    number: u64,
+    name: &str,
+    commit: &str,
+    repository: Option<&str>,
+    branch_tips: std::result::Result<String, String>,
+    confirmed: Option<ExternalCheckout>,
+) -> Result<Option<ExternalCheckout>> {
+    let branches_unread = match branch_tips {
+        Ok(tips)
+            if tips
+                .lines()
+                .any(|line| line.split('\t').next() == Some(commit)) =>
+        {
+            return Ok(None);
+        }
+        Ok(_) => None,
+        Err(reason) => Some(reason),
+    };
+    confirmed
+        .ok_or_else(|| WorktreeErr::PrExternal {
+            head: ExternalPrHead {
+                number,
+                commit: commit.to_owned(),
+                repository: repository.map(str::to_owned),
+                branches_unread,
+            },
+            name: name.to_owned(),
+        })
+        .map(Some)
+}
+
 fn add_pr_worktree(
     repo_root: &Path,
     fresh: FreshWorktree,
     branch: String,
-    pr_head: String,
-    checkout_ref: &str,
+    pr_head: &str,
     pr_number: u64,
+    external: Option<ExternalCheckout>,
     hooks: &WorktreeHooks,
 ) -> Result<CreatedWorktree> {
     add_worktree(
@@ -565,8 +678,11 @@ fn add_pr_worktree(
         fresh.name,
         fresh.path,
         branch,
-        pr_marker_provenance(repo_root, &pr_head, pr_number),
-        Checkout::NewBranch(checkout_ref),
+        MarkerProvenance {
+            external,
+            ..pr_marker_provenance(repo_root, pr_head, pr_number)
+        },
+        Checkout::NewBranch(pr_head),
         hooks,
     )
 }
@@ -584,6 +700,7 @@ fn pr_marker_provenance(
         base_branch,
         base_ref,
         from_pr: Some(pr_number),
+        external: None,
     }
 }
 
@@ -793,6 +910,121 @@ mod tests {
         );
     }
 
+    /// A head on no branch of `origin` refuses until the caller confirms it, and the tree records
+    /// the confirmation; once the head is a branch tip there, the checkout needs none.
+    #[test]
+    fn external_pr_head_needs_a_confirmation_and_the_tree_records_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path().join("repo");
+        let origin = dir.path().join("origin.git");
+        std::fs::create_dir(&repo).unwrap();
+        git_run(&repo, ["init", "-b", "main"]).unwrap();
+        git_run(&repo, ["config", "user.email", "rimz@example.test"]).unwrap();
+        git_run(&repo, ["config", "user.name", "Test"]).unwrap();
+        git_run(&repo, ["commit", "--allow-empty", "-m", "base"]).unwrap();
+        git_run(&repo, ["init", "--bare", origin.to_str().unwrap()]).unwrap();
+        git_run(&repo, ["remote", "add", "origin", origin.to_str().unwrap()]).unwrap();
+        git_run(&repo, ["push", "origin", "main"]).unwrap();
+        git_run(&repo, ["commit", "--allow-empty", "-m", "outside work"]).unwrap();
+        let head = git_stdout(&repo, ["rev-parse", "HEAD"]).unwrap();
+        git_run(&repo, ["push", "origin", "HEAD:refs/pull/1/head"]).unwrap();
+        git_run(&repo, ["reset", "--hard", "HEAD~1"]).unwrap();
+        let config = WorktreeConfig::default();
+        let pr = forge::parse("1").unwrap();
+        let checkout = |name, external| {
+            create_from_pr(&repo, &config, &pr, Some(name), None, false, None, external)
+        };
+
+        let branch_style = checkout("review/x", None).expect_err("an external head");
+        assert!(
+            branch_style.to_string().ends_with(
+                "check it out with `rimz worktree new review/x --from-pr 1 --allow-external`, \
+                 then launch again with `--from-pr 1 -w review/x`"
+            ),
+            "the printed command keeps the branch a branch-style name asks for: {branch_style}"
+        );
+        let refused = checkout("pr-1", None).expect_err("an external head needs a confirmation");
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "PR #1 is external: its head {} is on no branch of origin, so its code is not \
+                 verified; check it out with `rimz worktree new pr-1 --from-pr 1 \
+                 --allow-external`, then launch again with `--from-pr 1 -w pr-1`",
+                &head[..7]
+            )
+        );
+        assert!(!dir.path().join("repo-worktrees/pr-1").exists());
+        assert_eq!(local_branch_tip(&repo, "pr-1"), None);
+        assert_eq!(
+            git_stdout(&repo, ["for-each-ref", "refs/rimz/"]).unwrap(),
+            ""
+        );
+
+        let confirmed = ExternalCheckout {
+            confirmed_by: super::super::ConfirmedBy::Flag,
+            agent: Some("young-cable".to_owned()),
+        };
+        let created = checkout("pr-1", Some(confirmed.clone())).expect("confirmed checkout");
+        assert_eq!(created.marker.external, Some(confirmed.clone()));
+        let path = created.marker.worktree_path;
+        assert_eq!(git_stdout(&path, ["rev-parse", "HEAD"]).unwrap(), head);
+        assert_eq!(
+            read_marker_for_worktree(&path).unwrap().unwrap().external,
+            Some(confirmed.clone()),
+            "the record is durable on the marker"
+        );
+
+        git_run(
+            &repo,
+            ["push", "origin", &format!("{head}:refs/heads/feature")],
+        )
+        .unwrap();
+        let own = checkout("own", Some(confirmed)).expect("own checkout");
+        assert_eq!(
+            own.marker.external, None,
+            "a branch tip on origin is the user's own"
+        );
+    }
+
+    /// Branches of `origin` that could not be read leave the head unchecked: it counts as external,
+    /// and the warning says why it was not checked.
+    #[test]
+    fn unreadable_origin_branches_count_as_external() {
+        let unread = || Err("fatal: could not read from remote repository".to_owned());
+        let refused = external_record(
+            3,
+            "pr-3",
+            "1234567890ab",
+            Some("alice/fork"),
+            unread(),
+            None,
+        )
+        .expect_err("an unchecked head needs a confirmation");
+        assert_eq!(
+            refused.to_string(),
+            "PR #3 is external: origin's branches could not be read (fatal: could not read from \
+             remote repository), so its head 1234567 from alice/fork was not checked and its code \
+             is not verified; check it out with `rimz worktree new pr-3 --from-pr 3 \
+             --allow-external`, then launch again with `--from-pr 3 -w pr-3`"
+        );
+        let confirmed = ExternalCheckout {
+            confirmed_by: super::super::ConfirmedBy::Prompt,
+            agent: None,
+        };
+        assert_eq!(
+            external_record(
+                3,
+                "pr-3",
+                "1234567890ab",
+                None,
+                unread(),
+                Some(confirmed.clone())
+            )
+            .expect("a confirmed unchecked head"),
+            Some(confirmed)
+        );
+    }
+
     #[test]
     fn pr_worktree_marker_records_pr_number() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -813,9 +1045,9 @@ mod tests {
                 branch: None,
             },
             "review-69".to_owned(),
-            head.clone(),
             &head,
             69,
+            None,
             &WorktreeHooks::default(),
         )
         .expect("PR worktree");

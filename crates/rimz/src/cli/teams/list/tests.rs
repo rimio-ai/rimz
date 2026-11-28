@@ -899,6 +899,7 @@ fn live_member_cost_counts_only_the_current_lane_lifetime() {
     std::fs::create_dir_all(&git_dir).unwrap();
     let marker = rimz::worktree::WorktreeMarker {
         loop_fire: None,
+        external: None,
         version: 4,
         name: "feat-x".to_owned(),
         branch: "feat-x".to_owned(),
