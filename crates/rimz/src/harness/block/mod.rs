@@ -392,7 +392,7 @@ pub(in crate::harness) struct Workflow {
 /// What fires a booking.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum ScheduleTrigger {
+pub enum ScheduleTrigger {
     At,
     In,
     Every,
@@ -404,7 +404,7 @@ pub(in crate::harness) enum ScheduleTrigger {
 /// The block a booking launches.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum ScheduleTool {
+pub enum ScheduleTool {
     Agent,
     Team,
     Workflow,
@@ -413,7 +413,7 @@ pub(in crate::harness) enum ScheduleTool {
 /// What a repeating booking does about a trigger during a live fire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub(in crate::harness) enum ScheduleOverlap {
+pub enum ScheduleOverlap {
     Skip,
     Coalesce,
     Queue,
@@ -424,21 +424,19 @@ pub(in crate::harness) enum ScheduleOverlap {
 /// Books a launch for later; the call gives the booking's id at once, and nothing follows.
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-#[expect(
-    dead_code,
-    reason = "the tools and the run steps of later changes read the fields no refusal reads"
-)]
-pub(in crate::harness) struct Schedule {
-    /// Booking name; reusing a name you hold replaces it.
+pub struct Schedule {
+    /// Booking name; reusing a name you hold replaces it (canceling unstarted live runs and
+    /// clearing strikes and history), while another starter's name is refused.
     pub name: String,
     /// What fires the booking.
     pub trigger: ScheduleTrigger,
     /// The trigger's argument: a clock time, delay, interval, cron expression, signal name, or
     /// condition.
     pub value: String,
-    /// The block each fire launches.
+    /// What each fire launches.
     pub tool: ScheduleTool,
-    /// That block's own object, without `worktree` (pass top-level `worktree`).
+    /// The object `tool` takes as a call of its own, without `worktree` (pass top-level
+    /// `worktree`).
     pub arguments: Map<String, Value>,
     /// `signal` only: payload fields that must equal these values (`*` matches any value).
     #[serde(rename = "match")]
@@ -451,7 +449,9 @@ pub(in crate::harness) struct Schedule {
     pub repeat: bool,
     /// RimZ-owned worktree for every fire, created at the first fire when missing.
     pub worktree: Option<String>,
-    /// Repeating triggers only: what a trigger during a live fire does (`skip` default).
+    /// Repeating triggers only: answer to a trigger during a live fire (`skip` default;
+    /// `coalesce` or `queue` hold it, `replace` stops the live fire first, `allow` launches beside
+    /// it for `agent` only).
     pub overlap: Option<ScheduleOverlap>,
     /// Disable after this many failed fires in a row (default `3`; `0` never).
     pub max_strikes: Option<u32>,
@@ -460,7 +460,7 @@ pub(in crate::harness) struct Schedule {
 /// What a booking's call gives.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(in crate::harness) struct ScheduleResult {
+pub(crate) struct ScheduleResult {
     /// The booking's id.
     pub id: String,
 }
@@ -643,7 +643,7 @@ impl Block for Schedule {
     const NAME: BlockName = BlockName::Schedule;
     type Result = ScheduleResult;
 
-    fn refusal(&self, _caller: Caller) -> Option<String> {
+    fn refusal(&self, caller: Caller) -> Option<String> {
         use ScheduleTrigger::{At, Cron, Every, In, Signal, When};
         if let Some(blank) = blank_field(&[("name", &self.name)]) {
             return Some(blank);
@@ -693,15 +693,15 @@ impl Block for Schedule {
         }
         let value_refusal = match self.trigger {
             At => at_refusal("value", &self.value),
-            In | Every => interval_refusal("value", Some(&self.value)),
+            In | Every => delay_refusal("value", Some(&self.value)),
             When => when_refusal("value", &self.value),
             Signal => blank_field(&[("value", &self.value)]),
             // The cron grammar lives with the loop scheduler, which the booking reaches.
             Cron => blank_field(&[("value", &self.value)]),
         };
         value_refusal
-            .or_else(|| duration_refusal("for", self.hold.as_deref()))
-            .or_else(|| self.carried_refusal())
+            .or_else(|| delay_refusal("for", self.hold.as_deref()))
+            .or_else(|| self.carried_refusal(caller))
     }
 }
 
@@ -716,21 +716,150 @@ impl Block for Now {
 }
 
 impl Schedule {
-    /// Why `arguments` does not parse as the booked block's own object. A fire starts the block
-    /// afresh, outside any script, so it parses as a tool's call.
-    fn carried_refusal(&self) -> Option<String> {
+    /// Whether the booking's trigger can fire more than once.
+    pub(crate) fn repeats(&self) -> bool {
+        matches!(self.trigger, ScheduleTrigger::Every | ScheduleTrigger::Cron) || self.repeat
+    }
+
+    /// `arguments`, with top-level `worktree` merged in, as the launch each fire stores. A fire
+    /// starts it afresh, outside any script, so it parses as a tool's call.
+    pub(crate) fn booked<B: Booked>(&self) -> Result<B, String> {
         let mut carried = self.arguments.clone();
         if let Some(worktree) = &self.worktree {
             carried.insert("worktree".to_owned(), Value::String(worktree.clone()));
         }
-        let carried = Value::Object(carried);
-        let parsed = match self.tool {
-            ScheduleTool::Agent => parse::<Agent>(carried, Caller::Tool).map(drop),
-            ScheduleTool::Team => parse::<Team>(carried, Caller::Tool).map(drop),
-            ScheduleTool::Workflow => parse::<Workflow>(carried, Caller::Tool).map(drop),
-        };
-        parsed.err().map(|reason| format!("`arguments`: {reason}"))
+        let booked = B::parse_call(Value::Object(carried)).map_err(carried_reason)?;
+        match booked.booking_refusal(self.repeats()) {
+            Some(reason) => Err(reason),
+            None => Ok(booked),
+        }
     }
+
+    fn carried_refusal(&self, caller: Caller) -> Option<String> {
+        match self.tool {
+            ScheduleTool::Agent => self.booked::<Agent>().err(),
+            ScheduleTool::Team => self.booked::<Team>().err(),
+            // The `schedule` tool books the `workflow` tool's own arguments, which its catalog
+            // parses, until that tool takes this block.
+            ScheduleTool::Workflow if caller == Caller::Tool => None,
+            ScheduleTool::Workflow => self.booked::<Workflow>().err(),
+        }
+    }
+}
+
+/// A launch a booking stores for its fires, which pass each of its fields as a word of a `rimz`
+/// argv.
+pub(crate) trait Booked: Sized {
+    /// The carried object, parsed as a call of its own and refused with that call's sentence.
+    fn parse_call(object: Value) -> Result<Self, String>;
+    /// Why a call that runs on its own cannot ride a fire's stored launch.
+    fn booking_refusal(&self, repeats: bool) -> Option<String>;
+}
+
+impl Booked for Agent {
+    fn parse_call(object: Value) -> Result<Self, String> {
+        parse(object, Caller::Tool)
+    }
+
+    fn booking_refusal(&self, _repeats: bool) -> Option<String> {
+        let profile = self.profile.trim();
+        uncarried_refusal(&[
+            ("stay", !self.stay),
+            ("schema", self.schema.is_some()),
+            ("timeout", self.timeout.is_some()),
+        ])
+        .or_else(|| nul_refusal("arguments.profile", Some(&self.profile)))
+        .or_else(|| flag_refusal("arguments.profile", profile))
+        .or_else(|| {
+            profile
+                .starts_with(['@', '#'])
+                .then(|| "`arguments.profile` is a profile, not an address or scope".to_owned())
+        })
+        .or_else(|| {
+            // `launch` is the verb a launch spec may follow, so a spec named that is a verb too.
+            let launches = profile != "launch"
+                && crate::pane::command_is_launch_chrome(&format!("rimz agents {profile} prompt"));
+            (!launches).then(|| {
+                format!(
+                    "`arguments.profile` `{profile}` is a `rimz agents` verb, which a fire's \
+                     launch reads in place of a profile"
+                )
+            })
+        })
+        .or_else(|| text_flag_refusal("arguments.prompt", &self.prompt))
+        .or_else(|| nul_refusal("arguments.prompt", Some(&self.prompt)))
+        .or_else(|| nul_refusal("arguments.description", self.description.as_deref()))
+        .or_else(|| nul_refusal("arguments.name", self.name.as_deref()))
+        .or_else(|| nul_refusal("arguments.agent", self.agent.as_deref()))
+        .or_else(|| nul_refusal("arguments.from_pr", self.from_pr.as_deref()))
+        .or_else(|| {
+            let cwd = self.cwd.as_deref().map(|path| path.to_string_lossy());
+            nul_refusal("arguments.cwd", cwd.as_deref())
+        })
+    }
+}
+
+impl Booked for Team {
+    fn parse_call(object: Value) -> Result<Self, String> {
+        parse(object, Caller::Tool)
+    }
+
+    fn booking_refusal(&self, repeats: bool) -> Option<String> {
+        let team = self.team.trim();
+        uncarried_refusal(&[("timeout", self.timeout.is_some())])
+            .or_else(|| nul_refusal("arguments.team", Some(&self.team)))
+            .or_else(|| flag_refusal("arguments.team", team))
+            .or_else(|| {
+                team.contains('#').then(|| {
+                    "`arguments.team` cannot include `#lane`; pass top-level `worktree` instead"
+                        .to_owned()
+                })
+            })
+            .or_else(|| text_flag_refusal("arguments.prompt", &self.prompt))
+            .or_else(|| nul_refusal("arguments.prompt", Some(&self.prompt)))
+            .or_else(|| nul_refusal("arguments.description", self.description.as_deref()))
+            .or_else(|| nul_refusal("arguments.from_pr", self.from_pr.as_deref()))
+            .or_else(|| {
+                (repeats && self.from_pr.is_some()).then(|| {
+                    "`arguments.from_pr`: a repeating team booking cannot use `from_pr`; set \
+                     top-level `worktree` or use a one-shot trigger"
+                        .to_owned()
+                })
+            })
+    }
+}
+
+impl Booked for Workflow {
+    fn parse_call(object: Value) -> Result<Self, String> {
+        parse(object, Caller::Tool)
+    }
+
+    fn booking_refusal(&self, _repeats: bool) -> Option<String> {
+        None
+    }
+}
+
+/// A carried call's refusal, pointed at `arguments`. Top-level `worktree` is merged in before
+/// the parse, so a refusal naming it says so, and a list of expected fields drops it.
+fn carried_reason(mut reason: String) -> String {
+    if let Some((head, tail)) = reason.split_once("expected one of ") {
+        let tail = tail.replace(", `worktree`", "").replace("`worktree`, ", "");
+        reason = format!("{head}expected one of {tail}");
+    }
+    if reason.contains("`worktree`") {
+        format!("`arguments` (with top-level `worktree`): {reason}")
+    } else {
+        format!("`arguments`: {reason}")
+    }
+}
+
+/// A booked field a fire's `rimz agents` or `rimz teams` launch cannot carry, which a fire would
+/// otherwise drop.
+fn uncarried_refusal(given: &[(&str, bool)]) -> Option<String> {
+    let (field, _) = given.iter().find(|(_, given)| *given)?;
+    Some(format!(
+        "`arguments.{field}`: a fire's launch cannot carry it, so a booking does not take it"
+    ))
 }
 
 fn blank_field(fields: &[(&str, &String)]) -> Option<String> {
@@ -748,13 +877,23 @@ fn blank_place(worktree: Option<&str>, from_pr: Option<&str>) -> Option<String> 
 }
 
 /// Why a value a fire's launch passes as a word of its own would read as a flag there.
-fn flag_refusal(field: &str, value: &str) -> Option<String> {
+pub(crate) fn flag_refusal(field: &str, value: &str) -> Option<String> {
     value
         .starts_with('-')
         .then(|| format!("`{field}` starts with `-`, which a fire's launch reads as a flag"))
 }
 
-fn nul_refusal(field: &str, value: Option<&str>) -> Option<String> {
+/// A free-text positional takes a leading `- `, as a bulleted prompt has; any other leading `-`
+/// parses as an option.
+fn text_flag_refusal(field: &str, value: &str) -> Option<String> {
+    let rest = value.strip_prefix('-')?;
+    if rest.starts_with(char::is_whitespace) {
+        return None;
+    }
+    flag_refusal(field, value)
+}
+
+pub(crate) fn nul_refusal(field: &str, value: Option<&str>) -> Option<String> {
     value
         .is_some_and(|value| value.contains('\0'))
         .then(|| format!("`{field}` holds a NUL character, which a fire's launch cannot pass"))
@@ -775,6 +914,16 @@ pub(in crate::harness) fn reads(
 ) -> Result<Option<bool>, String> {
     let condition = WhenExpr::parse(&[when.to_owned()]).map_err(|error| error.to_string())?;
     Ok(condition.truth(readings))
+}
+
+/// A duration in the loop scheduler's grammar, which a booking's `in`, `every`, and `for` reach:
+/// more than zero, with no cap.
+fn delay_refusal(field: &str, raw: Option<&str>) -> Option<String> {
+    match crate::utils::time::parse_compact_duration(raw?) {
+        Err(error) => Some(format!("`{field}`: {error}")),
+        Ok(delay) if delay.is_zero() => Some(format!("`{field}`: must be greater than zero")),
+        Ok(_) => None,
+    }
 }
 
 fn duration_refusal(field: &str, raw: Option<&str>) -> Option<String> {

@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/harness/block/tests.rs
-assertion_line: 616
 expression: typescript()
 ---
 // The globals of a RimZ workflow script, printed by `rimz workflow types`.
@@ -262,7 +261,10 @@ interface Workflow {
 declare function schedule(block: Schedule): Promise<ScheduleResult>;
 
 interface Schedule {
-  /** Booking name; reusing a name you hold replaces it. */
+  /**
+   * Booking name; reusing a name you hold replaces it (canceling unstarted live runs and
+   * clearing strikes and history), while another starter's name is refused.
+   */
   name: string;
   /** What fires the booking. */
   trigger: "at" | "in" | "every" | "cron" | "signal" | "when";
@@ -271,9 +273,12 @@ interface Schedule {
    * condition.
    */
   value: string;
-  /** The block each fire launches. */
+  /** What each fire launches. */
   tool: "agent" | "team" | "workflow";
-  /** That block's own object, without `worktree` (pass top-level `worktree`). */
+  /**
+   * The object `tool` takes as a call of its own, without `worktree` (pass top-level
+   * `worktree`).
+   */
   arguments: Record<string, unknown>;
   /** `when` only: how long the condition must hold before firing. */
   for?: string;
@@ -281,7 +286,11 @@ interface Schedule {
   match?: Record<string, string>;
   /** Disable after this many failed fires in a row (default `3`; `0` never). */
   max_strikes?: number;
-  /** Repeating triggers only: what a trigger during a live fire does (`skip` default). */
+  /**
+   * Repeating triggers only: answer to a trigger during a live fire (`skip` default;
+   * `coalesce` or `queue` hold it, `replace` stops the live fire first, `allow` launches beside
+   * it for `agent` only).
+   */
   overlap?: "skip" | "coalesce" | "queue" | "replace" | "allow";
   /** `signal` or `when` only: fire on every match rather than once (default once). */
   repeat?: boolean;

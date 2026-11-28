@@ -2732,11 +2732,14 @@ path = "crates/rimz/src/harness"
 # `call_timeout`, the host pass and its helper request; `run::time_out_run`,
 # `time_out_idle_peer`, and `report_team_timeout`, the settlement the timeout helper writes; the
 # `Answer` reminder section and its body (+23).
+# The `schedule` block, its result and the enums its fields take, its `repeats` and `booked`,
+# `Booked` and its two methods, and the `flag_refusal` and `nul_refusal` a `workflow` booking
+# shares, which the `schedule` tool reads (+11).
 # `call::live_seats`, the one reading of a call's live seats for the timeout pass and its
 # helper (+1).
 # `launch_reminders::section_reminder`, which carries a call's reminder section into the
 # prompt of a launch with no channel for it (+1).
-surface-budget = 1474
+surface-budget = 1485
 
 [[verdict]]
 kind = "item"
@@ -6533,11 +6536,14 @@ allowed-dependencies = [
     "(crate)",
     "harness::duration",
     "harness::when",
+    # `command_is_launch_chrome`, which tells a booked profile from a `rimz agents` verb.
+    "pane",
     "utils::time",
 ]
 # The module itself and `typescript`, the one item `rimz workflow types` prints (+2).
 # The six blocks, their results, the enums their fields take, and the failure: the types the
-# script engine reads, and the `shell` and `watch` tools take (+18).
+# script engine reads, and the `agent`, `team`, `shell`, `watch`, and `schedule` tools take
+# (+18).
 # `Now`, the seventh block: the clock a script reads as a call its log answers (+1).
 # `ms` and `reads`, the duration grammar and the condition walk a script calls as pure
 # functions, kept here so the script engine reaches nothing past this module (+2).
@@ -6546,7 +6552,10 @@ allowed-dependencies = [
 # entries the script engine calls (+7).
 # `Cause::as_str`, the one spelling of a cause, which `rimz workflow try` prints (+1).
 # `answer_misfit`, the one check of an answer against an `agent` call's schema (+1).
-surface-budget = 33
+# `Schedule::repeats` and `Schedule::booked`, `Booked` and its two methods, and the
+# `flag_refusal` and `nul_refusal` a `workflow` booking shares, which the `schedule` tool reads
+# (+7).
+surface-budget = 40
 
 [[module]]
 path = "crates/rimz/src/mcp"

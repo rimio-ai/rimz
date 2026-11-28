@@ -87,6 +87,13 @@ fn a_schedule_takes_a_flat_trigger_and_carries_a_launch_tool() {
         json!({
             "name": "n",
             "trigger": "in",
+            "value": "400d",
+            "tool": "agent",
+            "arguments": agent_args,
+        }),
+        json!({
+            "name": "n",
+            "trigger": "in",
             "value": "30m",
             "tool": "team",
             "arguments": {"team": "forge", "prompt": "go", "from_pr": "42"},
