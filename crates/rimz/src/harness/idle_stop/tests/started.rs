@@ -1119,6 +1119,69 @@ fn a_workflow_wait_whose_run_is_not_on_record_lists_as_a_wait() {
         true,
     );
     assert_eq!(rows(&read.holding), [(RowKind::Wait, run.as_str())]);
+    // No `rimz watch` row holds a run's wait, and the run is not one this seat can cancel.
+    assert_eq!(read.holding[0].command, None);
+}
+
+/// Each wait row the agent's own seat reads offers the command that ends that wait: `rimz watch
+/// cancel` for a wait the agent armed, and none for a launched agent or team no row names,
+/// whose wait no `rimz watch` row holds.
+#[test]
+fn a_wait_row_offers_the_cancel_of_its_own_kind_or_none() {
+    for (trigger, command) in [
+        (
+            PendingWaitTrigger::Timer {
+                due: ts(DUE + 60),
+                delay: None,
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Signal {
+                selector: "pr.merged".to_owned(),
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Condition {
+                when: "ci.green".to_owned(),
+                hold: None,
+            },
+            Some("rimz watch cancel wait-x"),
+        ),
+        (
+            PendingWaitTrigger::Subagent {
+                active_at: ts(900),
+                target: None,
+                deadline_at: None,
+                settled: None,
+            },
+            None,
+        ),
+        (PendingWaitTrigger::Team { stage: None }, None),
+    ] {
+        let (dir, store) = fixture();
+        let (mut agent, _) = rested();
+        agent.pending_waits.push(PendingWait {
+            class: crate::agents::PendingWaitClass::Sleeping,
+            name: "wait-x".to_owned(),
+            trigger: trigger.clone(),
+            armed_at: Some(ts(900)),
+        });
+        let read = read(
+            &store,
+            dir.path(),
+            std::slice::from_ref(&agent),
+            &agent,
+            true,
+        );
+        assert_eq!(
+            rows(&read.holding),
+            [(RowKind::Wait, "wait-x")],
+            "{trigger:?}"
+        );
+        assert_eq!(read.holding[0].command.as_deref(), command, "{trigger:?}");
+    }
 }
 
 #[test]
