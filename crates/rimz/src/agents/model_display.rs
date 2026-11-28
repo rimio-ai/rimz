@@ -16,10 +16,10 @@ pub struct ParsedModel {
 }
 
 /// A rendered model name in reading order: the series word (absent when a
-/// Claude line name leads under Claude's own provider, or when none was parsed),
-/// the core (a Claude line name and the version; the first word when no series
-/// was parsed; empty under a shown series with neither), then the child words
-/// in id order.
+/// declared line name leads under its own provider, or when none was parsed),
+/// the core (a line name and the version; the first word when no series was
+/// parsed; empty under a shown series with neither), then the child words in
+/// id order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenderedModel {
     pub(crate) series: Option<String>,
@@ -236,13 +236,14 @@ impl ParsedModel {
         }
     }
 
-    /// Render the model name as series, then a Claude line name, then the
-    /// version, then the child words in id order, dropping fast, reasoning,
-    /// packaging words, active-parameter tags, and snapshot codes (as words and
-    /// as version components). With a series shown and neither a line name nor
-    /// a version, the core stays empty and every later word is a child. The series
-    /// hides only when it matches `home_series` case-insensitively and a Claude
-    /// line name leads; every other series shows, or the version would lead.
+    /// Render the model name as series, then a line name, then the version,
+    /// then the child words in id order, dropping fast, reasoning, packaging
+    /// words, active-parameter tags, and snapshot codes (as words and as version
+    /// components). A line name is a word the adapter owning the series declares
+    /// in its `line_names`. With a series shown and neither a line name nor a
+    /// version, the core stays empty and every later word is a child. The series
+    /// hides only when it matches `home_series` case-insensitively and a line
+    /// name leads; every other series shows, or the version would lead.
     pub fn render(&self, home_series: Option<&str>) -> RenderedModel {
         let Some(series) = self.series.as_deref() else {
             if let Some(verbatim) = self.verbatim.as_deref() {
@@ -261,21 +262,25 @@ impl ParsedModel {
             };
         };
         // A label such as `Opus 4.8` parses its line name into the series slot.
-        let (shown_series, line) = if is_claude_line(series) {
+        let (shown_series, line) = if is_declared_line(series) {
             (None, Some(series.to_owned()))
         } else {
-            let line = series
-                .eq_ignore_ascii_case("claude")
-                .then(|| self.family.iter().find(|word| is_claude_line(word)))
-                .flatten()
+            let lines = series_lines(series);
+            let line = self
+                .family
+                .iter()
+                .find(|word| lines.iter().any(|line| line.eq_ignore_ascii_case(word)))
                 .cloned();
             let hidden =
                 line.is_some() && home_series.is_some_and(|home| home.eq_ignore_ascii_case(series));
             ((!hidden).then(|| series.to_owned()), line)
         };
         let mut children = shown_words(&self.family);
-        if let Some(line) = line.as_deref() {
-            children.retain(|word| word != line);
+        if let Some(at) = line
+            .as_deref()
+            .and_then(|line| children.iter().position(|word| word == line))
+        {
+            children.remove(at);
         }
         let version = self.version.as_deref().map(shown_version);
         let core = line
@@ -362,18 +367,26 @@ pub fn home_series(kind: &str) -> Option<&'static str> {
 /// The adapter kind whose declared home series matches `series`
 /// case-insensitively, if any.
 pub(crate) fn home_series_owner(series: &str) -> Option<&'static str> {
-    super::registry::BUILTINS.iter().find_map(|definition| {
-        let spec = definition.spec();
-        spec.launch
-            .definitions
-            .home_series
-            .filter(|home| home.eq_ignore_ascii_case(series))
-            .map(|_| spec.kind)
-    })
+    home_series_spec(series).map(|spec| spec.kind)
+}
+
+/// The built-in spec whose declared home series matches `series`
+/// case-insensitively, if any. A plugin spec declares no definitions, so none
+/// can own a series.
+fn home_series_spec(series: &str) -> Option<&'static super::definition::AgentSpec> {
+    super::registry::BUILTINS
+        .iter()
+        .map(|definition| definition.spec())
+        .find(|spec| {
+            spec.launch
+                .definitions
+                .home_series
+                .is_some_and(|home| home.eq_ignore_ascii_case(series))
+        })
 }
 
 /// Render a provider model id for people, hiding `kind`'s home series only
-/// where a Claude line name leads (`Opus 4.8` under Claude).
+/// where one of its line names leads (`Opus 4.8` under Claude).
 pub fn display_model_for_kind(id: &str, kind: Option<&str>) -> String {
     ParsedModel::parse(id)
         .render(kind.and_then(home_series))
@@ -622,14 +635,23 @@ fn strip_date_suffix(raw: &str) -> (&str, bool) {
     (trimmed, false)
 }
 
-/// Claude's line names, which lead in place of the series. A new line name
-/// joins this list.
-const CLAUDE_LINES: [&str; 6] = ["Opus", "Sonnet", "Haiku", "Fable", "Mythos", "Instant"];
+/// The line names the adapter owning `series` declares, empty for a series no
+/// adapter owns.
+fn series_lines(series: &str) -> &'static [&'static str] {
+    home_series_spec(series).map_or(&[], |spec| spec.launch.definitions.line_names)
+}
 
-fn is_claude_line(word: &str) -> bool {
-    CLAUDE_LINES
-        .iter()
-        .any(|line| line.eq_ignore_ascii_case(word))
+/// Whether any adapter declares `word` as a line name, case-insensitively.
+fn is_declared_line(word: &str) -> bool {
+    super::registry::BUILTINS.iter().any(|definition| {
+        definition
+            .spec()
+            .launch
+            .definitions
+            .line_names
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case(word))
+    })
 }
 
 /// The family words a name shows: every `fast`, `reasoning` and

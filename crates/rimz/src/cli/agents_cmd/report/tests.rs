@@ -16,7 +16,7 @@ fn model_fast_is_typed_and_keeps_the_label_glyph_free() {
         });
         let report = serde_json::to_value(model_report(&state)).unwrap();
         assert_eq!(report["fast"], fast);
-        assert_eq!(report["label"], "GPT 6.1 Sol@xhigh");
+        assert_eq!(report["label"], "GPT Sol 6.1@xhigh");
     }
 }
 
@@ -304,7 +304,7 @@ fn card_projection_model_label_is_stable_across_a_turn() {
 #[test]
 fn card_projection_model_keeps_versioned_provider_display_names() {
     for (provider, id, display, expected) in [
-        ("cursor", "auto", "GPT-5.6 Sol", "GPT 5.6 Sol@high"),
+        ("cursor", "auto", "GPT-5.6 Sol", "GPT Sol 5.6@high"),
         (
             "qwen",
             "[DeepSeek] deepseek-v4-pro",

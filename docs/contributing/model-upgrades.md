@@ -4,15 +4,15 @@ What to change when a provider ships a new model. The work splits by who resolve
 
 ## Claude: fable, opus, sonnet, haiku
 
-Nothing is required for a new version of an existing family. The Claude adapter's `DEFINITIONS.models` in [`adapters/claude/mod.rs`](../../crates/rimz/src/agents/adapters/claude/mod.rs) maps each alias to itself (`opus` → `opus`), so Claude Code picks the current model at launch. Display names are derived from the model id (`agents/model_display.rs`), where a new Claude line name (beside Opus, Sonnet, Haiku, Fable, Mythos and Instant) joins `CLAUDE_LINES` so it leads in place of the `Claude` series, and the 1M context window is read from the `[1m]` marker on the id, never from a model list.
+Nothing is required for a new version of an existing family. The Claude adapter's `DEFINITIONS.models` in [`adapters/claude/mod.rs`](../../crates/rimz/src/agents/adapters/claude/mod.rs) maps each alias to itself (`opus` → `opus`), so Claude Code picks the current model at launch. Display names are derived from the model id (`agents/model_display.rs`), and the 1M context window is read from the `[1m]` marker on the id, never from a model list.
 
-A new family name, one that is not already an alias, needs an entry in that table. Without one, a definition naming the bare alias cannot infer its kind and has to set `agent:` explicitly. Give the entry an `effort` only when the family needs a default other than the kind's `xhigh`, as `fable` does with `high`.
+A new family name, one that is not already an alias, needs an entry in that table. Without one, a definition naming the bare alias cannot infer its kind and has to set `agent:` explicitly. Give the entry an `effort` only when the family needs a default other than the kind's `xhigh`, as `fable` does with `high`. A new family name is also a line name: declare it as [Line names](#line-names-for-every-provider) describes.
 
 ## Codex: astra, sol, luna, terra
 
 An existing family's new release needs no RimZ change. The exec wrapper resolves aliases from the selected account's Codex catalog at fresh launch, with a one-hour cache. The baked `DEFINITIONS.models` table in [`adapters/codex/mod.rs`](../../crates/rimz/src/agents/adapters/codex/mod.rs) is the offline fallback. See [catalog resolution](../internals/agents/adapter_codex.md#model-catalog-resolution) for version ordering and effort checks.
 
-1. Add an entry in `DEFINITIONS.models` for a new family name, or update an existing family's offline fallback deliberately.
+1. Add an entry in `DEFINITIONS.models` for a new family name, or update an existing family's offline fallback deliberately. A new family name is also a line name: declare it as [Line names](#line-names-for-every-provider) describes.
 2. Confirm the new model accepts `xhigh`, the Codex kind's default effort (`DEFINITIONS.effort`). If it does not, set `effort` on the entry. A seat whose effort the model rejects fails at every launch, so this is the step that breaks users when missed. The levels a Codex model accepts are its `supported_reasoning_levels` in the per-account `$CODEX_HOME/models_cache.json`, or `supportedReasoningEfforts` in the app-server [`model/list`](../externals/agent-adapter/codex-reference.md) response; the upstream `ReasoningEffort` enum is wider than any single model, so it cannot confirm a level.
 3. Update the alias rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs).
 4. Update the alias sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults), the one home for the alias list.
@@ -25,13 +25,17 @@ Definitions and tier cells retain the requested alias. With a durable launch rec
 
 agy knows no short names, so RimZ launches each from the `MODELS` table in [`adapters/antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs). Any `gemini-` ID already runs on Antigravity by its prefix, as written and with no built-in effort.
 
-1. Add an entry for a new short name, or move an existing one to a new base ID deliberately: the short name, the base ID (never an effort-suffixed one), and `max_effort`, the highest level the model takes, where `max` launches.
+1. Add an entry for a new short name, or move an existing one to a new base ID deliberately: the short name, the base ID (never an effort-suffixed one), and `max_effort`, the highest level the model takes, where `max` launches. A new short name that names a line, never a tier word such as `flash`, is also declared as [Line names](#line-names-for-every-provider) describes.
 2. Confirm the model takes `high`, the default effort every `gemini` entry carries. A model that refuses `--effort` (the Orchestrator IDs) is an `orchestrator` entry instead: its ID as its name, no effort, and `takes_effort: false`, so no launch sends one. A seat whose effort the model refuses fails at every launch. The levels a model takes are found by running `agy --model <id> --effort <level>` in a probe home ([probes](./probes.md)).
 3. Update the Antigravity rows in `model_catalog_and_defaults` in [`agents/tools.rs`](../../crates/rimz/src/agents/tools.rs) and the roster sentence under [Chains and defaults](../reference/definitions.md#chains-and-defaults).
 
 ## Pi: fast-capable models
 
 `FAST_ROUTES` in [`agents/adapters/pi/extension.ts`](../../crates/rimz/src/agents/adapters/pi/extension.ts) keeps one exact-id list per OpenAI Responses route, and an id joins a route's list only with that route's evidence. The `openai-codex` list takes an id whose Codex catalog `service_tiers` entry has `id` `priority`. The `openai` list takes an id with a published OpenAI Fast price. One kind of evidence does not admit an id to the other route: Codex advertises `gpt-6-sol` with priority, but OpenAI publishes no Fast price for it, so it is on `openai-codex` alone. Keep the Node test's per-route id lists in `crates/rimz/tests/integration/examples/pi_extension.rs::run_extension_harness` in sync, and run `cargo xtask test -E 'binary(integration) & test(/^examples::pi_extension::/)'`. Existing installations need the refreshed extension; `rimz start` offers it when the managed copy differs.
+
+## Line names, for every provider
+
+A display name puts a line name ahead of the version (`Opus 4.8`, `Sol 6.1`, `Neon 4`) when the adapter that owns the model's series declares that line in its `DefinitionSpec::line_names`, and beside that adapter's own agents the series word hides (`Sol 6.1` on a Codex card, `GPT Sol 6.1` beside a Claude one). An undeclared line trails the version (`GPT 7 Nova`). Claude's list is in `DEFINITIONS` in [`adapters/claude/mod.rs`](../../crates/rimz/src/agents/adapters/claude/mod.rs), Codex's in `DEFINITIONS` in [`adapters/codex/mod.rs`](../../crates/rimz/src/agents/adapters/codex/mod.rs), and Antigravity's in `ANTIGRAVITY_DESCRIPTOR`'s `definitions` in [`adapters/antigravity/mod.rs`](../../crates/rimz/src/agents/adapters/antigravity/mod.rs), not its `MODELS` table. A new line joins that list and its kind's row in `home_series_declarations_match_adapter_ruling` in [`agents/model_display/tests.rs`](../../crates/rimz/src/agents/model_display/tests.rs). A tier or size word (`flash`, `pro`, `mini`) is never declared as a line, so it stays after the version (`Gemini 3.1 Flash Lite`). Run `cargo xtask test model_display`.
 
 ## Model tier bindings
 

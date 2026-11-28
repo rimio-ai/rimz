@@ -947,7 +947,7 @@ fn dashboard_folds_dollars_and_keeps_team_effort_and_small_provider_identity() {
     let opus = stats.by_model.remove("opus-5.5").unwrap();
     stats.by_model.insert("claude-opus-5-5".into(), opus);
     let output = strip_ansi(&frame(&stats, &assists, Window::Month, 119, None).text);
-    assert!(output.contains("GPT 6 Astra"), "{output}");
+    assert!(output.contains("Astra 6"), "{output}");
     // The row's kind hides Claude's series on the held dashboard.
     assert!(
         output.contains("Opus 5.5") && !output.contains("Claude Opus"),

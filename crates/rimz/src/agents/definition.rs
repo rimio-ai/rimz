@@ -752,9 +752,13 @@ pub(super) struct DefinitionSpec {
     pub foreign_prefixes: &'static [(&'static str, &'static str)],
     /// The model series this adapter's own identity implies. Model names spell
     /// that series in this casing and paint it in this adapter's dim brand
-    /// tone; beside an agent of this kind the series hides only where a Claude
-    /// line name leads (`Opus 4.8` under Claude).
+    /// tone; beside an agent of this kind the series hides only where one of
+    /// its `line_names` leads (`Opus 4.8` under Claude, `Sol 6.1` under Codex).
     pub home_series: Option<&'static str>,
+    /// The line names of this adapter's models (`Sol` in `gpt-6.1-sol`). In a
+    /// model of `home_series`, a declared line leads ahead of the version beside
+    /// any agent; an undeclared one trails the version as a child word.
+    pub line_names: &'static [&'static str],
     pub tools: DefinitionTools,
     /// Whether the system prompt a definition sends appends to the provider's own prompt
     /// rather than replacing it.
@@ -770,6 +774,7 @@ impl DefinitionSpec {
         prefixes: &[],
         foreign_prefixes: &[],
         home_series: None,
+        line_names: &[],
         tools: DefinitionTools::Unsupported,
         prompt_appends: false,
     };

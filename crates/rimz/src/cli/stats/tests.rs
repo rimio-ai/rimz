@@ -3868,7 +3868,7 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
     assert_eq!(
         names,
         BTreeMap::from([
-            ("Gemini 4 Neon", "Gemini 4 Neon"),
+            ("Gemini 4 Neon", "Gemini Neon 4"),
             ("grok-4-fast-non-reasoning", "Grok 4"),
             ("claude-opus-4-8", "Claude Opus 4.8"),
         ])
@@ -3891,7 +3891,8 @@ fn stats_from_provider_folds_models_sharing_a_displayed_name() {
     )
     .unwrap();
     let panel_text = String::from_utf8(panel_out).unwrap();
-    assert_eq!(panel_text.matches("Gemini 4 Neon").count(), 1);
+    assert_eq!(panel_text.matches("Neon 4").count(), 1);
+    assert!(!panel_text.contains("Gemini Neon"), "{panel_text}");
     assert_eq!(panel_text.matches("Grok 4").count(), 1);
     // The row's kind hides Claude's series in the panel.
     assert!(

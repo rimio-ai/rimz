@@ -785,9 +785,9 @@ fn environment_follows_identity_and_precedes_policy() {
             assert_eq!(text.matches("<system_reminder>").count(), 1);
             assert_eq!(text.matches("</system_reminder>").count(), 1);
             let identity = text
-                .find(if subagent { "GPT 6 Astra" } else { "### Team" })
+                .find(if subagent { "GPT Astra 6" } else { "### Team" })
                 .expect("identity");
-            assert_eq!(text.contains("GPT 6 Astra"), subagent);
+            assert_eq!(text.contains("GPT Astra 6"), subagent);
             let env = text.find("- shell: sh").expect("environment paragraph");
             let tmp = text.find("- tmp: /tmp").expect("tmp bullet");
             let policy = text

@@ -640,6 +640,7 @@ const DEFINITIONS: crate::agents::definition::DefinitionSpec =
         variants: &[],
         runs_other_providers_models: false,
         home_series: Some("GPT"),
+        line_names: &["Sol", "Terra", "Luna", "Astra"],
         effort: Some("xhigh"),
         models: &[
             crate::agents::definition::DefinitionModel {

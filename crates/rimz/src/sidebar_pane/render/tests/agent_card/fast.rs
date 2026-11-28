@@ -49,10 +49,7 @@ fn fast_card_bolt_follows_the_model_across_tier_edges() {
                     "{width}: {text}"
                 );
                 if fast && capabilities {
-                    assert!(
-                        text.contains("GPT 6.1 Sol ϟ") || text.contains("GPT 6.1 ϟ"),
-                        "{text}"
-                    );
+                    assert!(text.contains("Sol 6.1 ϟ"), "{text}");
                     assert!(!text.contains("Sol · ϟ"), "{text}");
                     if let Some(reasoning) = text.find("xhigh") {
                         assert!(text.find('ϟ').unwrap() < reasoning, "{text}");

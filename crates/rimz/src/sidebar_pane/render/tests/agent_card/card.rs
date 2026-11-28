@@ -222,7 +222,7 @@ fn render_cursor_normalized_model_metadata_once() {
     let rendered = snapshot_to_screen(&snapshot_with(vec![cursor]), 54, 15);
 
     assert!(
-        rendered.contains("GPT 5.6 Sol · medium · 200k"),
+        rendered.contains("GPT Sol 5.6 · medium · 200k"),
         "the identity line separates Cursor's normalized capabilities:\n{rendered}"
     );
     assert!(
@@ -973,12 +973,12 @@ fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_whe
         "wide Pi card shows the DeepSeek series word:\n{wide}"
     );
     assert!(
-        wide.contains("antigravity · Gemini 4 Neon"),
-        "the home provider keeps a non-Claude series word:\n{wide}"
+        wide.contains("antigravity · Neon 4"),
+        "the home provider hides its series where a line name leads:\n{wide}"
     );
 
     // Span styling on the wide card: `Gemini` wears Antigravity's brand
-    // colour dimmed, under Pi and under Antigravity itself; `DeepSeek` has no
+    // colour dimmed under Pi (Antigravity's own card hides it); `DeepSeek` has no
     // declaring adapter so it wears plain dim (`theme.muted()`).
     let lines = group_lines_at_width(&snapshot, &theme, 99, 64);
     let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
@@ -986,7 +986,7 @@ fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_whe
         .iter()
         .filter(|span| span.content.as_ref() == "Gemini")
         .collect();
-    assert_eq!(gemini.len(), 2, "one `Gemini` series span per Gemini card");
+    assert_eq!(gemini.len(), 1, "one `Gemini` series span on the Pi card");
     for span in gemini {
         assert_eq!(
             span.style.fg,
@@ -1182,9 +1182,9 @@ fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_whe
         );
     }
 
-    // Compaction point + capacity: ` Neon` drops before `835k/1M` would
-    // lose `/1M` (`⣾ opencode-lead` 15 + ` · Gemini 4 Neon · 835k/1M` 26 +
-    // ` $1.20` 6 = 47 content cells, pane width 49).
+    // Compaction point + capacity: ` Flash` drops before `835k/1M` would
+    // lose `/1M` (`⣾ opencode-lead` 15 + ` · Gemini 4 Flash · 835k/1M` 27 +
+    // ` $1.20` 6 = 48 content cells, pane width 50).
     let mut compact_opencode = agent(
         "opencode-compact",
         "opencode",
@@ -1193,7 +1193,7 @@ fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_whe
         Some("main"),
         Some("run compact gemini"),
     );
-    compact_opencode.model = Some("gemini-4-neon".to_owned());
+    compact_opencode.model = Some("gemini-4-flash".to_owned());
     compact_opencode.usage.context_window = Some(983_010);
     let mut compact_ctx = AgentContext::new("opencode", fixed_now());
     compact_ctx.cost = Some(AgentCost {
@@ -1214,9 +1214,9 @@ fn card_dims_series_word_in_brand_colour_and_drops_child_words_right_to_left_whe
         card.usage.context_capacity = Some(1_048_576);
     }
     for (width, shown) in [
-        (50, "Gemini 4 Neon · 835k/1M"),
-        (49, "Gemini 4 Neon · 835k/1M"),
-        (48, "Gemini 4 · 835k/1M"),
+        (51, "Gemini 4 Flash · 835k/1M"),
+        (50, "Gemini 4 Flash · 835k/1M"),
+        (49, "Gemini 4 · 835k/1M"),
     ] {
         let lines = group_lines_at_width(&compact_snapshot, &theme, usize::MAX, width);
         let text = lines
