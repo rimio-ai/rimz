@@ -167,7 +167,7 @@ fn panel_groups_team_and_stray_members() {
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
     forge team · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
-      @planner (plan|ner) · Claude · Fable`2@high
+      @planner (plan|ner) · Claude · fable`2@high
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90 ϟ fast
@@ -178,7 +178,7 @@ fn panel_groups_team_and_stray_members() {
 
     Other agents · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
 
-      @codex · Codex · GPT 5.5@high ϟ fast
+      @codex · Codex · gpt-5.5@high ϟ fast
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
@@ -188,8 +188,8 @@ fn panel_groups_team_and_stray_members() {
           tokens:    300 input, 100 output
 
     Models
-      Opus 4.8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
-      GPT 5.5:  $1.60 · 300 input, 100 output
+      claude-opus-4-8: $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
+      gpt-5.5:         $1.60 · 300 input, 100 output
 
     Total · 2 agents · 2h10m active · $3.20 · 14 messages (4 from you)
     ");
@@ -241,7 +241,7 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
     let mut output = anstream::StripStream::new(Vec::new());
     render_panel(&mut output, &report).expect("render panel");
     insta::assert_snapshot!(String::from_utf8(output.into_inner()).expect("utf8"), @"
-      @codex · Codex · GPT 5.5@high
+      @codex · Codex · gpt-5.5@high
           effort:    1h05m active · $1.60
           subagents: 5 runs · $0.90
                      explorer  4 × · 25m active · $0.90
@@ -251,7 +251,7 @@ fn panel_omits_redundant_caption_for_single_teamless_group() {
           tokens:    300 input, 100 output
 
     Models
-      GPT 5.5: $1.60 · 300 input, 100 output
+      gpt-5.5: $1.60 · 300 input, 100 output
 
     Total · 1 agent · 1h05m active · $1.60 · 7 messages (2 from you)
     ");
@@ -269,7 +269,7 @@ fn panel_omits_total_that_repeats_the_only_caption() {
     let output = String::from_utf8(output.into_inner()).expect("utf8");
 
     assert!(output.starts_with("forge team ·"));
-    assert!(output.contains("\nModels\n  Opus 4.8:"));
+    assert!(output.contains("\nModels\n  claude-opus-4-8:"));
     assert!(!output.contains("Total ·"));
 }
 
@@ -290,7 +290,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **`forge` team**
 
-    - **`plan|ner`** — Claude Fable&#96;2@high
+    - **`plan|ner`** — ``fable`2@high``
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90 ⚡ fast
@@ -301,7 +301,7 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Other agents**
 
-    - **`@codex`** — Codex GPT 5.5@high ⚡ fast
+    - **`@codex`** — `gpt-5.5@high` ⚡ fast
       - effort: 1h05m active · $1.60
       - subagents: 5 runs · $0.90
         - explorer: 4 × · 25m active · $0.90
@@ -312,8 +312,8 @@ fn markdown_escapes_values_and_renders_grouped_bullets() {
 
     **Models**
 
-    - Opus 4.8 — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
-    - GPT 5.5 — $1.60 · 300 input, 100 output
+    - `claude-opus-4-8` — $1.60 · 1.2k input, 800 output, 2k cache write, 3k cache read · 67 tok/s
+    - `gpt-5.5` — $1.60 · 300 input, 100 output
 
     </details>
     "#);
@@ -392,10 +392,9 @@ fn markdown_names_never_render_as_mentionable_text() {
     let mut output = Vec::new();
     render_markdown(&mut output, &report).expect("render markdown");
     let output = String::from_utf8(output).expect("utf8");
-    assert!(output.contains("\n- unknown — "), "{output}");
+    assert!(output.contains("\n- `unknown` — "), "{output}");
 
-    // A display name joins its effort as text (`Opus 4.8@high`), an `@` no
-    // forge reads as a mention; one that would lead a word stays in code.
+    // Model labels and names sit in code spans, so no `@` in them reads as a mention.
     let mut text = String::new();
     for event in pulldown_cmark::Parser::new(&output) {
         match event {
@@ -412,23 +411,6 @@ fn markdown_names_never_render_as_mentionable_text() {
             "mentionable text: {text}"
         );
     }
-}
-
-#[test]
-fn models_rows_hide_the_series_only_for_a_kind_every_runner_shares() {
-    let mut report = report();
-    let opus = report.groups[0].members[0].models[0].clone();
-    report.groups[1].members[0].models.push(opus);
-    let mut panel = anstream::StripStream::new(Vec::new());
-    render_panel(&mut panel, &report).expect("render panel");
-    let panel = String::from_utf8(panel.into_inner()).expect("utf8");
-    assert!(panel.contains("\nModels\n  Claude Opus 4.8:"), "{panel}");
-
-    report.groups[1].members[0].models.clear();
-    let mut panel = anstream::StripStream::new(Vec::new());
-    render_panel(&mut panel, &report).expect("render panel");
-    let panel = String::from_utf8(panel.into_inner()).expect("utf8");
-    assert!(panel.contains("\nModels\n  Opus 4.8:"), "{panel}");
 }
 
 #[test]
@@ -563,7 +545,7 @@ fn renderers_show_unpriced_unknown_model_tokens() {
     let mut markdown = Vec::new();
     render_markdown(&mut markdown, &report).expect("render markdown");
     let markdown = String::from_utf8(markdown).expect("utf8");
-    assert!(markdown.ends_with("\n**Models**\n\n- unknown — 200 input\n\n</details>\n"));
+    assert!(markdown.ends_with("\n**Models**\n\n- `unknown` — 200 input\n\n</details>\n"));
 }
 
 #[test]
